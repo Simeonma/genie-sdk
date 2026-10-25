@@ -7,7 +7,7 @@ v2 定案「脚本是本体」：GUI 不再有 cfg 中心，显示所需的模�
 
     import genie
     r = genie.preview_script(source)
-    # {"ok": bool, "cfg": SimConfig dict, "stdout": str,
+    # {"ok": bool, "cfg": SimConfig dict, "stdout": str, "stderr": str,
     #  "error": None | {"kind", "message", "line", "traceback"}}
 
 机制（trace，不做静态翻译）
@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import io
 import traceback
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from typing import Any
 
 from .simulate import Simulation, _apply_run_kwargs
@@ -150,6 +150,13 @@ class _PreviewSim(Simulation):
         同语义（修前漏覆写走 `_client.cancel` 崩）。"""
         return None
 
+    @property
+    def expert(self) -> _Inert:
+        """G162（R24b）：预览不问专家——与 get_*/results 同为宽容占位
+        （修前继承真面 expert 属性，`_client=None` 走 expert_post 直接
+        AttributeError 崩预览，该行之后的构建全部丢失）。"""
+        return _Inert()
+
     def get_time(self, name: str | None = None) -> _Inert:
         return _Inert()
 
@@ -213,14 +220,17 @@ def preview_script(source: str, *, label: str = "<genie脚本>") -> dict:
     """执行 genie 脚本（零网络捕获）→ 显示模型。
 
     返回 dict：``ok``（执行到底与否）、``cfg``（SimConfig JSON，异常时
-    为已捕获部分）、``stdout``（print 输出）、``error``（None 或
-    ``{kind, message, line, traceback}``，line = 脚本帧行号）。
+    为已捕获部分）、``stdout``（print 输出）、``stderr``（warnings 与
+    stderr 输出，G164 起单独回流——此前漏到宿主进程，诊断面盲区）、
+    ``error``（None 或 ``{kind, message, line, traceback}``，
+    line = 脚本帧行号）。
     """
     if _swap_connect is None:
         raise RuntimeError(
             "preview 未接线：需要组合根先 import genie（见 core/preview._wire）")
 
-    out: dict[str, Any] = {"ok": False, "cfg": {}, "stdout": "", "error": None}
+    out: dict[str, Any] = {"ok": False, "cfg": {}, "stdout": "",
+                           "stderr": "", "error": None}
 
     # ① 语法先行（compile 给出带行号的 SyntaxError）
     try:
@@ -243,12 +253,14 @@ def preview_script(source: str, *, label: str = "<genie脚本>") -> dict:
         return sim
 
     buf = io.StringIO()
+    err_buf = io.StringIO()      # G164（R24b）：warnings/stderr 单独捕获
+    ns: dict[str, Any] = {"__name__": "__main__", "__file__": label}
     restore = _swap_connect(_fake_connect)      # 组合根负责换/还原公开面
     try:
-        with redirect_stdout(buf):
+        with redirect_stdout(buf), redirect_stderr(err_buf):
             # __file__ 给标签名：脚本引导块（sys.path/Path(__file__) 类）
             # 在预览态不 NameError，路径退化为无害垃圾（2026-10 live 通道实测）
-            exec(code, {"__name__": "__main__", "__file__": label})
+            exec(code, ns)
         out["ok"] = True
     except BaseException as e:  # noqa: BLE001 —— 诊断对象，不吞信息
         tb_text = traceback.format_exc(limit=8)
@@ -264,6 +276,14 @@ def preview_script(source: str, *, label: str = "<genie脚本>") -> dict:
         restore()
 
     out["stdout"] = buf.getvalue()
+    out["stderr"] = err_buf.getvalue()
+    # G163（R24b 站长裁 A，与会话面 _insts_of 同口径）：扫命名空间收
+    # 直建实例——脚本可以 `f = genie.Simulation(client=None)` 绕开
+    # connect，"预览显示脚本建造的模型"对任何写法成立（崩溃路径同样
+    # 收：已捕获部分照常返回）。按身份去重，connect 出来的已在 sims。
+    for v in ns.values():
+        if isinstance(v, Simulation) and not any(v is s for s in sims):
+            sims.append(v)
     if sims:
         out["cfg"] = nan_to_none(merge_configs([s.to_config() for s in sims]))
         # G19a（G3 方向 2）：设计态估算随行——格数/dt 估/步数估，与内核

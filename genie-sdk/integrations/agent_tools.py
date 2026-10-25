@@ -59,6 +59,7 @@ def check_script(source: str, *, label: str = "<agent脚本>") -> dict:
         "has_mesh": bool(cfg.get("mesh")),
         "total_time": (cfg.get("domain") or {}).get("total_time"),
         "stdout": (cap.get("stdout") or "")[:2000],
+        "stderr": (cap.get("stderr") or "")[:2000],   # G164：告警面回流 agent
     }
 
     # 常见遗漏告警（不阻断——agent 可自行判断是否补）

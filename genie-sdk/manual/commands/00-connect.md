@@ -61,8 +61,8 @@ Execute a script text with zero network and return the model it builds — the
 entry point shared by Studio preview and agent tools, entirely independent of
 real submissions. Returns: a dict with `ok` (bool), `cfg` (captured SimConfig
 JSON; on failure, everything built up to the crash), `stdout` (captured
-prints), and `error` (`None`, or `{kind, message, line, traceback}` with the
-script line number).
+prints), `stderr` (captured warnings and stderr output), and `error` (`None`,
+or `{kind, message, line, traceback}` with the script line number).
 
 | Param | Type | Required | Description |
 |---|---|---|---|
