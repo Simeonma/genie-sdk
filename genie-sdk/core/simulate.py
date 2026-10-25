@@ -246,6 +246,13 @@ class Simulation:
             f.parameters({'d': 1e-6})
             f.mesh.dx = 'd / 4'
         合并语义（不整表替换）——多次调用累积。"""
+        if not isinstance(table, dict):
+            # R23 S3：形状错归一 GenieConfigError（K2/G85 同口径——
+            # load_config 对同类输入即 GenieConfigError，此前这里裸
+            # TypeError，调用方按 Genie 系异常分支接不住）。
+            raise GenieConfigError(
+                f"parameters() requires a dict ({{name: value or "
+                f"expression string}}), got {type(table).__name__}")
         cur = getattr(self._cfg, "parameters", None) or {}
         cur.update(table)
         self._cfg.parameters = cur
@@ -316,9 +323,20 @@ class Simulation:
                     "config was already sent) — create a new connect() "
                     "instance and reconfigure")
             if gpu is not None:
-                self._cfg.run.gpu = int(gpu)
+                # R23 S1：对齐 builder 整数槽纪律——int() 静默收编
+                # （2.5→2、True→1、"2"→2）会带错误数量语义；这里不是
+                # 表达式槽，str 也拒（站长裁"全拒，要求传 int"）。
+                if isinstance(gpu, bool) or not isinstance(gpu, int):
+                    raise TypeError(
+                        f"gpu: optional cap — pass an int (e.g. gpu=2), "
+                        f"got {type(gpu).__name__}: {gpu!r}")
+                self._cfg.run.gpu = gpu
             if timeout_s is not None:
-                self._cfg.run.timeout_s = int(timeout_s)
+                if isinstance(timeout_s, bool) or not isinstance(timeout_s, int):
+                    raise TypeError(
+                        f"timeout_s: pass an int (seconds), got "
+                        f"{type(timeout_s).__name__}: {timeout_s!r}")
+                self._cfg.run.timeout_s = timeout_s
             if self._job_id is None:
                 self._submit()
         self.state = "running"
@@ -328,7 +346,7 @@ class Simulation:
         except GenieJobError as e:
             # 状态机锚（audit 批 α 2026-09）：failed/killed 落进 state，
             # 不冒充 "running"（本地包异常后实例状态可见失败的同款语义）。
-            # _npz 的 state != "done" 挡板继续拒取结果，语义不冲突。
+            # _result_arrays 的终态挡板继续拒取结果，语义不冲突。
             self.state = e.state            # "failed" / "killed"
             raise
         self.state = "done"
@@ -445,6 +463,8 @@ class Simulation:
 
             with h5py.File(io.BytesIO(
                     self._result_bytes()), "r") as h5:
+                from .results import ensure_supported_format
+                ensure_supported_format(h5)   # R23 G-a：格式家族明报
                 arrays: dict = {}
                 for mon_name, grp in h5.items():
                     dom = grp.attrs.get("domain", "")
@@ -479,25 +499,30 @@ class Simulation:
         ``data.<监视器>.<场>`` 直取（h5py 惰性读）；``data.plot(mon, field)``
         画图（matplotlib 可选依赖）；``data.attrs["executed_steps"]`` 实际
         执行步数。job_id 缺省 = 本 Simulation 最近一次提交的作业。"""
-        from .results import SimData
+        from .results import SimData, ensure_supported_format
         import h5py
         import io
 
         jid = job_id or self._job_id
-        # G138：终态守卫与 get_* 同款；G93：字节来源与 get_* 同一双手
-        # （本地优先；显式传 job_id = 取他人/历史作业，直取不守不走本地）。
-        if job_id is None:
-            self._guard_done_for_fetch()
         if jid is None:
+            # R23 C1：先答"还没提交"再谈终态——此前守卫先炸，未提交
+            # 实例得到 "Job None ended in a failure state" 的误导诊断
+            # （专用错误是死代码）。
             raise RuntimeError(
                 "no job submitted yet — results() needs a job_id")
+        # R23 S2：本实例作业（缺省或显式传自己的 id）都过终态守卫——
+        # G138"两条取数路径异常面统一"对显式形态也成立（修前显式传
+        # 自己的 id 吃裸 409）；他人/历史 id 仍直取不守。
+        if job_id is None or job_id == self._job_id:
+            self._guard_done_for_fetch()
         if job_id is None or job_id == self._job_id:
             raw = self._result_bytes()
         else:
             raw = self._client.fetch_result(jid)
-        return SimData(h5py.File(io.BytesIO(raw), "r"), job_id=jid)
-
-    _npz = _result_arrays       # 兼容旧名（下游 _get_result 等调用点）
+        from .results import ensure_supported_format
+        h5 = h5py.File(io.BytesIO(raw), "r")
+        ensure_supported_format(h5)   # R23 G-a：两条取数路径同一校验
+        return SimData(h5, job_id=jid)
 
     def _find_monitor(self, mtype: str, name: str | None) -> dict:
         for m in self._cfg.monitor:
@@ -512,7 +537,7 @@ class Simulation:
     def _get_result(self, mtype: str, name: str | None, cls):
         """get_* 公共路径：先核作业终态（未成功直接报，不谈监视器）→
         找监视器配置 → （缓存）构造 Result。"""
-        arrays = self._npz()
+        arrays = self._result_arrays()
         entry = self._find_monitor(mtype, name)
         mname = getattr(entry, "name", None)
         key = (mtype, mname)

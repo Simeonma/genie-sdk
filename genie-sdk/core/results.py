@@ -28,6 +28,25 @@ _AXES = ("x", "y", "z")
 # 曲线轴优先级（G96 取数尺的一部分；studio.results_view 共用本常量）
 AXIS_KEYS = ("freqs", "time", "x", "y", "z")
 
+# 结果文件格式契约前缀（R23 G-a，站长裁加校验）：内核 driver 写根
+# attrs format = "genie-results-h5/<minor>"。SDK 取数入口校验前缀——
+# 格式家族升级时明报，不静默按旧布局误读；缺 attrs 同样拒（G94/R19
+# 实证：真产物必有根 attrs，全空的是探针残留）。
+H5_FORMAT_PREFIX = "genie-results-h5/"
+
+
+def ensure_supported_format(h5) -> None:
+    """根 attrs format 前缀校验（Simulate 两条取数路径共用）。"""
+    fmt = h5.attrs.get("format", "")
+    if isinstance(fmt, bytes):
+        fmt = fmt.decode("utf-8", "replace")
+    if not fmt.startswith(H5_FORMAT_PREFIX):
+        raise RuntimeError(
+            f"result file format not recognized: {fmt!r} (expected "
+            f"prefix {H5_FORMAT_PREFIX!r}) — the file is either not a "
+            f"GENIE result h5 or from an incompatible format family; "
+            f"upgrade genie-sdk")
+
 
 def curve(group, mon: str, field: str):
     """取数尺（G96/R19 唯一一份）：h5 组 → (axis_key, xs, ys, tag, is_cplx)。
