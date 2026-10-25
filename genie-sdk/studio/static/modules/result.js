@@ -88,6 +88,30 @@ function plotDefaultField(mon) {
   return (m && m.fields && m.fields[0]) || "Ex";
 }
 
+async function pickDefaultField(mon, job) {
+  /* G148 产品走查修正（R24c）：字母序首字段可能是正交偏振的**零场**
+   * （实测：y 偏振源下 Ex 全零，缺省 Plot 成 0..1 平线——站长截图质询）。
+   * 缺省场 = 各场峰值最大者（每场一条 32 点探测曲线，本地零成本）；
+   * 探测失败回退字母序首。 */
+  try {
+    const st = window.__resultStatus;
+    const m = st && st.ok && (st.monitors || []).find(x => x.name === mon);
+    const fields = (m && m.fields) || [];
+    if (fields.length <= 1) return fields[0] || "Ex";
+    const KEYH = { "X-API-Key": localStorage.getItem("genie_v2_api_key") || "" };
+    let best = null, bestPeak = -1;
+    for (const fld of fields) {
+      const d = await fetch("/api/result/series?job_id=" + encodeURIComponent(job || "")
+        + "&mon=" + encodeURIComponent(mon) + "&field=" + encodeURIComponent(fld)
+        + "&maxpoints=32", { headers: KEYH })
+        .then(r => r.json()).catch(() => null);
+      const pk = d && d.ok ? Number(d.peak || 0) : -1;
+      if (pk > bestPeak) { bestPeak = pk; best = fld; }
+    }
+    return best || fields[0];
+  } catch { return plotDefaultField(mon); }
+}
+
 function addMonitorPlotCta(i) {
   const m = ((cfg && cfg.monitor) || [])[i];
   if (!m || !m.name) return;
@@ -144,7 +168,7 @@ async function addPlot(mon, field, jobId) {
   }
   const spec = { id: "plot" + (++window.__plotSeq),
                  name: "Plot " + window.__plotSeq,
-                 mon, field: field || plotDefaultField(mon),
+                 mon, field: field || await pickDefaultField(mon, job),
                  jobId: job,
                  mode: "1d", xAxis: null, yAxis: null, slices: {} };
   window.__plots.push(spec);
@@ -325,9 +349,10 @@ function renderPlotInto(view, spec) {
       .filter(([, v]) => v != null)
       .map(([k, v]) => k + ":" + v).join(",");
     if (sl) q += "&slices=" + encodeURIComponent(sl);
-    updHead(ax.length
+    const labelTxt = (ax.length
       ? " · " + ax.join("×") + (sl ? " · 切片 " + sl.replace(/:/g, "=") : "")
       : "（峰值列）");
+    updHead(labelTxt);
     cv.textContent = "";
     const KEYH = { "X-API-Key": localStorage.getItem("genie_v2_api_key") || "" };
     fetch(q, { headers: KEYH })
@@ -336,7 +361,12 @@ function renderPlotInto(view, spec) {
         if (!d.ok) { toast(d.detail || "无数据", "warn"); return; }
         if (d.dim === 2) _plotHeat(cv, d.x, d.y, d.z,
                                    d.x_label, d.y_label, "|" + spec.field + "|");
-        else _plotLine(cv, d.x, d.y, d.x_label, "|" + spec.field + "|");
+        else {
+          _plotLine(cv, d.x, d.y, d.x_label, "|" + spec.field + "|");
+          /* 全零明示（G148 走查修正）：0..1 兜底轴是空数据假象，不当正字 */
+          if ((d.y || []).length && d.y.every(v => v === 0))
+            updHead(labelTxt + " · 该分量全零——多半是源偏振正交，换场分量");
+        }
       })
       .catch(e => { cv.textContent = "加载失败: " + e; });
   };
