@@ -17,7 +17,8 @@ from typing import Union, get_args, get_origin
 
 from pydantic import BaseModel, ValidationError
 
-from .expr import ExprError, eval_expr, resolve_parameter_table, valid_param_name
+from .expr import (PARAM_NAME_RULE, ExprError, eval_expr,
+                   resolve_parameter_table, valid_param_name)
 from ._wire import SimConfig
 
 
@@ -108,25 +109,29 @@ def _resolve_value(ann, value, path, env, expr_at):
     if origin is tuple:
         args = get_args(ann)
         if isinstance(value, (list, tuple)):
-            for i, v in enumerate(value):
+            # G122（R16）：不就地改写——Python 调用方传 tuple 时
+            # `value[i]=` 炸裸 TypeError；建新容器（list 进 list 出、
+            # tuple 进 tuple 出）。
+            out = list(value)
+            for i, v in enumerate(out):
                 elem = (args[i] if i < len(args)
                         else (float if args and args[-1] is Ellipsis else float))
-                value[i] = _resolve_value(elem, v, path + [i], env, expr_at)
+                out[i] = _resolve_value(elem, v, path + [i], env, expr_at)
+            return tuple(out) if isinstance(value, tuple) else out
         return value
     if origin is list:
         args = get_args(ann)
         elem = args[0] if args else float
         if isinstance(value, list):
-            for i, v in enumerate(value):
-                value[i] = _resolve_value(elem, v, path + [i], env, expr_at)
+            return [_resolve_value(elem, v, path + [i], env, expr_at)
+                    for i, v in enumerate(value)]
         return value
     if origin is dict:
         args = get_args(ann)
         val_ann = args[1] if len(args) == 2 else float
         if isinstance(value, dict):
-            for k in list(value):
-                value[k] = _resolve_value(val_ann, value[k], path + [k],
-                                          env, expr_at)
+            return {k: _resolve_value(val_ann, v, path + [k], env, expr_at)
+                    for k, v in value.items()}
         return value
     return value                      # str/bool/Literal/未知形态：不触碰
 
@@ -196,11 +201,9 @@ def check_raw_param_keys(data: dict) -> None:
         if not valid_param_name(k):
             raise ExprError(
                 "syntax",
-                f"parameter name {k!r} is invalid: must be an identifier "
-                f"(starting with a letter or underscore, letters/digits/"
-                f"underscores only, <= 64 chars) — it is referenced by "
-                f"expression slots in numeric fields and by sweep axes "
-                f"(parameters[name])")
+                f"parameter name {k!r} is invalid: {PARAM_NAME_RULE} — "
+                f"it is referenced by expression slots in numeric fields "
+                f"and by sweep axes (parameters[name])")
 
 def validate_resolved(resolved: dict, expr_at: dict) -> SimConfig:
     """求值结果的模型校验（parse_config 与 sweep 逐点校验共用）。

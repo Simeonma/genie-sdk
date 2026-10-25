@@ -44,6 +44,13 @@ from collections.abc import Mapping
 __all__ = ["ExprError", "eval_expr", "resolve_parameter_table",
            "valid_param_name"]
 
+# 参数名规则文案（单一来源——G124⑦：此前 resolve.check_raw_param_keys
+# 与 _wire.SimConfig._check_param_names 双手复制同段文案，2026-10-18
+# 正因此类漂移收口过 validate_for_ui）。
+PARAM_NAME_RULE = (
+    "must be an identifier (starting with a letter or underscore, "
+    "letters/digits/underscores only, <= 64 chars)")
+
 # Call 白名单：名 → (最少参数个数, 最多参数个数)
 _FUNCTIONS = {
     "abs": (1, 1),
@@ -280,7 +287,14 @@ def resolve_parameter_table(params: dict) -> dict[str, float]:
     环境 = 其余全部参数（先声明后用不要求——拓扑序自动解析）。
     环 → ExprError("cycle", "参数环: a→b→a")；表达式内未知名 →
     unknown_name 列可用名；数值值原样 float 化。
+    键名前置检查（G124⑩：独立分发包的公开面自守卫，此前靠
+    SimConfig/check_raw_param_keys 三重把关兜着）。
     """
+    for k in params:
+        if not valid_param_name(k):
+            raise ExprError(
+                "syntax",
+                f"parameter name {k!r} is invalid: {PARAM_NAME_RULE}")
     resolved: dict[str, float] = {}
     visiting: list[str] = []
 

@@ -56,6 +56,7 @@ from pydantic import (
     model_validator,
 )
 
+from .expr import PARAM_NAME_RULE as _PNR
 from .expr import valid_param_name
 
 
@@ -112,9 +113,12 @@ class _StrictModel(BaseModel):
 
 def _env_int(name: str, default: int) -> int:
     try:
-        return int(os.environ.get(name, default))
+        v = int(os.environ.get(name, default))
     except (TypeError, ValueError):
         return default
+    # G124⑥：下界防呆——FDTD_MAX_SWEEP_POINTS=-1 之类误配此前透传，
+    # 一切 sweep 请求 422。非正数回退缺省。
+    return v if v >= 1 else default
 
 
 DEFAULT_TIMEOUT_S = 3_600
@@ -259,20 +263,29 @@ class _RangeModel(_StrictModel):
 
 
 def _norm_polarization(v):
-    """[1,0,0] 或 [[1,0],[0,0],[0,0]] → 统一存 [[re,im]×3]。"""
+    """[1,0,0] 或 [[1,0],[0,0],[0,0]] → 统一存 [[re,im]×3]。
+
+    零向量拒收（G124②：全零极化不携带任何场，是笔误的温床）；
+    非有限分量由 _StrictModel 的 isfinite 全量游走拦（G118）。"""
     if v is None:
-        return [[1.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
-    if len(v) != 3:
+        v = [[1.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
+    elif len(v) != 3:
         raise ValueError("polarization must have exactly 3 components")
-    if all(isinstance(x, (int, float)) for x in v):
-        return [[float(x), 0.0] for x in v]
-    out = []
-    for pair in v:
-        if len(pair) != 2:
-            raise ValueError(
-                "polarization complex form must be [re, im] pairs")
-        out.append([float(pair[0]), float(pair[1])])
-    return out
+    elif all(isinstance(x, (int, float)) for x in v):
+        v = [[float(x), 0.0] for x in v]
+    else:
+        out = []
+        for pair in v:
+            if len(pair) != 2:
+                raise ValueError(
+                    "polarization complex form must be [re, im] pairs")
+            out.append([float(pair[0]), float(pair[1])])
+        v = out
+    if all(re == 0.0 and im == 0.0 for re, im in v):
+        raise ValueError(
+            "polarization must be non-zero (an all-zero vector carries "
+            "no field)")
+    return v
 
 
 # ---------------------------------------------------------------------------
@@ -458,10 +471,12 @@ class LibraryMatSpec(_StrictModel):
     type: Literal["from_library"] = "from_library"
     name: str = Field(min_length=1)                 # 模型注册名
     library: str = Field(min_length=1)              # nk 库文件名，如 "Au"
-    fit_range: Range2 = (400e-9, 800e-9)
-    n_drude: int = Field(default=0, ge=0)
-    n_lorentz: int = Field(default=2, ge=0)
-    maxfev: int = Field(default=5000, ge=1)
+    # G124⑧：本类全拒收、字段零消费，但"禁手抄"的宣言不豁免自己——
+    # 默认值改引正典（与渲染器省略判据同一份 LIBRARY_FIT_DEFAULTS）。
+    fit_range: Range2 = LIBRARY_FIT_DEFAULTS["fit_range"]
+    n_drude: int = Field(default=LIBRARY_FIT_DEFAULTS["n_drude"], ge=0)
+    n_lorentz: int = Field(default=LIBRARY_FIT_DEFAULTS["n_lorentz"], ge=0)
+    maxfev: int = Field(default=LIBRARY_FIT_DEFAULTS["maxfev"], ge=1)
     quiet: bool = True
 
     _v = field_validator("fit_range", mode="after")(_check_range)
@@ -829,7 +844,11 @@ class FreqMonSpec(_MonitorMixin):
                 "exactly (center [Hz], bw [Hz], n [points])")
         center = v.get("center")
         bw = v.get("bw", 0.0)
-        n = int(v.get("n", 100))
+        n_raw = v.get("n", 100)
+        n = int(n_raw)
+        if n != n_raw:   # G124④：200.7 静默截断成 200 是笔误温床，拒收
+            raise ValueError(
+                f"freq.n must be an integer, got {n_raw!r}")
         if center is None or center <= 0:
             raise ValueError("freq.center must be > 0 (Hz)")
         if bw < 0:
@@ -901,10 +920,8 @@ class SimConfig(_StrictModel):
         for k in v:
             if not valid_param_name(k):
                 raise ValueError(
-                    f"parameter name {k!r} is invalid: must be an "
-                    f"identifier (starting with a letter or underscore, "
-                    f"letters/digits/underscores only, <= 64 chars) — it "
-                    f"is referenced by expression slots in numeric fields "
+                    f"parameter name {k!r} is invalid: {_PNR} — "
+                    f"it is referenced by expression slots in numeric fields "
                     f"and by sweep axes (parameters[name])")
         return v
 
@@ -940,7 +957,10 @@ class SimConfig(_StrictModel):
                     f"geometry references undefined material "
                     f"{g.material!r} (expected a name from materials[]: "
                     f"{sorted(known) if known else 'none defined'})")
-        # periodic/bloch 必须同轴成对（显式设置冲突时提前报错）
+        # periodic/bloch 必须同轴成对（显式设置冲突时提前报错）。
+        # 〔定案 R16：同轴 periodic+bloch 混搭是既有设计——golden 正典
+        # 语料 full_field 即用它；两 kind 都属"平移对称族"，配对合法。
+        # 猎手曾报可疑、一度收紧同 kind，golden 当场红，回退并锁死。〕
         b = self.domain.boundary
         pairs = (("x_min", "x_max"), ("y_min", "y_max"), ("z_min", "z_max"))
         for f_lo, f_hi in pairs:
@@ -1020,15 +1040,30 @@ class SweepAxisSpec(_StrictModel):
         return self
 
     def value_list(self) -> list:
-        """该轴的取值序列（values 原样；linspace/logspace 按公式展开）。"""
+        """该轴的取值序列（values 原样；linspace/logspace 按公式展开）。
+
+        logspace 展开值查有限（G124⑤：start=400 → 10**400=inf，此前
+        不查即穿）。"""
         if self.values is not None:
             return list(self.values)
         start, stop, n = self.linspace if self.linspace else self.logspace
         if self.linspace is not None:
             return [start + i * (stop - start) / (n - 1)
                     for i in range(n)]
-        return [10 ** (start + i * (stop - start) / (n - 1))
-                for i in range(n)]
+        vals = []
+        for i in range(n):
+            try:
+                vals.append(10 ** (start + i * (stop - start) / (n - 1)))
+            except OverflowError:   # G124⑤：10**400 直接 OverflowError
+                raise ValueError(
+                    f"logspace [{start}, {stop}] produces values out of "
+                    f"float range (10^x overflow) — narrow the range"
+                ) from None
+        if not all(math.isfinite(x) for x in vals):
+            raise ValueError(
+                f"logspace [{start}, {stop}] produces non-finite values "
+                f"(10^x overflow) — narrow the range")
+        return vals
 
 
 class SweepSpec(_StrictModel):
