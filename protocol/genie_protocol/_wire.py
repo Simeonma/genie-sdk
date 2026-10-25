@@ -239,7 +239,8 @@ def _check_dir(v):
         if not math.isfinite(x):
             raise ValueError(
                 f"direction vector elements must be finite, got {x!r}")
-    norm = math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
+    norm = math.hypot(v[0], v[1], v[2])   # G121：hypot 防溢出——手写
+    # 平方和在 1e200 量级溢出 inf，归一出 (0,0,0) 静默零向量
     if norm < 1e-15:
         raise ValueError(
             f"direction vector must be non-zero (norm≈0 is a zero vector), "
@@ -760,6 +761,15 @@ class ApodizeSpec(_StrictModel):
     time_window: Optional[Range2] = None
     width: Optional[float] = Field(default=None, gt=0)
 
+    # G120（R16）：同名字段与 DownSampleSpec.time_window 同一双守卫
+    # （此前 apodize 反序窗 [hi,lo] 静默放行、down_sample 同输入被拒）。
+    @field_validator("time_window", mode="after")
+    @classmethod
+    def _win(cls, v):
+        if v is not None:
+            _check_range(v)
+        return v
+
 
 class _MonitorMixin(_StrictModel):
     name: str = Field(min_length=1)
@@ -810,6 +820,13 @@ class FreqMonSpec(_MonitorMixin):
     @field_validator("freq", mode="after")
     @classmethod
     def _fr(cls, v):
+        # G119（R16）：拼错键（n_points 之类）此前被重建 dict 静默丢弃、
+        # n 落默认 100——正是 _StrictModel extra=forbid 要消灭的静默面。
+        unknown = set(v) - {"center", "bw", "n"}
+        if unknown:
+            raise ValueError(
+                f"freq: unknown key(s) {sorted(unknown)} — freq takes "
+                "exactly (center [Hz], bw [Hz], n [points])")
         center = v.get("center")
         bw = v.get("bw", 0.0)
         n = int(v.get("n", 100))
