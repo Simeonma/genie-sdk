@@ -55,8 +55,8 @@ historical job can be revisited).
 |---|---|
 | `data.monitors` | list of monitor names, e.g. `['tr', 'pt', …]` |
 | `data.attrs` | root attributes: executed_steps / dt / grid_shape / format |
-| `data.tr.Ex` | attribute access → complex ndarray (lazy h5py read) |
-| `data["tr"]["Ex"]` | subscripting, same effect |
+| `data.tr.Ex` | attribute access → lazy h5py Dataset (slice it, or use `[()]` for the ndarray) |
+| `data["tr"]["Ex"]` | subscripting → ndarray directly |
 | `data.tr.keys()` | all dataset names for that monitor |
 
 ```python
@@ -81,19 +81,21 @@ See also　Monitor definitions: [Monitors](#f-mon-monitors); auto-save paths: [f
 ## The h5 key protocol
 
 On disk the result file
-uses **flat keys** — `<prefix>@<monitor>.<field>` — not nested groups:
+(`genie-results-h5/1`, written by the compute kernel's driver) uses
+**groups** — one group per monitor, one dataset per field/axis:
 
-| Prefix | Keys | Meaning |
-|---|---|---|
-| `t@` | `t@名.time`, `t@名.<comp>`, `t@名.x/y/z` | time-domain axis, field components, position axes (point monitors: **no** `x/y/z` arrays) |
-| `f@` | `f@名.freqs`, `f@名.<comp>`, `f@名.x/y/z` | frequency axis, **complex DFT amplitudes**, position axes |
-| `i@` | `i@名.eps`, `i@名.mu`, `i@名.x/y/z` | permittivity / permeability, per-cell coordinates |
+- Group name = monitor name (matches `cfg.monitor` entries);
+- Group attribute `domain` ∈ `f` / `t` / `i` (frequency / time / index);
+- Datasets inside the group = field components and axes (`Ex`, `time`,
+  `freqs`, `x/y/z`, …);
+- Root attributes: `format`, `executed_steps`, `dt`, `grid_shape`, and
+  `monitors` (a JSON manifest with per-monitor `shape` metadata).
 
-The grouped access the SDK offers (`data.tr.Ex`, `get_freq('tr').fields`)
-is a wrapped convenience view over these flat keys. Where older pages
-describe the file as "one group per monitor, one dataset per field",
-that describes the wrapper, not the wire format — this section is
-authoritative when the two accounts coexist.
+The **flat keys** `t@名.time` / `f@名.freqs` … you may see in the SDK's
+in-memory plumbing (`get_time`/`get_freq` flatten the groups into a
+`<domain>@<monitor>.<field>` dict before building the result objects) are
+an **in-memory intermediate**, not the on-disk layout. Reading the file
+directly with h5py means iterating groups and their datasets.
 
 **Index-monitor data shape.** `i@名.eps` / `i@名.mu` is a **flat
 per-cell list** (1-D, one value per grid cell) accompanied by

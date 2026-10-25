@@ -1,11 +1,13 @@
-"""结果对象 — 纯数据容器（npz 线格式 → 带 numpy 属性的对象）。
+"""结果对象 — 纯数据容器（平铺键 dict → 带 numpy 属性的对象）。
 
 定案（用户裁决 2026-09）：**SDK 零计算、零物理**。本模块不做任何
 派生量（transmission/flux/spectrum/FFT 一概不在此层）——技术全部
 留在服务端。想在本地做分析的用户直接拿裸 numpy 数组自己写；要看
 图的走 UI 的作业预览（PNG 由服务端 driver 渲染，预览域不进 SDK）。
 
-npz 键约定（v100/backend/driver.py 固定的线格式）::
+输入约定（**内存中介形态**，非盘上格式——盘上是分组 h5，见
+`simulate._result_arrays` 的展平与 HTTP_API.md"结果文件结构"；真源
+= 内核 driver 的 `_save_results_h5`）::
 
     t@<名>.time            时域轴 (n_samples,)
     t@<名>.<comp>          场分量，如 t@pt.Ex —— (n_samples,) 或 (n_samples, n_pos)
@@ -195,9 +197,10 @@ class _MonitorView:
 class SimData:
     """作业结果结构体（genie-results-h5/1 的 SDK 形态）——result.h5 的包装。
 
-    组 = 监视器，数据集 = 场/轴；属性直达: ``data.tr.Ex`` → 复数 ndarray
-    （h5py 惰性读，切片才真正搬数据）。元信息: ``data.attrs``（根属性
-    executed_steps/dt/grid_shape/format）。画图: ``data.plot("tr", "Ex")``
+    组 = 监视器，数据集 = 场/轴；属性直达: ``data.tr.Ex`` → 惰性
+    h5py Dataset（切片或 ``[()]`` 才是 ndarray；C2/R19 措辞修正——
+    此前误写"complex ndarray"）。元信息: ``data.attrs``（根属性
+    executed_steps/dt/grid_shape/format）。画图: ``data.plot("tr","Ex")``
     （matplotlib 为可选依赖，import 才触发）。
     """
 

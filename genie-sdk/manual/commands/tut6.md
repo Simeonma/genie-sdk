@@ -21,16 +21,17 @@ that turns it into routine.
 the monitor list — one entry per monitor, one key per field or axis:
 
 ```
-f@tr.Ex, f@tr.Ey, f@tr.Ez, …     # flat key per requested field
-f@tr.freqs                       # axis: freqs (freq monitor) | t@tr.time (time monitor)
-i@ix.eps, i@ix.mu                # index monitor: built ε(r), μ(r)
+/tr/Ex, /tr/Ey, /tr/Ez, …        # dataset per requested field (h5 group /tr)
+/tr/freqs                        # axis: freqs (freq monitor) | /tr/time (time monitor)
+/ix/eps, /ix/mu                  # index monitor: built ε(r), μ(r)
 ```
 
-Keys on disk are flat — `<prefix>@<monitor>.<field>` (prefix `t@`/`f@`/`i@`
-by monitor kind); the full key protocol lives in
-[09 · results](09-results.html). The SDK additionally offers a grouped
-wrapper view (`data.tr.Ex` via `f.results()`), but the flat keys above are
-what the file actually stores.
+On disk the file (`genie-results-h5/1`) is **grouped** — one h5 group per
+monitor (name = monitor name, group attr `domain` = `t`/`f`/`i`), one
+dataset per field/axis; root attrs carry `format` / `executed_steps` /
+`dt` / `grid_shape` / `monitors`. The flat `t@名.time`-style keys are the
+SDK's in-memory intermediate; the full protocol lives in
+[09 · results](09-results.html).
 
 The mirroring is deliberate: whatever was attached to the simulation
 appears under the monitor's name, so results files stay
