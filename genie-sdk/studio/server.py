@@ -135,16 +135,19 @@ def create_app(*, static_dir: str | Path | None = None,
         return resp
 
     # ── 登录闸（站长裁决 2026-10-21：未登录什么都不给做）──
-    # 只拦"本地能力"前缀；静态资源与 /api/auth/* 必须放行，否则登录页
-    # 自己都加载不出来。
-    _GATED_PREFIX = ("/api/validate", "/api/drafts",
-                     "/__drafts", "/api/scripts", "/api/workspace",
-                     "/api/sim", "/api/exec", "/api/session")
+    # G110 清账 2026-10-27：原黑名单式 _GATED_PREFIX 只列八族，漏了
+    # /api/run、/api/model/*、/api/result/*——未登录可整份替换会话模型、
+    # 以代持凭据提交 GPU 作业并读结果。黑名单的结构性缺陷 = 新增端点
+    # 天然漏闸，反转成"默认全闸 + 显式放行"：放行只给健康检查与登录面
+    # （不放行登录页自己都加载不出来）；静态资源不在 /api/ 下，不受影响。
+    _OPEN_PREFIX = ("/api/health", "/api/auth/")
 
     @app.middleware("http")
     async def require_signin(request: Request, call_next):
-        if require_auth and any(request.url.path.startswith(p)
-                                for p in _GATED_PREFIX):
+        p = request.url.path
+        gated = p.startswith("/api/") or p.startswith("/__drafts")
+        if (require_auth and gated
+                and not any(p == o or p.startswith(o) for o in _OPEN_PREFIX)):
             if not (request.headers.get("X-API-Key") or "").strip():
                 return JSONResponse(
                     {"detail": "未登录——请先登录后再操作"}, status_code=401)
