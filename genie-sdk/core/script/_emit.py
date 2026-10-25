@@ -166,7 +166,20 @@ def _pole_ab(p: dict, env: dict, W: list, path: str) -> tuple[str, bool]:
 def _pole_line(p: dict, side: str, env: dict, W: list, path: str) -> str | None:
     if not isinstance(p, dict):       # G126：poles 条目非 dict 不裸崩
         return None
-    g = _num_or_list(p.get("gamma"), env, W, (path + ".gamma") if path else "")
+    # G133 定案①（站长裁决 2026-10-27）：极点强度参数（gamma/omega_p/
+    # omega_0/delta_eps）只收标量/表达式串——逐轴列表是内核 1.4.0 已
+    # 移除的旧形态（协议拒、builder 拒，渲染器此前照渲，生成运行必炸
+    # 的脚本）。三方口径统一：渲染时 W + 跳过该 pole。
+    # alpha/beta 是 rank-1 方向向量，3 元列表合法，走 _num_or_list。
+    if isinstance(p.get("gamma"), (list, tuple)) or \
+            isinstance(p.get("omega_p"), (list, tuple)) or \
+            isinstance(p.get("omega_0"), (list, tuple)) or \
+            isinstance(p.get("delta_eps"), (list, tuple)):
+        W.append((path or "pole") + " 极点参数含列表（逐轴极点是内核"
+                 "已移除的旧形态——用标量 + alpha/beta rank-1），已跳过"
+                 "该 pole")
+        return None
+    g = _num(p.get("gamma"), env, W, (path + ".gamma") if path else "")
     if g is None:
         return None
     ab, ok = _pole_ab(p, env, W, path)
@@ -175,16 +188,16 @@ def _pole_line(p: dict, side: str, env: dict, W: list, path: str) -> str | None:
                  " 0 占位/缺失），已跳过该 pole")
         return None
     if p.get("kind") == "drude":
-        wp = _num_or_list(p.get("omega_p"), env, W, (path + ".omega_p") if path else "")
+        wp = _num(p.get("omega_p"), env, W, (path + ".omega_p") if path else "")
         if wp is None:
             return None
         return f"add_{side}_drude_pole({wp}, {g}{ab})"
     if p.get("kind") == "lorentz":
-        w0 = _num_or_list(p.get("omega_0"), env, W, (path + ".omega_0") if path else "")
+        w0 = _num(p.get("omega_0"), env, W, (path + ".omega_0") if path else "")
         if w0 is None:
             return None
         de_val = p.get("delta_eps")
-        de_s = _num_or_list(de_val, env, W, (path + ".delta_eps") if path else "")
+        de_s = _num(de_val, env, W, (path + ".delta_eps") if path else "")
         de = (", " + de_s) if (de_s is not None and de_val != 1) else ""
         return f"add_{side}_lorentz_pole({w0}, {g}{de}{ab})"
     return None
