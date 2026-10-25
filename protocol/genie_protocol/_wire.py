@@ -887,13 +887,15 @@ MonitorSpec = Annotated[
 # run 节（G18 2026-10-16 站长裁决，方案 A 单旋钮）：**唯一时间定义 =
 # domain.total_time**（SI 秒，gt=0 必填，见 DomainSpec）——作业推进到
 # 网格时间容量为止，步数是 build 后的派生量（summary/results 只读面）。
-# run 节本身只剩服务字段：gpu = 卡数（1..4，G16）、timeout_s = 作业
+# run 节本身只剩服务字段：gpu = 可选上限（ge=1 le=4，跨仓契约
+# 2026-10-25：给几张卡由网关裁定；装不下 422、无空闲卡排队——
+# G84 清账 2026-10-27 前误写"卡数/显存不足 FAILED"）、timeout_s = 作业
 # 超时。旧 run.n_steps（实际推进步数第二旋钮）退役——容量/步数双旋钮
 # 语义混乱且 n_steps>容量 必撞 apodization 截断，v2 未发布无兼容包袱。
 
 
 class RunSpec(_StrictModel):
-    gpu: Optional[Annotated[int, Field(ge=1, le=4)]] = None  # 卡数 1..4
+    gpu: Optional[Annotated[int, Field(ge=1, le=4)]] = None  # 可选上限
     timeout_s: int = Field(default=DEFAULT_TIMEOUT_S, gt=0)
 
 

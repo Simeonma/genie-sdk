@@ -263,7 +263,10 @@ class Simulation:
                 "{id}) — create a new connect() instance to change the "
                 "config".format(id=self._job_id))
         if getattr(self._cfg.domain, "total_time", None) is None:
-            raise RuntimeError(
+            # G85（R18 清账）：配置缺失归一 GenieConfigError——其余同类
+            # 缺失（validate_for_ui 路径）都是这个类型，此前这里是
+            # RuntimeError（同一份半成品配置两种异常型）。
+            raise GenieConfigError(
                 "domain.total_time is missing (the single time "
                 "definition, SI seconds > 0) — set f.domain.total_time "
                 "= 6e-14 before submitting")
@@ -280,13 +283,14 @@ class Simulation:
 
         仿真时长 = domain.total_time（G18 单旋钮：唯一时间定义，SI 秒；
         作业推进到网格时间容量为止，步数是 build 后派生量）。其余是
-        RunSpec 服务端字段：gpu=卡数（1..4）、timeout_s=作业超时；
-        ``progress(status_dict)`` 每轮询一轮回调一次（打进度条用）。
+        RunSpec 服务端字段：gpu/timeout_s；``progress(status_dict)``
+        每轮询一轮回调一次（打进度条用）。
 
-        gpu（2026-10-15 站长裁决：用户只选卡数）= **卡数**（int ≥1；
-        None = 缺省单卡）。设备挑选/NV 邻接链/切轴全部调度器内部自动：
-        空闲显存过滤 + NV 链挑选（M3-2 语义）+ 切轴接触面最小（auto）。
-        显存不足或凑不齐 NV 邻接链 → 作业 FAILED（明确报错，不静默降级）。
+        gpu = **可选上限**（int ≥1；None = 交由调度器决定）。跨仓契约
+        （2026-10-25 定案，与手册 07-run / 网关 _decide_n 同口径）：
+        作业给几张卡由网关按等级上限与需求裁定；装不下 → 提交期 422
+        （明确报错）；无空闲卡 → 排队等待（不是失败）。设备挑选/NV
+        邻接链/切轴全部调度器内部自动。
         """
         # G136 挡板（R18，站长裁 A）：终态实例的重入语义——
         # · done → 直接返回：重查无收益（结果不会变），只会踩归档陷阱
@@ -396,6 +400,18 @@ class Simulation:
 
     # ---- 结果 ----
 
+    def _result_bytes(self) -> bytes:
+        """结果字节单一来源（G93/S5，R18 清账）：本地落盘优先——
+        auto_save 在 run() 成功时已下载过，同进程 get_*/results() 不再
+        二次下载（修前 get_* 每次重取整份 h5）；无本地文件才现场
+        fetch（后端已归档时两条路在同一处统一抛 410，不再一生一死）。
+        显式取他人/历史作业不走这里（results(job_id=…) 直连）。"""
+        from pathlib import Path as _P
+        local = getattr(self, "_result_local_path", None)
+        if local and _P(local).is_file():
+            return _P(local).read_bytes()
+        return self._client.fetch_result(self._job_id)
+
     def _guard_done_for_fetch(self) -> None:
         """取数前置守卫（get_* 与 results() 共用，G138/R18）：未成功
         终态 → RuntimeError + 日志尾（不裸打服务端吃 409/410——两条
@@ -427,7 +443,7 @@ class Simulation:
             import io
 
             with h5py.File(io.BytesIO(
-                    self._client.fetch_result(self._job_id)), "r") as h5:
+                    self._result_bytes()), "r") as h5:
                 arrays: dict = {}
                 for mon_name, grp in h5.items():
                     dom = grp.attrs.get("domain", "")
@@ -447,21 +463,17 @@ class Simulation:
         import io
 
         jid = job_id or self._job_id
-        local = getattr(self, "_result_local_path", None) if (
-            job_id is None or job_id == self._job_id) else None
-        if local:
-            from pathlib import Path as _P
-            if _P(local).is_file():
-                raw = _P(local).read_bytes()
-                return SimData(h5py.File(io.BytesIO(raw), "r"), job_id=jid)
-        # G138（R18）：终态守卫与 get_* 同款（本地落盘可读时上面已放行；
-        # 显式传 job_id = 取他人/历史作业，直取不守）。
+        # G138：终态守卫与 get_* 同款；G93：字节来源与 get_* 同一双手
+        # （本地优先；显式传 job_id = 取他人/历史作业，直取不守不走本地）。
         if job_id is None:
             self._guard_done_for_fetch()
         if jid is None:
             raise RuntimeError(
                 "no job submitted yet — results() needs a job_id")
-        raw = self._client.fetch_result(jid)
+        if job_id is None or job_id == self._job_id:
+            raw = self._result_bytes()
+        else:
+            raw = self._client.fetch_result(jid)
         return SimData(h5py.File(io.BytesIO(raw), "r"), job_id=jid)
 
     _npz = _result_arrays       # 兼容旧名（下游 _get_result 等调用点）
