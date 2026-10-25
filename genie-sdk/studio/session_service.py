@@ -128,25 +128,33 @@ class AttachIn(BaseModel):
     session_id: str = DEFAULT_SESSION
 
 
+def _kernel(body) -> object:
+    """写端点前置正典（G112 收敛 2026-10-27）：取/建 kernel + 可选 attach。
+
+    「带 key 才换绑」是写路径（exec/run/patch/replace）的口径；``/attach``
+    是换绑的正名端点，**无条件** attach（含空 key）、要回执，不走本
+    helper——两种口径别再合回去。attach 幂等：同 key 不动模型，换 key
+    只换凭据（O2）。
+    """
+    k = get_kernel(body.owner, body.session_id)
+    if body.key:
+        k.attach(body.key)
+    return k
+
+
 @app.post("/exec")
 def exec_(body: ExecIn) -> dict:
     if not body.code.strip():
         raise HTTPException(status_code=422, detail="code 必填")
-    k = get_kernel(body.owner, body.session_id)
-    if body.key:
-        k.attach(body.key)          # 幂等：同 key 不动模型，换 key 只换凭据
     mode = "build" if body.mode == "build" else "run"
-    eid = k.submit(body.code, mode=mode, label=body.label)
+    eid = _kernel(body).submit(body.code, mode=mode, label=body.label)
     return {"id": eid}
 
 
 @app.post("/run")
 def run_(body: RunIn) -> dict:
     """提交当前模型（**不改模型**）。GUI 的 Run 按钮走这里。"""
-    k = get_kernel(body.owner, body.session_id)
-    if body.key:
-        k.attach(body.key)
-    eid = k.run(gpu=body.gpu, timeout_s=body.timeout_s)
+    eid = _kernel(body).run(gpu=body.gpu, timeout_s=body.timeout_s)
     return {"id": eid}
 
 
@@ -155,10 +163,7 @@ def model_patch(body: PatchIn) -> dict:
     """模型路径级增量——表单/树/工具条的一次改动（M3b）。"""
     if not body.ops:
         raise HTTPException(status_code=422, detail="ops 不能为空")
-    k = get_kernel(body.owner, body.session_id)
-    if body.key:
-        k.attach(body.key)
-    return {"id": k.patch(body.ops)}
+    return {"id": _kernel(body).patch(body.ops)}
 
 
 @app.post("/model/replace")
@@ -166,10 +171,7 @@ def model_replace(body: ReplaceIn) -> dict:
     """整份模型替换（导入 .gensim / 搬运）。"""
     if not isinstance(body.model, dict) or not body.model:
         raise HTTPException(status_code=422, detail="model 须为非空 dict")
-    k = get_kernel(body.owner, body.session_id)
-    if body.key:
-        k.attach(body.key)
-    return {"id": k.replace(body.model)}
+    return {"id": _kernel(body).replace(body.model)}
 
 
 @app.get("/output")
