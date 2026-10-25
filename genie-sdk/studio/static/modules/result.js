@@ -419,7 +419,6 @@ window.__jobProgress = (function () {
     const wrap = document.createElement("span");
     wrap.className = "jobprog";
     wrap.title = "作业 " + (d.job_id || "?") + " 运行中";
-    wrap.appendChild(_cancelJobButton(d.job_id));
     const bar = document.createElement("span");
     bar.className = "jobprog-bar";
     const fill = document.createElement("i");
@@ -430,8 +429,11 @@ window.__jobProgress = (function () {
     txt.textContent = pct + "% · " + step + "/" + nTot + " 步" + eta;
     wrap.appendChild(bar);
     wrap.appendChild(txt);
-    if (phase === "queue" || phase === "run")
-      wrap.appendChild(_cancelJobButton(job));
+    /* 进度态 = 作业确实在跑：撤销钮恒在（与 __jobPhase 同序位）。
+     * 2026-10-25 修：这里原来引用了 __jobPhase 闭包里的 `phase`——不是本
+     * 函数的变量，每个进度事件都抛 ReferenceError（真机 G82 亲验抓到，
+     * 页面功能看着正常、控制台每次滚一条）；同时 cancel 钮被 append 了两次。 */
+    wrap.appendChild(_cancelJobButton(d.job_id));
     chip.appendChild(wrap);
   };
 })();
