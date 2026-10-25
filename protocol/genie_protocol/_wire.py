@@ -1067,33 +1067,28 @@ class SweepAxisSpec(_StrictModel):
     def value_list(self) -> list:
         """该轴的取值序列（values 原样；linspace/logspace 按公式展开）。
 
-        计算型展开的**结果**统一查有限——不变量属于展开产物，不属于
-        输入形态（G124⑤ logspace 10^400；R21 复审补 linspace：
-        [-1e308, 1e308, 3] 的插值中点溢出 inf/nan 同样在出口拦）。
-        ``values`` 形态的有限性由 ``_StrictModel._reject_nonfinite``
-        递归把守。"""
+        logspace 展开值查有限（G124⑤：start=400 → 10**400=inf，此前
+        不查即穿）。linspace 不查数值合理性——DISCIPLINE §5：输入数值
+        的正确性由用户负责（R21 曾加对称检查，站长 2026-10-27 裁回退）。"""
         if self.values is not None:
             return list(self.values)
         start, stop, n = self.linspace if self.linspace else self.logspace
-        if self.logspace is not None:
-            vals = []
-            for i in range(n):
-                try:
-                    vals.append(10 ** (start + i * (stop - start) / (n - 1)))
-                except OverflowError:   # G124⑤：10**400 直接 OverflowError
-                    raise ValueError(
-                        f"logspace [{start}, {stop}] produces values out of "
-                        f"float range (10^x overflow) — narrow the range"
-                    ) from None
-            kind, detail = "logspace", "10^x overflow"
-        else:
-            vals = [start + i * (stop - start) / (n - 1)
+        if self.linspace is not None:
+            return [start + i * (stop - start) / (n - 1)
                     for i in range(n)]
-            kind, detail = "linspace", "interpolation overflow"
+        vals = []
+        for i in range(n):
+            try:
+                vals.append(10 ** (start + i * (stop - start) / (n - 1)))
+            except OverflowError:   # G124⑤：10**400 直接 OverflowError
+                raise ValueError(
+                    f"logspace [{start}, {stop}] produces values out of "
+                    f"float range (10^x overflow) — narrow the range"
+                ) from None
         if not all(math.isfinite(x) for x in vals):
             raise ValueError(
-                f"{kind} [{start}, {stop}] produces non-finite values "
-                f"({detail}) — narrow the range")
+                f"logspace [{start}, {stop}] produces non-finite values "
+                f"(10^x overflow) — narrow the range")
         return vals
 
 
