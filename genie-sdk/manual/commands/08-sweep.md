@@ -32,7 +32,10 @@ call point): at most 32 axes; at most 512 expanded points by default
 length; every axis `name` must exist in the base `parameters` key set
 (else the error lists the available names). `linspace`/`logspace` take
 `[start, stop, n]` with `n ≥ 2` and `start != stop`; `logspace`
-interprets the bounds as exponents of 10.
+interprets the bounds as exponents of 10. Computed expansions
+(`linspace`/`logspace`) must come out finite — an interpolation or
+exponent overflow is rejected at expansion with a "narrow the range"
+hint.
 
 ```python
 f.parameters({'pitch': 180e-9})

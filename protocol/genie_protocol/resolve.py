@@ -21,6 +21,10 @@ from .expr import (PARAM_NAME_RULE, ExprError, eval_expr,
                    resolve_parameter_table, valid_param_name)
 from ._wire import SimConfig
 
+__all__ = ["unwrap_annotation", "discriminator_name", "select_union_member",
+           "resolve_parameters", "resolve_parameters_detailed",
+           "check_raw_param_keys", "validate_resolved", "validate_for_ui"]
+
 
 def unwrap_annotation(ann) -> tuple[object, tuple | None]:
     """剥 Annotated：返回 (裸注解, metadata 元组)。"""

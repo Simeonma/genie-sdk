@@ -1010,13 +1010,15 @@ class SweepAxisSpec(_StrictModel):
     - ``name``：**参数名**——必须是基底配置 ``parameters`` 键集内的
       名（不在 → 422 列可用名）；展开语义 = 逐点 ``parameters[name]=v``
       后重解析（引用该参数的全部表达式槽逐点联动重求值）；
-    - 取值三选一互斥：``values``（显式列表，str 支持枚举型）|
+    - 取值三选一互斥：``values``（显式列表；str 成员按**表达式串**
+      逐点求值——非枚举型，未定义名会在逐点解析报 unknown_name）|
       ``linspace`` = [start, stop, n]（数值，含端点，n>=2）|
       ``logspace`` = [start, stop, n]（10^x，同规则）；
       多给/全缺 → 422 策展错误指路；``linspace/logspace`` 的
       start==stop 拒收（单值轴请直接 values=[x]——退化区间是笔误的
       温床，宁拒不放行）。
-    展开与逐点校验入口见 ``fdtd/serve/sweep.py``。
+    展开与逐点校验入口见 ``sweep_expand.py``（客户端展开器，
+    G29b 起为 SDK 侧活）。
     """
 
     name: str = Field(min_length=1, max_length=64)
@@ -1065,27 +1067,33 @@ class SweepAxisSpec(_StrictModel):
     def value_list(self) -> list:
         """该轴的取值序列（values 原样；linspace/logspace 按公式展开）。
 
-        logspace 展开值查有限（G124⑤：start=400 → 10**400=inf，此前
-        不查即穿）。"""
+        计算型展开的**结果**统一查有限——不变量属于展开产物，不属于
+        输入形态（G124⑤ logspace 10^400；R21 复审补 linspace：
+        [-1e308, 1e308, 3] 的插值中点溢出 inf/nan 同样在出口拦）。
+        ``values`` 形态的有限性由 ``_StrictModel._reject_nonfinite``
+        递归把守。"""
         if self.values is not None:
             return list(self.values)
         start, stop, n = self.linspace if self.linspace else self.logspace
-        if self.linspace is not None:
-            return [start + i * (stop - start) / (n - 1)
+        if self.logspace is not None:
+            vals = []
+            for i in range(n):
+                try:
+                    vals.append(10 ** (start + i * (stop - start) / (n - 1)))
+                except OverflowError:   # G124⑤：10**400 直接 OverflowError
+                    raise ValueError(
+                        f"logspace [{start}, {stop}] produces values out of "
+                        f"float range (10^x overflow) — narrow the range"
+                    ) from None
+            kind, detail = "logspace", "10^x overflow"
+        else:
+            vals = [start + i * (stop - start) / (n - 1)
                     for i in range(n)]
-        vals = []
-        for i in range(n):
-            try:
-                vals.append(10 ** (start + i * (stop - start) / (n - 1)))
-            except OverflowError:   # G124⑤：10**400 直接 OverflowError
-                raise ValueError(
-                    f"logspace [{start}, {stop}] produces values out of "
-                    f"float range (10^x overflow) — narrow the range"
-                ) from None
+            kind, detail = "linspace", "interpolation overflow"
         if not all(math.isfinite(x) for x in vals):
             raise ValueError(
-                f"logspace [{start}, {stop}] produces non-finite values "
-                f"(10^x overflow) — narrow the range")
+                f"{kind} [{start}, {stop}] produces non-finite values "
+                f"({detail}) — narrow the range")
         return vals
 
 

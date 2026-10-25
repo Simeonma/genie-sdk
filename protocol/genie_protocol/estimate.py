@@ -14,6 +14,9 @@ from __future__ import annotations
 
 import math
 
+__all__ = ["C0_PHYS", "estimate_cells_domain_mesh",
+           "estimate_steps_domain_mesh", "mesh_preview_stats"]
+
 C0_PHYS = 299792458.0          # 真空光速 SI（fdtd 导出同名常数同值）
 
 
@@ -56,34 +59,39 @@ def estimate_cells_domain_mesh(domain, mesh) -> int:
     return int(base + extra)
 
 
-def estimate_steps_domain_mesh(domain, mesh) -> int:
-    """total_time → 步数预估算（G18 换算正典的 models 面镜像）。
-
-    dt = cfl/√3 · min_cell（内核 mesh.py:142 正典公式；sim/SI 经
-    ref_length 消去后 steps = √3·c₀·T/(cfl·min_cell_SI)）。min_cell
-    取各轴基格距 ÷ 该轴 refine 因子累计积，不追渐变膨胀（同内核
-    _estimate_steps 口径：守卫面宁紧勿松的估算，见模块头）。
-    """
+def _refined_min_cell(mesh) -> float:
+    """min_cell = 各轴基格距 ÷ 该轴 refine 因子累计积（两把估算尺的
+    单一公式源——n_steps_est 与 dt_est 必须同口径，refine 下自洽：
+    dt_est × n_steps_est ≥ total_time。不追渐变膨胀，同内核
+    _estimate_steps 口径：守卫面宁紧勿松的估算，见模块头）。"""
     fx = fy = fz = 1
     for r in mesh.refine:
         fs = [r.factor] * 3 if isinstance(r.factor, int) else list(r.factor)
         fx, fy, fz = fx * fs[0], fy * fs[1], fz * fs[2]
-    cell_x = mesh.dx / fx
-    cell_y = (mesh.dy or mesh.dx) / fy
-    cell_z = (mesh.dz or mesh.dx) / fz
-    min_cell = min(cell_x, cell_y, cell_z)
-    dt_lb = domain.cfl * min_cell / (math.sqrt(3.0) * C0_PHYS)
-    return max(1, math.ceil(domain.total_time / dt_lb))
+    return min(mesh.dx / fx, (mesh.dy or mesh.dx) / fy,
+               (mesh.dz or mesh.dx) / fz)
+
+
+def _dt_estimate(domain, mesh) -> float:
+    """时间步上界估计：dt = cfl/√3 · min_cell（内核 mesh.py:142 正典
+    公式；sim/SI 经 ref_length 消去后 steps = √3·c₀·T/(cfl·min_cell_SI)）。"""
+    return domain.cfl * _refined_min_cell(mesh) / (math.sqrt(3.0) * C0_PHYS)
+
+
+def estimate_steps_domain_mesh(domain, mesh) -> int:
+    """total_time → 步数预估算（G18 换算正典的 models 面镜像）。"""
+    return max(1, math.ceil(domain.total_time / _dt_estimate(domain, mesh)))
 
 
 def mesh_preview_stats(domain, mesh) -> dict:
     """设计态估算摘要（/api/preview ``estimate`` 节形状）：格数/dt 估/
-    步数估/各轴格距。"""
+    步数估/各轴格距。dt 与步数同一把尺（_dt_estimate，R21 复审 S3：
+    此前 dt 用裸格距、步数用 refine 折算，带 refine 的 preview 给出
+    两个互相矛盾的数）。"""
     dx = mesh.dx
     return {
         "cells": estimate_cells_domain_mesh(domain, mesh),
-        "dt_est": domain.cfl * min(dx, mesh.dy or dx, mesh.dz or dx)
-        / (math.sqrt(3.0) * C0_PHYS),
+        "dt_est": _dt_estimate(domain, mesh),
         "n_steps_est": estimate_steps_domain_mesh(domain, mesh),
         "spacing": {"dx": dx, "dy": mesh.dy or dx, "dz": mesh.dz or dx},
     }

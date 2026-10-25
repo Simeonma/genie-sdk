@@ -22,6 +22,8 @@ from .expr import ExprError
 from .resolve import resolve_parameters_detailed, validate_resolved
 from ._wire import SweepSpec
 
+__all__ = ["SweepExpandError", "expand_sweep", "validate_sweep_config"]
+
 
 class SweepExpandError(ValueError):
     """展开期错误（轴名不在参数表 / 逐点解析校验失败）。
@@ -53,6 +55,13 @@ def expand_sweep(base: dict, sweep: SweepSpec) -> list[dict]:
 
 def _check_axis_names(sweep: SweepSpec, base: dict) -> None:
     known = base.get("parameters") or {}
+    if not isinstance(known, dict):
+        # 2026-10-27 R21 复审 C1：parameters=5 之类畸形 base 此前在
+        # sorted(known) 抛裸 TypeError，逃出 SweepExpandError 错误契约
+        # （expand_sweep 的 setdefault 同样会崩——守卫收在最前一道）。
+        raise SweepExpandError(
+            f"base config 'parameters' must be a mapping of parameter "
+            f"names, got {type(known).__name__}")
     available = sorted(known)
     for a in sweep.parameters:
         if a.name not in known:

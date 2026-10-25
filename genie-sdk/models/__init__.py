@@ -19,8 +19,13 @@ def _ensure_genie_protocol() -> None:
     try:
         import genie_protocol  # noqa: F401
         return
-    except ImportError:
-        pass
+    except ModuleNotFoundError as e:
+        # R21 复审 S6：只把"genie_protocol 本身不在"当未装回退源码树。
+        # 包体内部的 ImportError（依赖缺失/半升级）必须浮出——静默回退
+        # 源码树副本会掩盖环境病；e.name 区分二者（依赖缺失同样是
+        # ModuleNotFoundError，如 pydantic 不在）。
+        if e.name != "genie_protocol":
+            raise
     import importlib.util
     import sys
     from pathlib import Path
