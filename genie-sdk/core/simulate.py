@@ -186,7 +186,10 @@ class Simulation:
         物、agent/MCP 的提交轨道（spec.execute_tool）都经它进入 SDK 层。
         """
         if not isinstance(cfg, dict):
-            raise TypeError(
+            # K2（R18）：形状错归一为 GenieConfigError——同层
+            # _construct_tree 对同类输入抛 GenieConfigError，此前这里是
+            # 裸 TypeError（调用方按 Genie 系异常分支生存）。
+            raise GenieConfigError(
                 f"load_config requires a dict (SimConfig JSON), got "
                 f"{type(cfg).__name__}")
         self._cfg = _construct_tree(SimConfig, cfg, "cfg")

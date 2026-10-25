@@ -137,7 +137,13 @@ def build_sweep_spec(sweep: dict | None = None,
     if sweep is not None:
         if not isinstance(sweep, dict):
             raise TypeError(f"sweep 须 dict，得到 {type(sweep).__name__}")
+        # G137（R18）：四个 kwargs 此前被 `dict(sweep)` 静默丢弃（只并
+        # mode），docstring 却承诺"同 SweepSpec 字段"——全并入（显式
+        # kwargs 覆盖 sweep 字典同名键，与 parameters 分支同形）。
         spec = dict(sweep)
+        spec["gpus_per_sim"] = gpus_per_sim
+        spec["max_parallel"] = max_parallel
+        spec["on_failure"] = on_failure
         if mode is not None:
             spec["mode"] = mode
         return spec
@@ -243,9 +249,11 @@ class SweepHandle:
             self.state = "canceled"
             return
         self._refresh()
-        # abort：首失败即取消在途、余点 canceled
+        # abort：首失败即取消在途、余点 canceled。G135（R18）：判据从
+        # `_BAD[0]`（只认 failed）改为 any-in 词表——killed/archived
+        # 同样是坏终态，abort 模式下首个坏终态就该停。
         if self.on_failure == "abort" and self._GOOD not in self.states \
-                and self._BAD[0] in self.states:
+                and any(s in self._BAD for s in self.states):
             self._canceled = True
             self.pump()
             return
