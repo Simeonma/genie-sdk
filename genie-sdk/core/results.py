@@ -43,11 +43,16 @@ def _extract(arrays: dict, prefix: str, name: str,
     return fields, axes
 
 
-def _shape_label(axes: dict) -> str:
-    """形态标签（描述性元数据）：位置轴数 0/1/2/3 → point/line/surface/volume。
+def _shape_label(axes: dict, shape_hint: str | None = None) -> str:
+    """形态标签（描述性元数据）。
 
-    n 只统计 x/y/z 三个轴（axis_names 上限 3），``n < 4`` 恒真——
-    第四项 volume 由 n==3 直接触达，无需兜底分支。"""
+    G95（R19）：``shape_hint`` = 根 attrs manifest 的 shape（正源，
+    driver 对每类监视器都写）优先；缺失才回退猜测——猜测按位置轴
+    元素数计数（n 只统计 x/y/z，``n < 4`` 恒真），对 index 类
+    （x/y/z 是逐格点云，全长 n_cells）必报 volume，对真 surface
+    单格轴会低报——所以 manifest 在场时不猜。"""
+    if shape_hint in ("point", "line", "surface", "volume"):
+        return shape_hint
     n = sum(1 for ax in _AXES if ax in axes and np.size(axes[ax]) > 1)
     return ("point", "line", "surface", "volume")[n]
 
@@ -96,25 +101,28 @@ class _DataBase:
 class TimeResult(_DataBase):
     """时域监视器结果（SI）。``.time`` 秒；``.fields`` {分量: 数组}。"""
 
-    def __init__(self, name: str, time: np.ndarray, fields: dict, **ax: Any):
+    def __init__(self, name: str, time: np.ndarray, fields: dict,
+                 shape_hint: str | None = None, **ax: Any):
         self.name = name
         self.time = time
         self.fields = fields
         self.x = ax.get("x")
         self.y = ax.get("y")
         self.z = ax.get("z")
-        self.shape = _shape_label({k: v for k, v in ax.items() if v is not None})
+        self.shape = _shape_label(
+            {k: v for k, v in ax.items() if v is not None}, shape_hint)
         self.n_samples = int(np.size(time))
         self.n_positions = _n_positions(fields)
 
     @classmethod
-    def from_npz(cls, arrays: dict, name: str) -> "TimeResult":
+    def from_npz(cls, arrays: dict, name: str,
+                 shape_hint: str | None = None) -> "TimeResult":
         fields, axes = _extract(arrays, "t", name, ("time",) + _AXES)
         time = axes.pop("time", None)
         if time is None:
             raise KeyError(
                 f"npz 中未找到时域监视器 {name!r}（缺 t@{name}.time 键）")
-        return cls(name, time, fields, **axes)
+        return cls(name, time, fields, shape_hint=shape_hint, **axes)
 
 
 class FreqResult(_DataBase):
@@ -126,31 +134,35 @@ class FreqResult(_DataBase):
     方法，SDK 无此方法——见手册 07-run/09-results 页）。
     """
 
-    def __init__(self, name: str, freqs: np.ndarray, fields: dict, **ax: Any):
+    def __init__(self, name: str, freqs: np.ndarray, fields: dict,
+                 shape_hint: str | None = None, **ax: Any):
         self.name = name
         self.freqs = freqs
         self.fields = fields
         self.x = ax.get("x")
         self.y = ax.get("y")
         self.z = ax.get("z")
-        self.shape = _shape_label({k: v for k, v in ax.items() if v is not None})
+        self.shape = _shape_label(
+            {k: v for k, v in ax.items() if v is not None}, shape_hint)
         self.n_freqs = int(np.size(freqs))
         self.n_positions = _n_positions(fields)
 
     @classmethod
-    def from_npz(cls, arrays: dict, name: str) -> "FreqResult":
+    def from_npz(cls, arrays: dict, name: str,
+                 shape_hint: str | None = None) -> "FreqResult":
         fields, axes = _extract(arrays, "f", name, ("freqs",) + _AXES)
         freqs = axes.pop("freqs", None)
         if freqs is None:
             raise KeyError(
                 f"npz 中未找到频域监视器 {name!r}（缺 f@{name}.freqs 键）")
-        return cls(name, freqs, fields, **axes)
+        return cls(name, freqs, fields, shape_hint=shape_hint, **axes)
 
 
 class IndexResult(_DataBase):
     """index 监视器结果：``.eps`` / ``.mu``（每格点云）+ 每格 x/y/z 坐标。"""
 
-    def __init__(self, name: str, fields: dict, **ax: Any):
+    def __init__(self, name: str, fields: dict,
+                 shape_hint: str | None = None, **ax: Any):
         self.name = name
         self.fields = fields
         self.eps = fields.get("eps")
@@ -158,18 +170,20 @@ class IndexResult(_DataBase):
         self.x = ax.get("x")
         self.y = ax.get("y")
         self.z = ax.get("z")
-        self.shape = _shape_label({k: v for k, v in ax.items() if v is not None})
+        self.shape = _shape_label(
+            {k: v for k, v in ax.items() if v is not None}, shape_hint)
 
     def comps(self) -> list[str]:
         return [k for k in ("eps", "mu") if self.fields.get(k) is not None]
 
     @classmethod
-    def from_npz(cls, arrays: dict, name: str) -> "IndexResult":
+    def from_npz(cls, arrays: dict, name: str,
+                 shape_hint: str | None = None) -> "IndexResult":
         fields, axes = _extract(arrays, "i", name, _AXES)
         if not fields:
             raise KeyError(
                 f"npz 中未找到 index 监视器 {name!r}（缺 i@{name}.eps|mu 键）")
-        return cls(name, fields, **axes)
+        return cls(name, fields, shape_hint=shape_hint, **axes)
 
 
 class _MonitorView:
@@ -179,6 +193,10 @@ class _MonitorView:
         self._g = group
 
     def __getattr__(self, name: str):
+        # G145（R19）：下划线守卫——_f/_g 赋值前的属性探测（pickle/
+        # 复制协议查 __deepcopy__ 等）不得递归进本方法爆 RecursionError
+        if name.startswith("_"):
+            raise AttributeError(name)
         try:
             return self._g[name]
         except KeyError as e:
@@ -236,6 +254,9 @@ class SimData:
 
     def __getattr__(self, name: str):
         # 仅在常规属性缺失时触发 → 监视器名直达（data.tr → _MonitorView）
+        # G145：下划线守卫（同 _MonitorView，防 _f 前属性探测递归）
+        if name.startswith("_"):
+            raise AttributeError(name)
         try:
             return _MonitorView(self._f[name])
         except KeyError as e:

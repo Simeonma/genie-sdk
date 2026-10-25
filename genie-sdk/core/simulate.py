@@ -159,6 +159,7 @@ class Simulation:
         self._job_id: str | None = None
         self._arrays: dict | None = None   # npz 解包缓存（get_* 惰性共享）
         self._results: dict[tuple, Any] = {}   # (类型, 名) → Result 对象缓存
+        self._monitors_meta: dict = {}         # G95：manifest {名: meta}
         self._result_local_path: str | None = None
         # K4（R18，站长裁 A）：提交路径锁——并发 run() 的"双查 _job_id
         # 都是 None → 双提交"窗口是网络 I/O 级（GIL 会释放），后果 =
@@ -440,14 +441,35 @@ class Simulation:
         if self._arrays is None:
             import h5py
             import io
+            import json as _json
 
             with h5py.File(io.BytesIO(
                     self._result_bytes()), "r") as h5:
                 arrays: dict = {}
                 for mon_name, grp in h5.items():
                     dom = grp.attrs.get("domain", "")
+                    # G144（R19）：bytes 域标 decode（h5py 变长字符串在
+                    # 部分写入配置下回读为 bytes——此前拼出 b'f'@pt.Ex
+                    # 使全部监视器误报 not found；studio 侧早有 str 包裹）。
+                    if isinstance(dom, bytes):
+                        dom = dom.decode("utf-8", "replace")
                     for dsname in grp:
                         arrays[f"{dom}@{mon_name}.{dsname}"] = grp[dsname][()]
+                # G95（R19）：读根 attrs 的 manifest（driver 对每类监视器
+                # 都写 {"name","type","shape",…}）——形态标签的正源，
+                # 猜轴元素数对 index（逐格点云恒三轴）必错。
+                meta: dict = {}
+                try:
+                    raw_meta = h5.attrs.get("monitors", "")
+                    if isinstance(raw_meta, bytes):
+                        raw_meta = raw_meta.decode("utf-8", "replace")
+                    parsed = _json.loads(raw_meta) if raw_meta else []
+                    if isinstance(parsed, list):
+                        meta = {m.get("name"): m for m in parsed
+                                if isinstance(m, dict)}
+                except Exception:  # noqa: BLE001 —— manifest 坏不拦取数
+                    meta = {}
+                self._monitors_meta = meta
                 self._arrays = arrays
         return self._arrays
 
@@ -495,7 +517,10 @@ class Simulation:
         mname = getattr(entry, "name", None)
         key = (mtype, mname)
         if key not in self._results:
-            self._results[key] = cls.from_npz(arrays, mname)
+            # G95：manifest 的 shape 优先（正源）；缺失回退轴元素数猜测
+            self._results[key] = cls.from_npz(
+                arrays, mname,
+                shape_hint=(self._monitors_meta.get(mname) or {}).get("shape"))
         return self._results[key]
 
     def get_time(self, name: str | None = None):
