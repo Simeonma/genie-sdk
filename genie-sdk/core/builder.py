@@ -14,8 +14,9 @@ framework §四 终态结构：本模块 = ``core/builder.py``（阶段 ④ 自 
 from __future__ import annotations
 
 import math
+from typing import Any
 
-
+from pydantic import BaseModel
 
 from ..models import (
     BoxSpec,

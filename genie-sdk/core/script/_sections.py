@@ -43,6 +43,12 @@ _DEF = {
     "phase": _field_default(_w.SoftSourceSpec, "phase"),
     "amplitude": _field_default(_w.SoftSourceSpec, "amplitude"),
     "timeout_s": _field_default(_w.RunSpec, "timeout_s"),
+    # G132（R17，G99 残余出清）：以下四处此前是渲染器本地字面量。
+    "angle": _field_default(_w.PlaneWaveSpec, "theta"),   # theta/phi/psi 同默认
+    "mon_size": _field_default(_w.TimeMonSpec, "size"),    # (0,0,0) 点缺省
+    "stride": _field_default(_w.DownSampleSpec, "stride"),
+    # polarization 缺省 = 线格式归一形态（Field 默认 None 的正典化）
+    "pol_default": _w._norm_polarization(None),
 }
 
 
@@ -448,21 +454,21 @@ def _gen_source(list_, W: list, env: dict) -> list[str]:
                 parts.append(".center(" + ", ".join(c) + ")")
             sz = _slot_arr(s.get("size"), 3, "None", env, W, f"source[{i}].size")
             size = s.get("size") or []
-            # (0,0,0) = 模型默认（各槽 ≤0 单格）→ 省略（与监视器/cfl 同款
-            # 纪律；阶段 ④ to_config() 换 model_dump 后默认值显式在场，
-            # 此处省略保证渲染字节跨换心不变——实证 E3 唯一字节差即此）
-            if sz and not (len(size) == 3 and size[0] == 0 and size[1] == 0
-                           and size[2] == 0):
+            # 点缺省 (0,0,0) = 模型默认（各槽 ≤0 单格）→ 省略（判据 =
+            # _DEF["mon_size"]，G132；与监视器/cfl 同款纪律；阶段 ④
+            # to_config() 换 model_dump 后默认值显式在场，此处省略保证
+            # 渲染字节跨换心不变——实证 E3 唯一字节差即此）
+            if sz and list(size) != list(_DEF["mon_size"]):
                 parts.append(".size(" + ", ".join(sz) + ")")
             pol = _norm_pol(s.get("polarization") if s.get("polarization") is not None
-                            else [1, 0, 0])
+                            else _DEF["pol_default"])
             if s.get("polarization") is not None and pol is None:
                 # G130（R17）：畸形 polarization 此前静默回落缺省 x̂——
                 # 宽容可以，哑不行。
                 warn("polarization 畸形，已回落缺省 x̂ 线偏振")
             if pol:
                 has_imag = any(p[1] != 0 for p in pol)
-                is_default = _eq3([p[0] for p in pol], [1, 0, 0]) and not has_imag
+                is_default = pol == _DEF["pol_default"] and not has_imag
                 if not is_default:
                     parts.append(".polarization(" + (
                         ", ".join(f"complex({py_num(p[0])}, {py_num(p[1])})" for p in pol)
@@ -485,7 +491,7 @@ def _gen_source(list_, W: list, env: dict) -> list[str]:
                 parts.append(".center(" + ", ".join(c) + ")")   # 显式设置才出
             for ang in ("theta", "phi", "psi"):
                 a = _num(s.get(ang), env, W, f"source[{i}].{ang}")
-                if a is not None and s.get(ang) != 0:
+                if a is not None and s.get(ang) != _DEF["angle"]:
                     parts.append(f".{ang}({a})")
             sz = _slot_arr(s.get("size"), 3, "None", env, W, f"source[{i}].size")
             if sz:
@@ -531,7 +537,7 @@ def _gen_monitor(list_, W: list, env: dict) -> list[str]:
             first = "f.mon.add_time()" if m["type"] == "time" else "f.mon.add_freq()"
             sz = _slot_arr(m.get("size"), 3, "None", env, W, f"monitor[{i}].size")
             size = m.get("size") or []
-            if sz and not (len(size) == 3 and size[0] == 0 and size[1] == 0 and size[2] == 0):
+            if sz and list(size) != list(_DEF["mon_size"]):
                 parts.append(".size(" + ", ".join(sz) + ")")
             if field:
                 parts.append(".field(" + field + ")")
@@ -583,7 +589,7 @@ def _gen_monitor(list_, W: list, env: dict) -> list[str]:
             win = _num_arr(d.get("time_window"), 2, env, W, f"monitor[{i}].down_sample.time_window")
             st = _num(d.get("stride"), env, W, f"monitor[{i}].down_sample.stride")
             parts.append(".down_sample(" + (("(" + ", ".join(win) + ")") if win else "None")
-                         + ", " + (st if st is not None else "1") + ")")
+                         + ", " + (st if st is not None else str(_DEF["stride"])) + ")")
         out.extend(_chain(first, parts))
     return out
 
