@@ -35,9 +35,12 @@ def curve(group, mon: str, field: str):
     - 轴 = 组内按 AXIS_KEYS 优先级第一个命中；缺失回退行下标；
     - 复数取模（is_cplx 标记给 ylabel 用）；
     - **任意 ndim > 1 统一折叠**成单曲线：reshape(shape[0], -1) 取
-      峰值列（全局最大元所在列）——G143：3D 此前 plot 裸崩
-      （matplotlib 拒 3D y）、series 长度错配（x 行数/y 元素数）；
-    - NaN 劫持 argmax 的口径维持现状（G142 待站长裁决，尺内一处改）。
+      峰值列——G142 定案①（站长裁决 2026-10-27）：**忽略 NaN 选峰**
+      （nanargmax——修前 argmax 被 NaN 劫持，数据含 NaN 时"峰值列"
+      指向 NaN 列，两侧一致地错）；全 NaN 列时无峰可选，退列 0 并
+      标注（比画一条假峰值线诚实）；
+    - G143：3D 此前 plot 裸崩（matplotlib 拒 3D y）、series 长度
+      错配（x 行数/y 元素数）。
 
     两个外壳共用本尺：`SimData.plot`（matplotlib）与
     `studio.results_view.series`（降采样 + JSON）——两侧曲线必须
@@ -51,9 +54,14 @@ def curve(group, mon: str, field: str):
     tag = ""
     if ys.ndim > 1:
         m = ys.reshape(ys.shape[0], -1)
-        cell = int(np.argmax(m)) % m.shape[1]
+        try:
+            cell = int(np.nanargmax(m)) % m.shape[1]
+        except ValueError:              # 全 NaN——无峰可选，诚实标注
+            cell = 0
+            tag = " (all-NaN — no finite peak)"
+        else:
+            tag = f" (peak cell #{cell})"
         ys = m[:, cell]
-        tag = f" (peak cell #{cell})"
     return axis_key, xs, ys, tag, is_cplx
 
 

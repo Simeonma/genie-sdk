@@ -45,6 +45,11 @@ from __future__ import annotations
 
 import math
 import os
+import re
+
+# 监视器名白名单（G141）：ASCII [\w\-]{1,64}——名字是 h5 组名与结果
+# 键 t@<名>.<字段> 的地址段，点/空格会造成解析歧义。
+_MONITOR_NAME_RE = re.compile(r"[\w\-]{1,64}", re.ASCII)
 from typing import Annotated, Literal, Optional, Union
 
 from pydantic import (
@@ -787,7 +792,23 @@ class ApodizeSpec(_StrictModel):
 
 
 class _MonitorMixin(_StrictModel):
+    # G141 定案①（站长裁决 2026-10-27）：监视器名白名单 [\w\-]{1,64}
+    # （re.ASCII——与 owner/session_id/文件名同款）。名字会成为 h5 组名
+    # 与 t@<名>.<字段> 结果键的地址段——含点/空格会让键解析歧义
+    # （"a.b" 的场被监视器 "a" 的前缀吞噬，修前实测）。
     name: str = Field(min_length=1)
+
+    @field_validator("name", mode="after")
+    @classmethod
+    def _name_ok(cls, v):
+        if not _MONITOR_NAME_RE.fullmatch(v):
+            raise ValueError(
+                f"monitor name {v!r} is invalid: use letters/digits/"
+                "underscore/hyphen only, 1-64 chars (ASCII) — the name "
+                "becomes an h5 group and a t@<name>.<field> result key; "
+                "dots or spaces would make that address ambiguous")
+        return v
+
     center: Vec3 = (0.0, 0.0, 0.0)
     # time/freq 默认 [0,0,0] 点监视器（null 槽 = 全域 span——体积守卫会先拦住滥用）
     size: tuple[Optional[float], Optional[float], Optional[float]] = (0.0, 0.0, 0.0)
