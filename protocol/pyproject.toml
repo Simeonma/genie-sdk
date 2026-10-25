@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "genie-protocol"
-version = "2.0.0a1"
+version = "2.0.0a2"
 description = "GENIE wire-format protocol layer - SimConfig models, expression evaluator, resolver, estimator (single source shared by SDK client, gateway and compute kernel)"
 requires-python = ">=3.10"
 dependencies = [
@@ -12,6 +12,9 @@ dependencies = [
     "pydantic>=2,<3",
 ]
 license = "Apache-2.0"
+# 许可文本随包（2026-10-25）：a1 轮子只有 License-Expression、没有 LICENSE 文件，
+# 装到机器上等于只拿到一句 SPDX 标识。协议层是独立分发包，得有自己的那份文本。
+license-files = ["LICENSE"]
 
 # 协议层 = 独立分发身份（自己的 wheel/版本），源码住 SDK 仓 protocol/ 子目录
 # （挨着 JS 镜像保原子变更——详见 docs/ARCHITECTURE.md「协议层」节）。

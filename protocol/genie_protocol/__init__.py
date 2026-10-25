@@ -15,7 +15,7 @@
 """
 from __future__ import annotations
 
-__version__ = "2.0.0a1"   # 与 protocol/pyproject.toml 双处对齐（RELEASE 纪律）
+__version__ = "2.0.0a2"   # 与 protocol/pyproject.toml 双处对齐（RELEASE 纪律）
 
 __all__ = [
     # 基础类型别名
