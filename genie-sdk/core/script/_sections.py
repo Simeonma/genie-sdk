@@ -6,12 +6,44 @@ import re
 
 domain / mesh / materials / geometry / source / monitor / run /
 results——每函数对应一节（golden 语料按节覆盖），
-"等于默认则省略"判据的默认值正典 = models.LIBRARY_FIT_DEFAULTS 等。
+"等于默认则省略"判据的默认值正典 = 协议 pydantic Field（_DEF，G99）。
 """
 from ...models import BC_KINDS, FACES, LIBRARY_FIT_DEFAULTS
+from ...models import _wire as _w
 from ._emit import (_chain, _eq3, _norm_pol, _num, _num_arr, _num_or_list,
                     _pole_line, _slot_arr, _vertex_list)
 from ._numfmt import _js_string, py_num, py_str
+
+
+def _field_default(model, name):
+    """协议 Field 默认值（省略判据的唯一真源——G99 清账 2026-10-27）。
+
+    此前渲染器/构造器把默认值抄成字面量（0.9/12/128/…），协议默认一改，
+    渲染器按旧值判省略、配置被静默改写，golden 也按旧口径锁不住。现在
+    判据读 Field：协议默认一改，判据自动跟随；若字节因此变化，golden
+    当场红，逼着重生成+评审，不再静默。
+    """
+    return model.model_fields[name].default
+
+
+# 省略判据正典表（模块加载时从协议推导一次）。
+_DEF = {
+    "cfl": _field_default(_w.DomainSpec, "cfl"),
+    "layers": _field_default(_w.BoundarySpec, "layers"),
+    "kappa_max": _field_default(_w.BoundarySpec, "kappa_max"),
+    "order": _field_default(_w.BoundarySpec, "order"),
+    "max_refinement": _field_default(_w.MeshSpec, "max_refinement"),
+    "min_cells": _field_default(_w.MeshSpec, "min_cells"),
+    "growth_rate": _field_default(_w.RefineSpec, "growth_rate"),
+    "mu": _field_default(_w.ConstMatSpec, "mu"),
+    "eps_inf": _field_default(_w.LorentzMatSpec, "eps_inf"),
+    "mu_inf": _field_default(_w.LorentzMatSpec, "mu_inf"),
+    "priority": _field_default(_w.BoxSpec, "priority"),
+    "delay": _field_default(_w.SoftSourceSpec, "delay"),
+    "phase": _field_default(_w.SoftSourceSpec, "phase"),
+    "amplitude": _field_default(_w.SoftSourceSpec, "amplitude"),
+    "timeout_s": _field_default(_w.RunSpec, "timeout_s"),
+}
 
 
 def _var_name(prefix: str, name, used: set) -> str:
@@ -42,7 +74,8 @@ def _gen_domain(d: dict, W: list, env: dict) -> list[str]:
         W.append("domain.total_time 未设置/非法")
 
     cfl = _num(d.get("cfl"), env, W, "domain.cfl")
-    if d.get("cfl") is not None and cfl is not None and d.get("cfl") != 0.9:
+    if d.get("cfl") is not None and cfl is not None \
+            and d.get("cfl") != _DEF["cfl"]:
         out.append("f.domain.cfl = " + cfl)
 
     b = d.get("boundary") or {}
@@ -56,13 +89,13 @@ def _gen_domain(d: dict, W: list, env: dict) -> list[str]:
         kw = []
         if s["kind"] == "pml":
             ly = _num(s.get("layers"), env, W, f"domain.boundary.{face}.layers")
-            if ly is not None and s.get("layers") != 12:
+            if ly is not None and s.get("layers") != _DEF["layers"]:
                 kw.append("layers=" + ly)
             km = _num(s.get("kappa_max"), env, W, f"domain.boundary.{face}.kappa_max")
-            if km is not None and s.get("kappa_max") != 1:
+            if km is not None and s.get("kappa_max") != _DEF["kappa_max"]:
                 kw.append("kappa_max=" + km)
             od = _num(s.get("order"), env, W, f"domain.boundary.{face}.order")
-            if od is not None and s.get("order") != 3:
+            if od is not None and s.get("order") != _DEF["order"]:
                 kw.append("order=" + od)
         elif s["kind"] == "bloch":
             k = _num_arr(s.get("k"), 3, env, W, f"domain.boundary.{face}.k")
@@ -92,12 +125,12 @@ def _gen_mesh(m: dict, W: list, env: dict) -> list[str]:
         out.append("f.mesh.dy = " + dy)
     if dz:
         out.append("f.mesh.dz = " + dz)
-    # 2026-09 方言开放：显式设置且 ≠ 默认（128/10）才生成
+    # 2026-09 方言开放：显式设置且 ≠ 默认才生成
     mr = _num(m.get("max_refinement"), env, W, "mesh.max_refinement")
-    if mr is not None and m.get("max_refinement") != 128:
+    if mr is not None and m.get("max_refinement") != _DEF["max_refinement"]:
         out.append("f.mesh.max_refinement = " + mr)
     mc = _num(m.get("min_cells"), env, W, "mesh.min_cells")
-    if mc is not None and m.get("min_cells") != 10:
+    if mc is not None and m.get("min_cells") != _DEF["min_cells"]:
         out.append("f.mesh.min_cells = " + mc)
     for r in (m.get("refine") or []):
         xr = _num_arr(r.get("x_range"), 2, env, W, "mesh.refine.x_range")
@@ -118,7 +151,7 @@ def _gen_mesh(m: dict, W: list, env: dict) -> list[str]:
             continue
         kw = ["factor=" + f]
         gr = _num(r.get("growth_rate"), env, W, "mesh.refine.growth_rate")
-        if gr is not None and r.get("growth_rate") != 1.2:
+        if gr is not None and r.get("growth_rate") != _DEF["growth_rate"]:
             kw.append("growth_rate=" + gr)
         out.append(f"f.mesh.refine(({', '.join(xr)}), ({', '.join(yr)}), "
                    f"({', '.join(zr)}), {', '.join(kw)})")
@@ -141,7 +174,7 @@ def _gen_materials(list_, W: list, env: dict) -> list[str]:
             if eps_s is not None:
                 parts.append(".eps(" + eps_s + ")")
             mu_s = _num_or_list(mt.get("mu"), env, W, f"materials[{i}].mu")
-            if mu_s is not None and mt.get("mu") != 1:
+            if mu_s is not None and mt.get("mu") != _DEF["mu"]:
                 parts.append(".mu(" + mu_s + ")")
             out.extend(_chain("f.mat.add_const()", parts))
         elif mt.get("type") == "lorentz":
@@ -151,10 +184,10 @@ def _gen_materials(list_, W: list, env: dict) -> list[str]:
             else:
                 W.append(tag(i) + "缺 name")
             ei = _num_or_list(mt.get("eps_inf"), env, W, f"materials[{i}].eps_inf")
-            if ei is not None and mt.get("eps_inf") != 1:
+            if ei is not None and mt.get("eps_inf") != _DEF["eps_inf"]:
                 parts.append(".eps_inf(" + ei + ")")
             mi = _num_or_list(mt.get("mu_inf"), env, W, f"materials[{i}].mu_inf")
-            if mi is not None and mt.get("mu_inf") != 1:
+            if mi is not None and mt.get("mu_inf") != _DEF["mu_inf"]:
                 parts.append(".mu_inf(" + mi + ")")
             for p in (mt.get("poles") or []):
                 line = _pole_line(p, "eps", env, W, f"materials[{i}].poles")
@@ -351,7 +384,7 @@ def _gen_geometry(list_, W: list, env: dict) -> list[str]:
                 + _js_string(g.get("type"))
                 + "（合法: box/sphere/cylinder/ngon_z/polygon_z/"
                 "ellipse_z/ring_z/polygon_swept）")
-        if prio is not None and g.get("priority") != 0:
+        if prio is not None and g.get("priority") != _DEF["priority"]:
             parts.append(".priority(" + prio + ")")
         out.extend(_chain(first, parts))
     return out
@@ -377,10 +410,10 @@ def _gen_source(list_, W: list, env: dict) -> list[str]:
         else:
             warn("bandwidth 非法")
         dl = _num(s.get("delay"), env, W, f"source[{i}].delay")
-        if dl is not None and s.get("delay") != 0:
+        if dl is not None and s.get("delay") != _DEF["delay"]:
             parts.append(".delay(" + dl + ")")
         ph = _num(s.get("phase"), env, W, f"source[{i}].phase")
-        if ph is not None and s.get("phase") != 0:
+        if ph is not None and s.get("phase") != _DEF["phase"]:
             parts.append(".phase(" + ph + ")")
         if py_str(s.get("name")):
             parts.append(".name(" + py_str(s.get("name")) + ")")
@@ -408,7 +441,7 @@ def _gen_source(list_, W: list, env: dict) -> list[str]:
                         if has_imag else
                         ", ".join(py_num(p[0]) for p in pol)) + ")")
             am = _num(s.get("amplitude"), env, W, f"source[{i}].amplitude")
-            if am is not None and s.get("amplitude") != 1:
+            if am is not None and s.get("amplitude") != _DEF["amplitude"]:
                 parts.append(".amplitude(" + am + ")")
             if s.get("kind") == "magnetic":
                 parts.append(".kind('magnetic')")
@@ -417,7 +450,7 @@ def _gen_source(list_, W: list, env: dict) -> list[str]:
             if s.get("direction") == "-":
                 parts.append(".direction('-')")
             am = _num(s.get("amplitude"), env, W, f"source[{i}].amplitude")
-            if am is not None and s.get("amplitude") != 1:
+            if am is not None and s.get("amplitude") != _DEF["amplitude"]:
                 parts.append(".amplitude(" + am + ")")
             c = _num_arr(s.get("center"), 3, env, W, f"source[{i}].center")
             if c:
@@ -520,7 +553,7 @@ def _gen_run(cfg: dict, W: list, env: dict) -> str | None:
     if g is not None and py_num(g) is not None:
         kw.append("gpu=" + py_num(g))
     to = _num(r.get("timeout_s"), env, W, "run.timeout_s")
-    if to is not None and r.get("timeout_s") != 3600:
+    if to is not None and r.get("timeout_s") != _DEF["timeout_s"]:
         kw.append("timeout_s=" + to)
     return "f.run(" + (", ".join(kw)) + ")"
 

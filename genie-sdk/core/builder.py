@@ -41,7 +41,7 @@ from ..models import (
 
 # 线格式常量正典 = models._wire（G2 归一：此前本地手抄两份已漂移面）
 from ..models import (BC_KINDS as BOUNDARY_KINDS, FACES,
-                      LIBRARY_FIT_DEFAULTS)
+                      LIBRARY_FIT_DEFAULTS, RefineSpec)
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +223,10 @@ class Mesh:
         self._d = store
 
     def refine(self, x_range, y_range, z_range, factor=None,
-               growth_rate: float = 1.2) -> "Mesh":
+               growth_rate: float = RefineSpec.model_fields["growth_rate"]
+               .default) -> "Mesh":
+        # growth_rate 省略判据 = 协议 Field 默认（G99：此前字面量 1.2
+        # 双写于渲染器与这里，协议一改即静默漂移）。
         if factor is None:
             raise ValueError(
                 "refine requires factor (an int >= 2, [fx, fy, fz] with "
@@ -240,7 +243,7 @@ class Mesh:
             "z_range": [_num(z_range[0]), _num(z_range[1])],
             "factor": fac,
         }
-        if growth_rate != 1.2:
+        if growth_rate != RefineSpec.model_fields["growth_rate"].default:
             item["growth_rate"] = _num(growth_rate)
         lst = getattr(self._d, "refine", None)
         if not isinstance(lst, list):
