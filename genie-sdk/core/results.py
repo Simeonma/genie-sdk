@@ -25,6 +25,37 @@ import numpy as np
 
 _AXES = ("x", "y", "z")
 
+# 曲线轴优先级（G96 取数尺的一部分；studio.results_view 共用本常量）
+AXIS_KEYS = ("freqs", "time", "x", "y", "z")
+
+
+def curve(group, mon: str, field: str):
+    """取数尺（G96/R19 唯一一份）：h5 组 → (axis_key, xs, ys, tag, is_cplx)。
+
+    - 轴 = 组内按 AXIS_KEYS 优先级第一个命中；缺失回退行下标；
+    - 复数取模（is_cplx 标记给 ylabel 用）；
+    - **任意 ndim > 1 统一折叠**成单曲线：reshape(shape[0], -1) 取
+      峰值列（全局最大元所在列）——G143：3D 此前 plot 裸崩
+      （matplotlib 拒 3D y）、series 长度错配（x 行数/y 元素数）；
+    - NaN 劫持 argmax 的口径维持现状（G142 待站长裁决，尺内一处改）。
+
+    两个外壳共用本尺：`SimData.plot`（matplotlib）与
+    `studio.results_view.series`（降采样 + JSON）——两侧曲线必须
+    逐点一致（test_results_equivalence 锁）。"""
+    arr = group[field][()]
+    is_cplx = np.iscomplexobj(arr)
+    ys = np.abs(arr) if is_cplx else arr
+    axis_key = next((k for k in AXIS_KEYS if k in group), None)
+    xs = (group[axis_key][()] if axis_key is not None
+          else np.arange(ys.shape[0]))
+    tag = ""
+    if ys.ndim > 1:
+        m = ys.reshape(ys.shape[0], -1)
+        cell = int(np.argmax(m)) % m.shape[1]
+        ys = m[:, cell]
+        tag = f" (peak cell #{cell})"
+    return axis_key, xs, ys, tag, is_cplx
+
 
 def _extract(arrays: dict, prefix: str, name: str,
              axis_names: tuple[str, ...]) -> tuple[dict, dict]:
@@ -273,29 +304,30 @@ class SimData:
                 f"attrs={self.attrs})")
 
     def plot(self, mon: str, field: str, ax=None):
-        """画监视器某场。体监视器（axis × cells 二维）缺省画**峰值格点**
-        的曲线（峰值格点号入图例，ASCII 标签避免字体缺字形）；matplotlib 为可选依赖
+        """画监视器某场。体监视器（任意维）缺省画**峰值格点**的曲线
+        （峰值格点号入图例，ASCII 标签避免字体缺字形）；matplotlib 为可选依赖
         （pip install genie-sdk[plot]）。返回 Axes。"""
-        import matplotlib.pyplot as plt  # 可选依赖，import 才触发
-
-        ds = self._f[mon][field]
-        arr = ds[()]
-        ys = np.abs(arr) if np.iscomplexobj(arr) else arr
-        axis_key = next((k for k in ("freqs", "time", "x", "y", "z")
-                         if k in self._f[mon]), None)
-        xs = (self._f[mon][axis_key][()] if axis_key is not None
-              else list(range(len(ys))))
-        tag = ""
-        if ys.ndim == 2:                        # 体监视器：取峰值格点
-            idx = int(np.argmax(ys))
-            cell = idx % ys.shape[1]
-            ys = ys[:, cell]
-            tag = f" (peak cell #{cell})"
+        try:
+            import matplotlib.pyplot as plt  # 可选依赖，import 才触发
+        except ImportError as e:
+            # G146（R19）：报错带安装指路（docstring 承诺的 extras 名）。
+            raise ImportError(
+                "plot() needs matplotlib (optional dependency) — "
+                "pip install 'genie-sdk[plot]'") from e
+        # G146：缺监视器/缺场给可定位的 KeyError（对照 series 侧）
+        if mon not in self._f:
+            raise KeyError(f"monitor {mon!r} not found in result "
+                           f"(monitors: {self.monitors})")
+        if field not in self._f[mon]:
+            raise KeyError(f"field {field!r} not found in monitor {mon!r} "
+                           f"(datasets: {list(self._f[mon].keys())})")
+        # G96：曲线本体走取数尺（任意维折叠 + 峰值列，G143 根治 3D 崩）
+        axis_key, xs, ys, tag, is_cplx = curve(self._f[mon], mon, field)
         created = ax is None
         ax = ax or plt.gca()
         ax.plot(xs, ys, label=f"{mon}.{field}{tag}")
         ax.set_xlabel(axis_key or "idx")
-        ax.set_ylabel(("|" + field + "|") if np.iscomplexobj(arr) else field)
+        ax.set_ylabel(("|" + field + "|") if is_cplx else field)
         if created:
             ax.legend()
         return ax

@@ -18,7 +18,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-AXIS_KEYS = ("freqs", "time", "x", "y", "z")
+from genie.core.results import AXIS_KEYS, curve
 
 
 def results_dir(owner_dir: Path, session_id: str | None = None) -> Path:
@@ -80,21 +80,16 @@ def meta(h5path: Path) -> dict:
 
 def series(h5path: Path, mon: str, field: str,
            maxpoints: int = 1200) -> dict:
-    """降采样曲线：|复数| 取模；体监视器（2D）取峰值格点列。
-    x 轴 = 第一个出现的轴（freqs/time/x/y/z），缺失时用下标。"""
+    """降采样曲线：|复数| 取模；体监视器（任意维）折叠成峰值格点列。
+    x 轴 = 第一个出现的轴（freqs/time/x/y/z），缺失时用下标。
+
+    曲线本体 = core.results.curve（G96/R19 取数尺单一来源——此前
+    轴优先级/取模/峰值列在本文件与 SimData.plot 各写一份，无相等锁；
+    两侧一致性由 test_results_equivalence 锁死）。"""
     with h5py.File(h5path, "r") as f:
         if mon not in f or field not in f[mon]:
             raise KeyError(f"监视器/场不存在: {mon}/{field}")
-        arr = f[mon][field][()]
-        axis_key = next((k for k in AXIS_KEYS if k in f[mon]), None)
-        xs = (f[mon][axis_key][()] if axis_key is not None
-              else np.arange(arr.shape[0]))
-    ys = np.abs(arr) if np.iscomplexobj(arr) else arr
-    if ys.ndim == 2:                      # 体监视器：峰值格点曲线
-        flat = ys.reshape(ys.shape[0], -1)
-        ys = flat[:, int(flat.max(axis=0).argmax())]
-    if ys.ndim > 1:
-        ys = ys.reshape(-1)
+        axis_key, xs, ys, _tag, _cplx = curve(f[mon], mon, field)
     n = int(min(maxpoints, len(ys))) if maxpoints > 0 else len(ys)
     stride = max(1, math.ceil(len(ys) / max(1, n)))
     xs = (xs if xs is not None else np.arange(len(ys)))[::stride]
