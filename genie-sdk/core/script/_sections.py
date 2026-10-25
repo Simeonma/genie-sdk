@@ -181,6 +181,10 @@ def _gen_materials(list_, W: list, env: dict) -> list[str]:
             eps_s = _num_or_list(mt.get("eps"), env, W, f"materials[{i}].eps")
             if eps_s is not None:
                 parts.append(".eps(" + eps_s + ")")
+            else:
+                # G130（R17）：eps 是必填槽——缺 name 有 W，必填槽反而
+                # 哑；保留骨架渲染（preview 半成品语义）但必须出声。
+                W.append(tag(i) + "缺 eps（必填槽——表单补齐后自动消失）")
             mu_s = _num_or_list(mt.get("mu"), env, W, f"materials[{i}].mu")
             if mu_s is not None and mt.get("mu") != _DEF["mu"]:
                 parts.append(".mu(" + mu_s + ")")
@@ -452,6 +456,10 @@ def _gen_source(list_, W: list, env: dict) -> list[str]:
                 parts.append(".size(" + ", ".join(sz) + ")")
             pol = _norm_pol(s.get("polarization") if s.get("polarization") is not None
                             else [1, 0, 0])
+            if s.get("polarization") is not None and pol is None:
+                # G130（R17）：畸形 polarization 此前静默回落缺省 x̂——
+                # 宽容可以，哑不行。
+                warn("polarization 畸形，已回落缺省 x̂ 线偏振")
             if pol:
                 has_imag = any(p[1] != 0 for p in pol)
                 is_default = _eq3([p[0] for p in pol], [1, 0, 0]) and not has_imag
@@ -542,7 +550,18 @@ def _gen_monitor(list_, W: list, env: dict) -> list[str]:
                 if isinstance(a, dict):
                     win = _num_arr(a.get("time_window"), 2, env, W, f"monitor[{i}].apodize.time_window")
                     w = _num(a.get("width"), env, W, f"monitor[{i}].apodize.width")
-                    parts.append(".apodize(" + (py_str(a.get("side")) or "None") + ", "
+                    # G131（R17 裁修）：side 是 Literal[start/stop/both]——
+                    # 非法 str 原样渲会到运行期才炸、非 str 静默 None；
+                    # 白名单与几何 type 白名单同族，非法即 W + 按 None 渲。
+                    side_v = a.get("side")
+                    if side_v is None or side_v in ("start", "stop", "both"):
+                        side_s = py_str(side_v) if side_v else "None"
+                    else:
+                        W.append(f"monitor[{i}].apodize.side 非法（"
+                                 + _js_string(str(side_v))
+                                 + "，合法 start/stop/both），已按 None 渲染")
+                        side_s = "None"
+                    parts.append(".apodize(" + side_s + ", "
                                  + (("(" + ", ".join(win) + ")") if win else "None") + ", "
                                  + (w if w is not None else "None") + ")")
         elif m.get("type") == "index":
@@ -576,6 +595,10 @@ def _gen_run(cfg: dict, W: list, env: dict) -> str | None:
     g = r.get("gpu")
     if g is not None and py_num(g) is not None:
         kw.append("gpu=" + py_num(g))
+    elif g is not None:
+        # G130（R17）：gpu 为字符串/bool 时此前静默跳过——补 W。
+        W.append("run.gpu 非数值（" + _js_string(type(g).__name__)
+                 + "），已跳过")
     to = _num(r.get("timeout_s"), env, W, "run.timeout_s")
     if to is not None and r.get("timeout_s") != _DEF["timeout_s"]:
         kw.append("timeout_s=" + to)
