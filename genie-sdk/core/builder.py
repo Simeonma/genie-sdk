@@ -215,18 +215,27 @@ class Domain(_SealedProps):
             raise ValueError(
                 f"unknown boundary kind {kind!r} "
                 f"(expected one of: {BOUNDARY_KINDS})")
+        # boundary_condition 的 kwargs 未知即拒（G129/R17：此前拼错名
+        # 如 layer=8 被静默丢弃——链式方法有 extra=forbid 守卫，kwargs
+        # 这条道没有；与模块头"未知即 ValueError"口径对齐）。
         d: dict[str, Any] = {"kind": kind}
         if kind == "pml":
             for k in ("layers", "kappa_max", "order"):
                 if kw.get(k) is not None:
-                    d[k] = _scalar(kw[k])
+                    d[k] = _scalar(kw.pop(k))
         elif kind == "bloch":
             if kw.get("k") is not None:
-                d["k"] = [_num(x) for x in kw["k"]]
-            if kw.get("from_source"):
+                d["k"] = [_num(x) for x in kw.pop("k")]
+            if kw.pop("from_source", False):
                 d["from_source"] = True
             if kw.get("n_background") is not None:
-                d["n_background"] = _num(kw["n_background"])
+                d["n_background"] = _num(kw.pop("n_background"))
+        if kw:
+            raise TypeError(
+                f"boundary_condition: unknown kwargs {sorted(kw)} for "
+                f"kind={kind!r} (accepted: layers/kappa_max/order for pml; "
+                "k/from_source/n_background for bloch; none for "
+                "pec/pmc/periodic)")
         # boundary 字段类型 dict[str, BoundarySpec]——条目存裸 dict（构造期
         # 不校验），提交边界统一过模型
         b = getattr(self._d, "boundary", None)
@@ -258,12 +267,16 @@ class Mesh(_SealedProps):
             raise ValueError(
                 "refine requires factor (an int >= 2, [fx, fy, fz] with "
                 "each >= 2, or an expression string)")
+        # G129（R17）：factor 是整数槽——走 _int_slot（str 表达式原样
+        # 上行、float/bool 拒收），不再裸 int() 静默截断（2.9→2、
+        # True→1 与 _int_slot 自宣纪律矛盾）。
         if isinstance(factor, str):
             fac: Any = factor          # 表达式串原样上行（服务端求值）
         elif isinstance(factor, (list, tuple)):
-            fac = [f if isinstance(f, str) else int(f) for f in factor]
+            fac = [f if isinstance(f, str) else _int_slot(f, "refine.factor")
+                   for f in factor]
         else:
-            fac = int(factor)
+            fac = _int_slot(factor, "refine.factor")
         item: dict[str, Any] = {
             "x_range": [_num(x_range[0]), _num(x_range[1])],
             "y_range": [_num(y_range[0]), _num(y_range[1])],
@@ -357,6 +370,10 @@ class _Chain:
                     setattr(item, lst_key, lst)
                 lst.append(pole)
             elif name == "down_sample":
+                if len(args) > 2:      # G129：超参不静默丢
+                    raise TypeError(
+                        "down_sample(time_window, stride) takes at most 2 "
+                        f"arguments, got {len(args)}")
                 win, stride = (args + (None, 1))[:2] if len(args) < 2 else args[:2]
                 d: dict[str, Any] = {}
                 if win is not None:
@@ -364,6 +381,10 @@ class _Chain:
                 d["stride"] = _int_slot(stride, "down_sample.stride")
                 setattr(item, "down_sample", d)
             elif name == "apodize":
+                if len(args) > 3:      # G129：超参不静默丢
+                    raise TypeError(
+                        "apodize(side, time_window, width) takes at most 3 "
+                        f"arguments, got {len(args)}")
                 side = args[0] if args else None
                 win = args[1] if len(args) > 1 else None
                 width = args[2] if len(args) > 2 else None
