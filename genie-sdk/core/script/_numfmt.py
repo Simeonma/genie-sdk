@@ -85,22 +85,6 @@ def py_str(s: Any) -> str | None:
     return "'" + re.sub(r"[\r\n\t]", " ",
                         s.replace("\\", "\\\\").replace("'", "\\'")) + "'"
 
-def _number_to_string(v: Any) -> str:
-    """JS String(v)/Number::toString 镜像（错误消息里的数值展示）。"""
-    if isinstance(v, bool):
-        return "true" if v else "false"
-    if isinstance(v, int):
-        v = float(v)
-    if isinstance(v, float):
-        if v != v:
-            return "NaN"
-        if v == float("inf"):
-            return "Infinity"
-        if v == float("-inf"):
-            return "-Infinity"
-        return _finite_number_to_string(v)
-    return str(v)
-
 def _finite_number_to_string(v: float) -> str:
     """ECMA Number::toString 的有限值镜像（最短往返 + 十进制/指数切换）。"""
     neg = v < 0

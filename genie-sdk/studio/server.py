@@ -13,11 +13,10 @@
    经 ``session.gateway()`` 转发（会话侧有路径白名单 + 唯一一次"上游不可达"
    翻译）。Studio 不再持有后端地址、不再自己发请求（O2）。
 3. **代理面是可选的**：``mount_session=True`` 才挂"会话门面 + 网关门面"
-   （本地 Studio）；云宿主自带 cookie 会话，保持 ``False``（与旧
-   ``submit=False`` 完全同形，升级零破坏）。
+   （本地 ``genie studio`` 与 Pyodide 网页端 ``studio/web.py`` 共用）；
+   ``False`` = 纯静态壳。
 
-framework §四「Pyodide 删掉」不变：preview 在本地 Python 端点执行——
-本端点调 ``genie.preview_script``（云宿主注入沙箱执行器）。
+preview 在本地 Python 端点执行——本端点直接调 ``genie.preview_script``。
 """
 from __future__ import annotations
 
@@ -44,6 +43,7 @@ from .session_client import (SessionClient, register_result_routes,
                                          register_session_routes)
 
 _STUDIO = Path(__file__).resolve().parent / "static"
+_TITLE = "genie-studio"
 # 内容面（随包分发，不是 GUI 实现）：手册站点与示例脚本住在包根，
 # 见 ARCHITECTURE §1「包结构」。static_dir 参数只覆盖 GUI 壳，不覆盖它们。
 _PKG = Path(__file__).resolve().parents[1]
@@ -63,7 +63,7 @@ class DraftRing:
     """环形脚本文本环（/api/drafts ↔ /__drafts 的服务端存储）。
 
     通道里只有脚本文本——模型由会话执行脚本派生（脚本是本体，cfg 不是
-    同伴负载）。宿主模式按会话各持一环。
+    同伴负载）。本地单环（进程级 ``_DEFAULT_RING``）。
     """
 
     def __init__(self, keep: int = 50):
@@ -84,21 +84,18 @@ class DraftRing:
 _DEFAULT_RING = DraftRing()
 
 
-def create_app(*, preview_fn=None, static_dir: str | Path | None = None,
-               get_ring=None, owner_fn=None, title: str = "genie-studio",
+def create_app(*, static_dir: str | Path | None = None,
+               owner_fn=None,
                session: SessionClient | None = None,
                mount_session: bool = False,
                share_session: bool = False,
-               key_fn=None,
                on_attach=None,
-               health_upstream: str | None = None,
-               require_auth: bool = False,
-               routes_hook=None) -> FastAPI:
-    """Studio app 工厂——本地与云宿主共用（framework §五 对称原则）。
+               require_auth: bool = False) -> FastAPI:
+    """Studio app 工厂。
 
     ``mount_session=True``：挂会话门面（/api/exec*、/api/session/*、
-    /api/result/*）与网关门面（/api/auth/*、/api/tools/*、/api/jobs/*）。
-    本地 ``genie studio`` 用它；云宿主自带 cookie 会话，保持 False。
+    /api/result/*）与网关门面（/api/auth/*、/api/jobs/*）——本地
+    ``genie studio`` 与 Pyodide 网页端（``studio/web.py``）共用本工厂。
 
     ``session``：会话客户端（地址 + 端口口令）。缺省 ``SessionClient()``
     （读 env，跨进程形态用）；本地入口显式注入——地址不进产品语义。
@@ -106,16 +103,15 @@ def create_app(*, preview_fn=None, static_dir: str | Path | None = None,
     ``require_auth=True``（站长裁决 2026-10-21）＝**未登录什么都不给做**：
     preview / validate / drafts / scripts / workspace / sim / exec 这些本地
     能力一律要求 `X-API-Key`（GUI 登录 token）。env ``GENIE_STUDIO_OPEN=1``
-    可显式退回"本机免登录"形态（调试/纯本地离线场景），云宿主不走这条。
+    可显式退回"本机免登录"形态（调试/纯本地离线场景）。
     """
-    preview = preview_fn or genie.preview_script
+    preview = genie.preview_script
     static = Path(static_dir) if static_dir else _STUDIO
-    ring_of = get_ring or (lambda request: _DEFAULT_RING)
     # B1 按人隔离：req → owner。缺省 = 本地形态固定 owner（M1 遗留：本地
     # 单用户，owner 不跟随登录账号；见 LEDGER）。
     from .session_client import resolve_owner
     owner_of = owner_fn or (lambda request: resolve_owner())
-    key_of = key_fn or (lambda request: req_key(request))
+    key_of = req_key
     if session is not None:
         sess = session
     elif mount_session:
@@ -125,7 +121,7 @@ def create_app(*, preview_fn=None, static_dir: str | Path | None = None,
     else:
         sess = None
 
-    app = FastAPI(title=title, version=genie.__version__)
+    app = FastAPI(title=_TITLE, version=genie.__version__)
 
     @app.middleware("http")
     async def no_stale_static(request: Request, call_next):
@@ -156,18 +152,18 @@ def create_app(*, preview_fn=None, static_dir: str | Path | None = None,
     @app.get("/api/health")
     def health() -> dict:
         """服务自述：上游地址**问会话**（Studio 不再持有后端配置）。"""
-        out: dict = {"ok": True, "service": title,
+        out: dict = {"ok": True, "service": _TITLE,
                      "sdk_version": genie.__version__,
                      "auth_required": bool(require_auth),
-                     "upstream": health_upstream,
+                     "upstream": None,
                      "session": False}
-        if sess is None:          # 纯静态/宿主角色的 app：没有会话门可报
+        if sess is None:          # 纯静态角色的 app：没有会话门可报
             out["session"] = None
             return out
         try:
             h = sess.health()
             out["session"] = bool(h.get("ok"))
-            out["upstream"] = health_upstream or h.get("upstream")
+            out["upstream"] = h.get("upstream")
         except Exception:  # noqa: BLE001 — 会话没起也要能自述（GUI 靠它判断闸）
             pass
         return out
@@ -181,12 +177,12 @@ def create_app(*, preview_fn=None, static_dir: str | Path | None = None,
             raise HTTPException(status_code=422, detail="cfg 须 dict")
 
         # 判定本体 = genie.models.resolve.validate_for_ui（全仓唯一实现；
-        # 本地 Studio / 云宿主 / 公共服务网关 / agent 工具共用）。
+        # 本地 Studio / 公共服务网关 / agent 工具共用）。
         from genie.models.resolve import validate_for_ui
         errors = await run_in_threadpool(validate_for_ui, cfg)
         return {"ok": not errors, "errors": errors}
 
-    # ══ SDK → Studio 实时通道（ring 可注入：本地共享 / 宿主按会话）═══
+    # ══ SDK → Studio 实时通道（进程级单环 _DEFAULT_RING）════════════
     @app.post("/api/drafts")
     async def push_draft(req: Request) -> dict:
         body = await req.json()
@@ -196,14 +192,14 @@ def create_app(*, preview_fn=None, static_dir: str | Path | None = None,
             raise HTTPException(status_code=422, detail="script 必须是非空文本")
         if len(script.encode("utf-8")) > _MAX_SCRIPT:
             raise HTTPException(status_code=413, detail="script 超 256KiB 上限")
-        item = ring_of(req).push(label, script)
+        item = _DEFAULT_RING.push(label, script)
         return {"ok": True, "seq": item["seq"]}
 
     @app.get("/__drafts")
     def pull_drafts(req: Request, since: int = 0) -> list[dict]:
-        return ring_of(req).since(since)
+        return _DEFAULT_RING.since(since)
 
-    # ══ 会话门面 + 网关门面（本地形态；宿主自带）══════════════════════
+    # ══ 会话门面 + 网关门面（mount_session=True 时挂）═══════════════
     if mount_session:
         register_session_routes(app, owner_of=owner_of,
                                 exec_credentials_of=key_of,
@@ -315,8 +311,8 @@ def create_app(*, preview_fn=None, static_dir: str | Path | None = None,
         app.mount("/session", _session_service.app)
 
     # ── 脚本工作区 ────────────────────────────────────────────────
-    # 脚本落在 workspace_root()/<owner>/；认证交宿主 session_guard / 本地
-    # 信任面；owner 用作目录名，白名单 = session_client.check_owner。
+    # 脚本落在 workspace_root()/<owner>/；认证交本地信任面；owner 用作
+    # 目录名，白名单 = session_client.check_owner。
     import re as _re
 
     from genie.studio.session_client import check_owner
@@ -565,13 +561,6 @@ def create_app(*, preview_fn=None, static_dir: str | Path | None = None,
             return {"ok": True, "cfg": cfg, "restored": restored}
         finally:
             os.unlink(tmp.name)
-
-    # ── 宿主路由注入点（A1，2026-10-08；泛化 2026-10-09）─────────────
-    # routes_hook(app)：宿主在静态兜底 `/{fname:path}`（工厂尾部）注册
-    # 之前挂自己的 GET 路由——路由表顺序=匹配顺序，宿主事后 app.get()
-    # 注册的路由永远轮不到（实测 404）。
-    if routes_hook is not None:
-        routes_hook(app)
 
     # ── 静态资产版本号（防缓存根治）：static 目录最大 mtime 作版本，
     # "/" 返回的 index.html 里所有 js/css 引用追加 ?v=——文件一改版本

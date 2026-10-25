@@ -18,7 +18,7 @@
 M2/O1+O2（2026-10-22）后的三条界：
   1. **会话地址 = 部署细节**：本模块不再从环境变量猜地址；进程主入口把
      ``SessionClient(url)`` 显式注入 Studio 工厂（``create_app(session=…)``）。
-     环境变量只在"独立会话服务 + 云宿主"这种跨进程形态里作为缺省值。
+     环境变量只在独立会话服务这种跨进程形态（console、外部工具）里作为缺省值。
   2. **三生命周期正交**：owner（隔离到哪个目录）/ token（能不能提交）/
      session_id（哪一份模型）互不决定对方。换 token 只走 ``attach``，
      **不换模型**；换 session_id = 新会话 = 新模型（由前端用户在登录时生成）。
@@ -263,31 +263,25 @@ class SessionClient:
 
 
 # ---------------------------------------------------------------------------
-# 路由注册（工厂与宿主共用一份实现）
+# 路由注册（Studio 工厂用；GET 路由须在静态兜底之前注册——A1 教训）
 # ---------------------------------------------------------------------------
 
 
 def _key_of(exec_credentials_of, req: Request) -> str:
-    """凭据取用：函数可返回 key，或旧的 (url, key) 二元组（兼容云宿主）。"""
+    """凭据取用：函数返回 key（X-API-Key 头的产物，见 server.req_key）。"""
     if exec_credentials_of is None:
         return ""
-    out = exec_credentials_of(req)
-    if isinstance(out, (tuple, list)):
-        return str(out[-1] or "")
-    return str(out or "")
+    return str(exec_credentials_of(req) or "")
 
 
-def _sid_of(session_id_of, req: Request) -> str:
-    """session_id 取用：默认读 X-Session-Id 头（缺省 = 旧行为单会话）。"""
-    if session_id_of is not None:
-        return check_session_id(session_id_of(req) or DEFAULT_SESSION)
+def _sid_of(req: Request) -> str:
+    """session_id 取用：读 X-Session-Id 头（缺省 = 单会话）。"""
     return check_session_id(req.headers.get("X-Session-Id")
                             or DEFAULT_SESSION)
 
 
 def register_session_routes(
         app: FastAPI, *, owner_of, exec_credentials_of=None,
-        form_credentials_of=None, session_id_of=None,
         client: SessionClient | None = None, on_attach=None) -> None:
     """注册 /api/exec 四端点 + /api/session/attach（会话转发）。
 
@@ -320,7 +314,7 @@ def register_session_routes(
         key = _key_of(exec_credentials_of, req)
         out = await run_in_threadpool(
             cli.exec, code, owner=owner_of(req),
-            session_id=_sid_of(session_id_of, req),
+            session_id=_sid_of(req),
             mode=mode, label=label, key=key)
         return {"id": out["id"]}
 
@@ -336,7 +330,7 @@ def register_session_routes(
         key = _key_of(exec_credentials_of, req)
         out = await run_in_threadpool(
             cli.run, owner=owner_of(req),
-            session_id=_sid_of(session_id_of, req),
+            session_id=_sid_of(req),
             gpu=body.get("gpu"), timeout_s=body.get("timeout_s"), key=key)
         return {"id": out["id"]}
 
@@ -355,7 +349,7 @@ def register_session_routes(
         key = _key_of(exec_credentials_of, req)
         out = await run_in_threadpool(
             cli.patch, ops, owner=owner_of(req),
-            session_id=_sid_of(session_id_of, req), key=key)
+            session_id=_sid_of(req), key=key)
         return {"id": out["id"]}
 
     @app.post("/api/model/replace")
@@ -368,7 +362,7 @@ def register_session_routes(
         key = _key_of(exec_credentials_of, req)
         out = await run_in_threadpool(
             cli.replace, model, owner=owner_of(req),
-            session_id=_sid_of(session_id_of, req), key=key)
+            session_id=_sid_of(req), key=key)
         return {"id": out["id"]}
 
     async def _attach(req: Request) -> dict:
@@ -379,7 +373,7 @@ def register_session_routes(
         未登录（取不到 key）时不建模型——没凭据的会话没有意义。
         """
         key = _key_of(exec_credentials_of, req)
-        sid = _sid_of(session_id_of, req)
+        sid = _sid_of(req)
         out = await run_in_threadpool(cli.attach, owner=owner_of(req),
                                      session_id=sid, key=key)
         if on_attach is not None:
@@ -393,17 +387,12 @@ def register_session_routes(
     async def api_session_attach(req: Request) -> dict:
         return await _attach(req)
 
-    @app.post("/api/session/bind")
-    async def api_session_bind(req: Request) -> dict:
-        """旧名兼容（前端已迁 attach；保留一版以免旧页面 404）。"""
-        return await _attach(req)
-
     @app.get("/api/exec/output")
     async def api_exec_output(req: Request, since: int = 0) -> dict:
         """Terminal 输出增量拉取 + 会话忙闲 + cfg 快照回流。"""
         return await run_in_threadpool(
             cli.output, owner=owner_of(req),
-            session_id=_sid_of(session_id_of, req), since=since)
+            session_id=_sid_of(req), since=since)
 
     @app.post("/api/exec/stop")
     async def api_exec_stop(req: Request) -> dict:
@@ -411,26 +400,10 @@ def register_session_routes(
         worker 发 SIGINT（exec 掐断+孤儿作业清理；空闲忽略）。"""
         return await run_in_threadpool(
             cli.stop, owner=owner_of(req),
-            session_id=_sid_of(session_id_of, req))
-
-    @app.post("/api/exec/load_config")
-    async def api_exec_load_config(req: Request) -> dict:
-        """**旧名**：整份模型推送。M3b 起客户端走 /api/model/patch（增量）与
-        /api/model/replace（整份）；这里保留一版以免缓存页面报 404。"""
-        body = await req.json()
-        cfg = body.get("cfg")
-        if not isinstance(cfg, dict):
-            raise HTTPException(status_code=422, detail="cfg 须 dict")
-        key = ""
-        if form_credentials_of is not None:
-            key = _key_of(form_credentials_of, req)
-        await run_in_threadpool(
-            cli.replace, cfg, owner=owner_of(req),
-            session_id=_sid_of(session_id_of, req), key=key)
-        return {"ok": True}
+            session_id=_sid_of(req))
 
 
-def register_result_routes(app, *, owner_of, session_id_of=None,
+def register_result_routes(app, *, owner_of,
                            client: SessionClient | None = None) -> None:
     """代理 /api/result/meta + /api/result/series → 会话服务（G13②：
     结果 = 会话状态，GUI 经自己的 origin 代理读取）。GET 路由，须在
@@ -445,12 +418,12 @@ def register_result_routes(app, *, owner_of, session_id_of=None,
         """结果结构清单（job_id 缺省 = 最近一次——页面重开的回退）。"""
         return await run_in_threadpool(
             cli.result_meta, owner=owner_of(req),
-            session_id=_sid_of(session_id_of, req), job_id=job_id)
+            session_id=_sid_of(req), job_id=job_id)
 
     @app.get("/api/result/series")
     async def api_result_series(req: Request, job_id: str, mon: str,
                                 field: str, maxpoints: int = 1200) -> dict:
         return await run_in_threadpool(
             cli.result_series, owner=owner_of(req),
-            session_id=_sid_of(session_id_of, req), job_id=job_id,
+            session_id=_sid_of(req), job_id=job_id,
             mon=mon, field=field, maxpoints=maxpoints)

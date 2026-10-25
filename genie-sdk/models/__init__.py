@@ -39,37 +39,13 @@ def _ensure_genie_protocol() -> None:
 
 _ensure_genie_protocol()
 
-__all__ = [
-    # 基础类型别名
-    "Range2", "Vec3", "NumOrTensor",
-    # Domain / Mesh
-    "BoundarySpec", "DomainSpec", "RefineSpec", "MeshSpec",
-    # Materials
-    "PoleSpec", "ConstMatSpec", "LorentzMatSpec", "LibraryMatSpec",
-    "MaterialSpec",
-    # Geometry
-    "BoxSpec", "SphereSpec", "CylinderSpec", "NgonZSpec", "PolygonZSpec",
-    "EllipseZSpec", "RingZSpec", "PolygonSweptSpec", "GeometrySpec",
-    # Source
-    "SoftSourceSpec", "PlaneWaveSpec", "GaussianBeamSpec", "SourceSpec",
-    # Monitor
-    "DownSampleSpec", "ApodizeSpec", "TimeMonSpec", "FreqMonSpec",
-    "IndexMonSpec", "MonitorSpec",
-    # Run 与总配置
-    "RunSpec", "SimConfig",
-    # Sweep
-    "SweepAxisSpec", "SweepSpec",
-    # 线格式常量（资源守卫阈值 MAX_CELLS 等是部署策略，留内核 serve 层）
-    "FACES", "BC_KINDS", "LIBRARY_FIT_DEFAULTS", "DEFAULT_TIMEOUT_S",
-    "MAX_SWEEP_POINTS", "MAX_SWEEP_AXES", "norm_vertices_pairs",
-]
+# 名字表不手抄（G105 清账 2026-10-27）：公开名 ``__all__`` 与内部名
+# ``_INTERNAL`` 都从真源 ``genie_protocol`` import——单一定义面，加模型
+# 只改真源一处，本壳自动跟随（有 test_models 表面锁盯着）。
+import genie_protocol as _gp
 
-# __getattr__ 同样可服务的内部名：内核薄壳显式 import（字段台账测试用
-# dir() 枚举 _StrictModel 子类）与跨模块复用需要；不进 __all__。
-_INTERNAL = frozenset({
-    "_StrictModel", "_RangeModel", "_TemporalMixin", "_MonitorMixin",
-    "_env_int", "_check_range", "_norm_polarization", "_norm_vertices_pairs",
-})
+__all__ = list(_gp.__all__)
+_INTERNAL = _gp._INTERNAL
 
 
 def __getattr__(name: str):

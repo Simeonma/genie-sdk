@@ -1,6 +1,6 @@
-"""genie.studio — 随包分发的 GUI（一份代码两个宿主，framework §四）。
+"""genie.studio — 随包分发的 GUI。
 
-本地宿主：``genie studio``（一条命令，会话与 GUI 同进程；本机 127.0.0.1）；云端宿主
-（阶段 6）：host 包沙箱壳 serve 同一份 static/ 并把 /api/preview
-指向沙箱执行——同一个 ``preview_script`` 函数。
+本地形态：``genie studio``（一条命令，会话与 GUI 同进程；本机 127.0.0.1）。
+网页形态（G80）：``studio/web.py`` 在 Pyodide 里跑同一个 app 工厂与全部
+``/api/*`` 路由。原"云端宿主"已于 2026-10-25 随服务端宿主整包退役。
 """

@@ -254,17 +254,13 @@ TOOL_NAMES = {t["name"] for t in TOOLS}
 
 
 def _list_materials() -> dict:
-    """n-k 材料库名单（读随包分发的 core/nkdata，零网络）。"""
+    """n-k 材料库名单（正典 = core.material.list_library_materials，
+    与 Studio 的 /api/tools/nk_library 同一份实现；零网络）。"""
     try:
-        from ..core import nkdata as _nkdata
-        models = sorted(_nkdata.available())      # type: ignore[attr-defined]
+        from ..core.material import list_library_materials
+        models = sorted(list_library_materials())
     except Exception:  # noqa: BLE001 —— 库结构变动不炸 agent
-        try:
-            from pathlib import Path
-            d = Path(__file__).resolve().parents[1] / "core" / "nkdata"
-            models = sorted(p.stem for p in d.glob("*.yml"))
-        except Exception:  # noqa: BLE001
-            models = []
+        models = []
     return {"models": models, "count": len(models)}
 
 

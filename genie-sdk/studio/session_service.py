@@ -9,8 +9,8 @@
 **M2/O1**（确定性启动）：本地 ``genie studio`` 自己起这个服务（端口由
 OS 分配、地址与口令经内存 + rendezvous 文件显式传递），**不再"探测 8123
 并复用"**——复用会把上一个后端/上一个凭据的旧会话继承进来，是"模型莫名
-其妙存在/消失"的根源。跨进程形态（云宿主、``genie console``）仍走本服务
-的端口。
+其妙存在/消失"的根源。跨进程形态（``genie console``、外部工具）仍走本
+服务的端口。
 
 **M2/O2**（三生命周期正交）：
   - ``owner``    = 隔离到哪个目录（工作区根/<owner>/）；
@@ -90,7 +90,6 @@ async def _session_token(request: Request, call_next):
 class ExecIn(BaseModel):
     code: str
     mode: str = "run"        # M3：run=在当前命名空间执行 / build=构造新模型
-    reset: bool = False      # 旧名兼容（reset=True ≡ mode="build"）
     key: str = ""
     label: str = ""    # 执行来源标注（GUI 透传，如「选中 L2-2」）→ 环 input.mark
     owner: str = "user"          # B1：归属身份
@@ -122,13 +121,6 @@ class ReplaceIn(BaseModel):
     session_id: str = DEFAULT_SESSION
 
 
-class LoadCfgIn(BaseModel):
-    cfg: dict
-    key: str = ""
-    owner: str = "user"
-    session_id: str = DEFAULT_SESSION
-
-
 class AttachIn(BaseModel):
     key: str = ""
     url: str = ""      # 旧 wire 兼容：后端归会话 env，此字段忽略
@@ -143,7 +135,7 @@ def exec_(body: ExecIn) -> dict:
     k = get_kernel(body.owner, body.session_id)
     if body.key:
         k.attach(body.key)          # 幂等：同 key 不动模型，换 key 只换凭据
-    mode = "build" if (body.mode == "build" or body.reset) else "run"
+    mode = "build" if body.mode == "build" else "run"
     eid = k.submit(body.code, mode=mode, label=body.label)
     return {"id": eid}
 
@@ -197,28 +189,11 @@ def stop(owner: str = "user", session_id: str = DEFAULT_SESSION) -> dict:
     return {"stopped": get_kernel(owner, session_id).stop()}
 
 
-# G17 内部通道（仅本机）：表单推送的**旧名**——已并入 replace 原语，
-# 保留一版以免缓存页面 404（M3b 起客户端发 /model/patch、/model/replace）。
-@app.post("/load_config")
-def load_config(body: LoadCfgIn) -> dict:
-    k = get_kernel(body.owner, body.session_id)
-    if body.key:
-        k.attach(body.key)
-    k.replace(body.cfg)
-    return {"ok": True}
-
-
 # ── 凭据换绑（O2 核心）：换 key 不换模型 ─────────────────────────
 @app.post("/attach")
 def attach(body: AttachIn) -> dict:
     k = get_kernel(body.owner, body.session_id)
     return k.attach(body.key)
-
-
-@app.post("/bind")
-def bind(body: AttachIn) -> dict:
-    """旧名兼容（前端已迁 /attach）。"""
-    return attach(body)
 
 
 # ── 结果读取（G13②：结果 = 会话状态，从 owner 工作区读 h5）──────
@@ -277,8 +252,9 @@ def _backend() -> str:
 
 
 # 白名单：会话只代拨这几族。别的路径一律 403（不做通用代理）。
-# （api/health：Client.health() 经 /gw 走会话轨时需要。）
-_GW_ALLOW = ("whoami", "api/auth/", "api/tools/", "api/jobs", "api/health",
+# （api/health：Client.health() 经 /gw 走会话轨时需要。网关 tools 面
+# 已随 G19b 撤除——/api/tools/* 是 Studio 纯本地实现，不经 /gw。）
+_GW_ALLOW = ("whoami", "api/auth/", "api/jobs", "api/health",
              "api/config/")
 
 
