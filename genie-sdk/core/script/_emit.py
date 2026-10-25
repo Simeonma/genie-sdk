@@ -134,26 +134,51 @@ def _chain(first: str, parts: list[str]) -> list[str]:
         lines.append("    " + p + ("" if i == len(parts) - 1 else " \\"))
     return lines
 
-def _pole_ab(p: dict, env: dict, W: list, path: str) -> str:
-    """rank-1 的 alpha/beta kwargs 段（2026-09 内核 1.4.0）。"""
-    parts = []
-    a = _num_or_list(p.get("alpha"), env, W, (path + ".alpha") if path else "")
-    if a is not None:
-        parts.append("alpha=" + a)
-        b = _num_or_list(p.get("beta"), env, W, (path + ".beta") if path else "")
-        if b is not None:
-            parts.append("beta=" + b)
-    return (", " + ", ".join(parts)) if parts else ""
+def _pole_ab(p: dict, env: dict, W: list, path: str) -> tuple[str, bool]:
+    """rank-1 的 alpha/beta kwargs 段（2026-09 内核 1.4.0）。
+
+    返回 (kwargs 段, ok)。ok=False = alpha/beta 在场但不可净渲染——
+    G127（R17）：方向向量槽**不许 0 占位/静默丢失**（畸形 alpha 此前
+    被零化成 [0,0]/无声消失，rank-1 各向异性静默变零向量/各向同性），
+    调用方须跳过整个 pole 并记 W。beta-without-alpha 同判（与
+    builder/协议口径一致）。"""
+    has_a = p.get("alpha") is not None
+    has_b = p.get("beta") is not None
+    if not has_a and not has_b:
+        return "", True
+    if has_b and not has_a:
+        return "", False
+    w0 = len(W)
+    a = _num_or_list(p["alpha"], env, W,
+                     (path + ".alpha") if path else "")
+    if a is None or len(W) > w0:      # None=不可渲染；W 增长=有 0 占位
+        return "", False
+    parts = ["alpha=" + a]
+    if has_b:
+        w1 = len(W)
+        b = _num_or_list(p["beta"], env, W,
+                         (path + ".beta") if path else "")
+        if b is None or len(W) > w1:
+            return "", False
+        parts.append("beta=" + b)
+    return (", " + ", ".join(parts)), True
 
 def _pole_line(p: dict, side: str, env: dict, W: list, path: str) -> str | None:
+    if not isinstance(p, dict):       # G126：poles 条目非 dict 不裸崩
+        return None
     g = _num_or_list(p.get("gamma"), env, W, (path + ".gamma") if path else "")
     if g is None:
+        return None
+    ab, ok = _pole_ab(p, env, W, path)
+    if not ok:
+        W.append((path or "pole") + " alpha/beta 非法（方向向量槽不许"
+                 " 0 占位/缺失），已跳过该 pole")
         return None
     if p.get("kind") == "drude":
         wp = _num_or_list(p.get("omega_p"), env, W, (path + ".omega_p") if path else "")
         if wp is None:
             return None
-        return f"add_{side}_drude_pole({wp}, {g}{_pole_ab(p, env, W, path)})"
+        return f"add_{side}_drude_pole({wp}, {g}{ab})"
     if p.get("kind") == "lorentz":
         w0 = _num_or_list(p.get("omega_0"), env, W, (path + ".omega_0") if path else "")
         if w0 is None:
@@ -161,7 +186,7 @@ def _pole_line(p: dict, side: str, env: dict, W: list, path: str) -> str | None:
         de_val = p.get("delta_eps")
         de_s = _num_or_list(de_val, env, W, (path + ".delta_eps") if path else "")
         de = (", " + de_s) if (de_s is not None and de_val != 1) else ""
-        return f"add_{side}_lorentz_pole({w0}, {g}{de}{_pole_ab(p, env, W, path)})"
+        return f"add_{side}_lorentz_pole({w0}, {g}{de}{ab})"
     return None
 
 def _expr_to_py(text: str) -> str:

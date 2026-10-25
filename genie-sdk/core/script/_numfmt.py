@@ -80,9 +80,12 @@ def py_num(v: Any) -> str | None:
     return e if len(e) <= len(plain) else plain
 
 def py_str(s: Any) -> str | None:
+    """名字槽转 Python 字符串字面量。换行/制表/NUL 拍平成空格（防注入
+    与防不可编译：\x00 进源码 = null bytes SyntaxError，G128 清账前
+    两边过得去、产物死）；\\ 与 ' 转义。"""
     if not isinstance(s, str):
         return None
-    return "'" + re.sub(r"[\r\n\t]", " ",
+    return "'" + re.sub(r"[\x00\r\n\t]", " ",
                         s.replace("\\", "\\\\").replace("'", "\\'")) + "'"
 
 def _finite_number_to_string(v: float) -> str:

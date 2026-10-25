@@ -133,6 +133,10 @@ def _gen_mesh(m: dict, W: list, env: dict) -> list[str]:
     if mc is not None and m.get("min_cells") != _DEF["min_cells"]:
         out.append("f.mesh.min_cells = " + mc)
     for r in (m.get("refine") or []):
+        if not isinstance(r, dict):    # G126：条目非对象不裸崩
+            W.append("mesh.refine 条目不是对象（"
+                     + _js_string(type(r).__name__) + "），已跳过")
+            continue
         xr = _num_arr(r.get("x_range"), 2, env, W, "mesh.refine.x_range")
         yr = _num_arr(r.get("y_range"), 2, env, W, "mesh.refine.y_range")
         zr = _num_arr(r.get("z_range"), 2, env, W, "mesh.refine.z_range")
@@ -164,6 +168,10 @@ def _gen_materials(list_, W: list, env: dict) -> list[str]:
         return f"materials[{i}]" + (f" {name}" if name else "")
 
     for i, mt in enumerate(list_ or []):
+        if not isinstance(mt, dict):   # G126：条目非对象不裸崩
+            W.append(f"materials[{i}] 不是对象（"
+                     + _js_string(type(mt).__name__) + "），已跳过")
+            continue
         if mt.get("type") == "const":
             parts = []
             if py_str(mt.get("name")):
@@ -232,9 +240,13 @@ def _gen_materials(list_, W: list, env: dict) -> list[str]:
             fit_kw = []
             fr = _num_arr(mt.get("fit_range"), 2, env, W, f"materials[{i}].fit_range")
             _fr_def = LIBRARY_FIT_DEFAULTS["fit_range"]
+            # G126（R17）：省略判据只做相等比较，不做算术——fit_range 是
+            # 合法表达式串槽，此前 `mt[...][0] - _fr_def[0]` 对 str 裸崩
+            # TypeError（全文件唯一对槽值做算术的判据）。表达式串与任何
+            # 默认值都不等 → 恒渲染，语义正确。
             fr_default = (fr is not None and mt.get("fit_range") is not None
-                          and abs(mt["fit_range"][0] - _fr_def[0]) < 1e-15
-                          and abs(mt["fit_range"][1] - _fr_def[1]) < 1e-15)
+                          and mt["fit_range"][0] == _fr_def[0]
+                          and mt["fit_range"][1] == _fr_def[1])
             if fr is not None and not fr_default:
                 fit_kw.append("fit_range=(" + ", ".join(fr) + ")")
             nd = _num(mt.get("n_drude"), env, W, f"materials[{i}].n_drude")
@@ -266,6 +278,10 @@ def _gen_materials(list_, W: list, env: dict) -> list[str]:
 def _gen_geometry(list_, W: list, env: dict) -> list[str]:
     out = []
     for i, g in enumerate(list_ or []):
+        if not isinstance(g, dict):    # G126：条目非对象不裸崩
+            W.append(f"geometry[{i}] 不是对象（"
+                     + _js_string(type(g).__name__) + "），已跳过")
+            continue
 
         def warn(msg, i=i):
             W.append(f"geometry[{i}] " + msg)
@@ -394,6 +410,10 @@ def _gen_source(list_, W: list, env: dict) -> list[str]:
     if not (list_ or []):
         W.append("source 列表为空（至少需要一个源）")
     for i, s in enumerate(list_ or []):
+        if not isinstance(s, dict):    # G126：条目非对象不裸崩
+            W.append(f"source[{i}] 不是对象（"
+                     + _js_string(type(s).__name__) + "），已跳过")
+            continue
 
         def warn(msg, i=i):
             W.append(f"source[{i}] " + msg)
@@ -481,6 +501,10 @@ def _gen_source(list_, W: list, env: dict) -> list[str]:
 def _gen_monitor(list_, W: list, env: dict) -> list[str]:
     out = []
     for i, m in enumerate(list_ or []):
+        if not isinstance(m, dict):    # G126：条目非对象不裸崩
+            W.append(f"monitor[{i}] 不是对象（"
+                     + _js_string(type(m).__name__) + "），已跳过")
+            continue
 
         def warn(msg, i=i):
             W.append(f"monitor[{i}] " + msg)
@@ -564,6 +588,8 @@ def _gen_results(monitors, has_run: bool) -> list[str]:
     used = set()
     printed = False
     for m in monitors:
+        if not isinstance(m, dict):    # G126：条目非对象不裸崩（_gen_results）
+            continue
         if m.get("type") == "time":
             v = _var_name("t", m.get("name"), used)
             out.append(f"{v} = f.get_time({py_str(m.get('name') or '')})"
