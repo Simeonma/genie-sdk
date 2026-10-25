@@ -166,7 +166,34 @@ def _int_prop(key: str):
     )
 
 
-class Domain:
+class _SealedProps:
+    """属性命名空间守卫（G83 清账 2026-10-27）。
+
+    Domain/Mesh 的合法槽全部是类级 property（data descriptor）；拼错的
+    名字（clf / min_cell / dxx）在类上不存在，赋值会落进实例 __dict__
+    变成无人读取的影子属性——配置静默回落默认/回退值，恰好是改网格/
+    稳定性时最常手打错的那组槽。链式方法早有严格守卫（`_Chain` 未知
+    方法即刻 ValueError，pydantic extra=forbid），这里给属性命名空间
+    同款纪律：非下划线、非已声明槽的赋值**当场 AttributeError**（带
+    最近名提示 + 可设槽位清单），提交前校验看不出来成为历史。
+    """
+
+    def __setattr__(self, name, value):
+        cls = type(self)
+        if name.startswith("_") or isinstance(vars(cls).get(name), property):
+            object.__setattr__(self, name, value)
+            return
+        import difflib
+        props = sorted(n for n, v in vars(cls).items()
+                       if isinstance(v, property))
+        hint = difflib.get_close_matches(name, props, n=1)
+        raise AttributeError(
+            f"{cls.__name__} has no attribute {name!r}"
+            + (f" (did you mean {hint[0]!r}?)" if hint else "")
+            + f"；可设槽位：{', '.join(props)}")
+
+
+class Domain(_SealedProps):
     """物理域 + 边界 + 总时长（SI）。setter 与 boundary_condition 同本地包。"""
 
     x_range = _range_prop("x_range")
@@ -210,7 +237,7 @@ class Domain:
         return self
 
 
-class Mesh:
+class Mesh(_SealedProps):
     """名义格距 + refine 加密区。dy/dz 未设时服务端回退 dx（同本地包）。"""
 
     dx = _float_prop("dx")
