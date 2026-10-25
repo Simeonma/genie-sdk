@@ -353,8 +353,7 @@ class Simulation:
             d.mkdir(parents=True, exist_ok=True)
             pth = d / f"{self._job_id}_results.h5"
             pth.write_bytes(raw)
-            import os as _os
-            _os.chmod(pth, 0o600)
+            os.chmod(pth, 0o600)     # K7：双 import os 已并一
             self._result_local_path = str(pth)
             print(f"[genie] 结果已自动下载: {pth}（{len(raw)} 字节）", flush=True)
         except Exception as e:  # noqa: BLE001

@@ -185,8 +185,9 @@ class SweepHandle:
     _INFLIGHT = ("queued", "running")
 
     def __init__(self, client: Any, config: dict, spec: dict):
+        # （K6/R18：原 self._base = config 死字段已删——展开期一次性
+        # 消费，句柄全程无人再读。）
         self._client = client
-        self._base = config
         self._spec = spec
         self.id = "sw-" + secrets.token_urlsafe(6)
         # 本地展开（校验 + 解析在此刻完成——对应旧 POST /api/sweeps 422 面）

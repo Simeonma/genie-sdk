@@ -205,6 +205,24 @@ class SimData:
         self._f = h5file
         self.job_id = job_id
 
+    # K5（R18）：h5 句柄显式关闭面——BytesIO 背书不占 OS 句柄（低危），
+    # 但反复 results() 会积累打开的 h5py.File；上下文管理器 + close +
+    # 兜底 __del__ 三件套，习惯 with 的用户零成本。
+    def close(self) -> None:
+        try:
+            self._f.close()
+        except Exception:  # noqa: BLE001 —— 已关/不可关都不炸
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+    def __del__(self):
+        self.close()
+
     @property
     def attrs(self) -> dict:
         return dict(self._f.attrs)
