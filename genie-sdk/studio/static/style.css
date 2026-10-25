@@ -866,18 +866,36 @@ input::placeholder,textarea::placeholder {
   border: 1px solid var(--border-soft); border-radius: var(--radius);
   background: #fff;
 }
-/* G148 批 3：Plot 交互控件条（模式/轴选择/切片）——canvas 高度相应让位 */
+/* G148 批 3：Plot 交互控件条（场/模式/轴选择/切片）——卡片化容器；
+ * G148 美学整备（R24c）：分段视图控件 + 统一 select 手感 */
 .plot-ctl {
   display: flex; flex-wrap: wrap; align-items: center;
-  gap: 6px 10px; margin-bottom: 8px;
+  gap: 6px 12px; margin-bottom: 10px; padding: 8px 12px;
+  background: var(--bg-secondary); border: 1px solid var(--border-soft);
+  border-radius: 8px;
 }
 .plot-ctl-lab {
   font-size: var(--fs-xs, 11px); color: var(--text-secondary);
 }
 .plot-sel {
-  font-size: var(--fs-xs, 11px); padding: 1px 4px;
-  border: 1px solid var(--border-soft); border-radius: 4px;
+  font-size: var(--fs-xs, 11px); padding: 2px 6px;
+  border: 1px solid var(--border-soft); border-radius: 6px;
   background: var(--bg-primary, #fff); color: var(--text-primary);
+}
+.plot-sel:focus-visible { outline: 2px solid #1f6feb33; border-color: #1f6feb; }
+.plot-seg {
+  display: inline-flex; border: 1px solid var(--border-soft);
+  border-radius: 6px; overflow: hidden;
+  background: var(--bg-primary, #fff);
+}
+.plot-seg-btn {
+  border: none; background: transparent; padding: 3px 12px;
+  font-size: var(--fs-xs, 11px); color: var(--text-secondary);
+  cursor: pointer;
+}
+.plot-seg-btn + .plot-seg-btn { border-left: 1px solid var(--border-soft); }
+.plot-seg-btn.active {
+  background: #1f6feb; color: #fff;
 }
 .plot-head + .plot-ctl + .plot-canvas { height: calc(100% - 76px); }
 .plot-cta {

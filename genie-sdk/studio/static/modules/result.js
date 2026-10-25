@@ -284,11 +284,23 @@ function renderPlotInto(view, spec) {
 
   const rebuild = () => {
     bar.innerHTML = "";
-    // 模式
-    bar.appendChild(_label("视图"));
+    // 场分量（用户自主选场——缺省只是初始值，面板内随时换）
+    bar.appendChild(_label("场"));
     bar.appendChild(_sel(
-      [{ v: "1d", t: "曲线 1D" }, { v: "2d", t: "切面 2D" }],
-      spec.mode, (v) => {
+      ((mon && mon.fields) || [spec.field]).map(f => ({ v: f, t: f })),
+      spec.field, (v) => { spec.field = v; load(); }));
+    // 模式 = 分段控件（曲线/切面）
+    bar.appendChild(_label("视图"));
+    const seg = document.createElement("div");
+    seg.className = "plot-seg";
+    for (const [v, t] of [["1d", "曲线"], ["2d", "切面"]]) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = t;
+      b.className = "plot-seg-btn" + (spec.mode === v ? " active" : "");
+      b.setAttribute("aria-pressed", spec.mode === v ? "true" : "false");
+      b.addEventListener("click", () => {
+        if (spec.mode === v) return;
         spec.mode = v;
         if (v === "2d" && !spec.xAxis) {
           /* 缺省：谱轴 + 第一条空间轴（服务端裁决可用性） */
@@ -299,7 +311,10 @@ function renderPlotInto(view, spec) {
         }
         spec.slices = {};
         rebuild(); load();
-      }));
+      });
+      seg.appendChild(b);
+    }
+    bar.appendChild(seg);
 
     const axisOpts = [{ v: "", t: "峰（缺省）" }]
       .concat(axesAvail.map(a => ({ v: a, t: a })));
@@ -585,17 +600,38 @@ window.__jobProgress = (function () {
   };
 })();
 
-/* ── 极简折线图（结果标签卡曲线）：坐标轴 + 悬停读数 ──────────
+/* ── 极简折线图（结果标签卡曲线）：坐标轴 + 悬停读数卡 ──────────
  * 2026-10-10 站长实测踩坑修复：旧版 mousemove 增量叠画（连续移动=
  * 游标线/读数残影涂抹成一片），mouseleave 又 clearRect 曲线区（曲线
  * 被擦没）。改为 redraw(hover) 全量重绘闭包——每帧先清屏，游标和
- * 读数作为参数画进去，两个鼠标事件都走它，天然幂等。 */
+ * 读数作为参数画进去，两个鼠标事件都走它，天然幂等。
+ * G148 美学整备（R24c）：虚线网格 + 曲线下淡色面积填充 + 圆角读数卡
+ * （替代顶行裸文本）+ 轴名随行标注。 */
+function _fmtTick(v) {
+  const a = Math.abs(v);
+  if (a !== 0 && (a >= 1e4 || a < 1e-2)) return v.toExponential(1);
+  return String(Math.round(v * 1000) / 1000);
+}
+function _drawTip(g, mx, my, text, W, H) {
+  g.font = "11px sans-serif";
+  const w = g.measureText(text).width + 14, h = 22;
+  let tx = mx + 12;
+  if (tx + w > W - 8) tx = mx - w - 12;
+  const ty = Math.max(6, Math.min(H - h - 6, my - h - 10));
+  g.fillStyle = "rgba(255,255,255,0.96)";
+  g.strokeStyle = "#d0d7de"; g.lineWidth = 1;
+  g.beginPath();
+  if (g.roundRect) g.roundRect(tx, ty, w, h, 6); else g.rect(tx, ty, w, h);
+  g.fill(); g.stroke();
+  g.fillStyle = "#1f2328"; g.textAlign = "left";
+  g.fillText(text, tx + 7, ty + 15);
+}
 function _plotLine(canvas, xs, ys, xLabel, yLabel) {
   const dpr = window.devicePixelRatio || 1;
   const W = canvas.clientWidth || 320, H = canvas.clientHeight || 170;
   canvas.width = W * dpr; canvas.height = H * dpr;
   const g = canvas.getContext("2d");
-  const pad = { l: 56, r: 12, t: 10, b: 30 };
+  const pad = { l: 56, r: 14, t: 14, b: 30 };
   const x0 = pad.l, x1 = W - pad.r, y0 = pad.t, y1 = H - pad.b;
   let yMax = 0;
   for (const v of ys) if (v > yMax) yMax = v;
@@ -607,32 +643,55 @@ function _plotLine(canvas, xs, ys, xLabel, yLabel) {
 
     g.setTransform(dpr, 0, 0, dpr, 0, 0);   /* 重置坐标系（幂等防叠加） */
     g.clearRect(0, 0, W, H);
-    g.strokeStyle = "#d0d7de"; g.lineWidth = 1;
-    g.strokeRect(x0, y0, x1 - x0, y1 - y0);
-    g.fillStyle = "#57606a"; g.font = "10px sans-serif"; g.textAlign = "center";
+    g.fillStyle = "#ffffff"; g.fillRect(0, 0, W, H);
+    /* 虚线网格（先网格后数据） */
+    g.strokeStyle = "#eceff3"; g.lineWidth = 1; g.setLineDash([3, 3]);
+    g.textAlign = "center"; g.font = "10px sans-serif"; g.fillStyle = "#6e7781";
     for (let t = 0; t <= 4; t++) {
       const xv = xMin + (xMax - xMin) * t / 4;
-      g.fillText(Number(xv).toExponential(1), x0 + (x1 - x0) * t / 4, y1 + 12);
-      g.strokeStyle = "#eaeef2"; g.beginPath();
+      g.fillText(_fmtTick(xv), x0 + (x1 - x0) * t / 4, y1 + 14);
+      g.beginPath();
       g.moveTo(x0 + (x1 - x0) * t / 4, y0); g.lineTo(x0 + (x1 - x0) * t / 4, y1); g.stroke();
     }
     g.textAlign = "right";
-    for (let t = 0; t <= 3; t++)
-      g.fillText((yMax * t / 3).toExponential(1), x0 - 4, Y(yMax * t / 3) + 3);
-    g.strokeStyle = "#1f6feb"; g.lineWidth = 1.4; g.beginPath();
+    for (let t = 0; t <= 3; t++) {
+      const yv = yMax * t / 3;
+      g.fillText(_fmtTick(yv), x0 - 6, Y(yv) + 3);
+      if (t > 0) {
+        g.beginPath();
+        g.moveTo(x0, Y(yv)); g.lineTo(x1, Y(yv)); g.stroke();
+      }
+    }
+    g.setLineDash([]);
+    /* 曲线下淡色面积 + 主线 */
+    g.beginPath();
     for (let i = 0; i < ys.length; i++)
       i ? g.lineTo(X(i), Y(ys[i])) : g.moveTo(X(i), Y(ys[i]));
-    g.stroke();
-    g.fillStyle = "#1f2328"; g.textAlign = "left";
-    g.fillText(yLabel + (hover == null ? "  （悬停读数）" : ""), x0, y0 - 1);
+    const fillPath = new Path2D();
+    for (let i = 0; i < ys.length; i++)
+      i ? fillPath.lineTo(X(i), Y(ys[i])) : fillPath.moveTo(X(i), Y(ys[i]));
+    fillPath.lineTo(X(ys.length - 1), y1); fillPath.lineTo(X(0), y1);
+    fillPath.closePath();
+    g.fillStyle = "rgba(31,111,235,0.09)"; g.fill(fillPath);
+    g.strokeStyle = "#1f6feb"; g.lineWidth = 1.8; g.stroke();
+    /* 边框（盖在网格上，实线细框） */
+    g.strokeStyle = "#d0d7de"; g.lineWidth = 1;
+    g.strokeRect(x0, y0, x1 - x0, y1 - y0);
+    /* 轴名（右下 x / 左上 y，小字灰） */
+    g.font = "10px sans-serif"; g.fillStyle = "#8b949e";
+    g.textAlign = "right"; g.fillText(xLabel, x1 - 4, y1 - 6);
+    g.textAlign = "left";
+    g.fillText(yLabel, x0 + 6, y0 + 12);
     if (hover != null) {
-      g.strokeStyle = "#d0d7de"; g.beginPath();
+      g.strokeStyle = "#a5b4fc"; g.lineWidth = 1;
+      g.beginPath();
       g.moveTo(X(hover), y0); g.lineTo(X(hover), y1); g.stroke();
       g.fillStyle = "#1f6feb";
-      g.fillRect(X(hover) - 2, Math.max(y0, Y(ys[hover]) - 2), 4, 4);
-      g.fillStyle = "#1f2328"; g.textAlign = "left";
-      g.fillText(`${xLabel}=${Number(xs[hover]).toExponential(3)}  ${yLabel}=${ys[hover].toExponential(3)}`,
-                 x0 + 4, y0 + 12);
+      g.beginPath(); g.arc(X(hover), Y(ys[hover]), 3, 0, Math.PI * 2); g.fill();
+      g.strokeStyle = "#ffffff"; g.lineWidth = 1.2; g.stroke();
+      _drawTip(g, X(hover), Y(ys[hover]),
+        `${xLabel}=${_fmtTick(xs[hover])}   ${yLabel}=${_fmtTick(ys[hover])}`,
+        W, H);
     }
   };
   redraw(null);
@@ -646,10 +705,11 @@ function _plotLine(canvas, xs, ys, xLabel, yLabel) {
   canvas.onmouseleave = () => redraw(null);
 }
 
-/* ── 2D 热图（G148 批 3）：z 行 = y 轴、列 = x 轴；色标 + 悬停取值 ──
- * 色阶 = 5 停靠渐变（深蓝→青→绿→黄→深红，matplotlib hot 族手感）；
- * 数据已由服务端 max-pool 降采样（峰值结构保留）。绘制幂等闭包与
- * _plotLine 同款：redraw(hover) 全量重绘，鼠标事件都走它。 */
+/* ── 2D 热图（G148 批 3）：z 行 = y 轴、列 = x 轴；渐变色标 + 悬停读数卡 ──
+ * 色阶 = 5 停靠渐变（深蓝→青→绿→黄→深红）；数据已由服务端 max-pool
+ * 降采样（峰值结构保留）。绘制幂等闭包与 _plotLine 同款：redraw(hover)
+ * 全量重绘。G148 美学整备（R24c）：离屏 ImageData + 平滑缩放（双线性
+ * 手感，替代马赛克块）+ 渐变圆角色标 + 十字准星 + 读数卡。 */
 const _HEAT_STOPS = [[0, 0, 0.35], [0, 0.55, 0.85], [0.1, 0.8, 0.5],
                      [0.95, 0.85, 0.2], [0.75, 0.05, 0.05]];
 function _heatColor(t) {
@@ -663,7 +723,7 @@ function _plotHeat(canvas, xs, ys, z, xLabel, yLabel, vLabel) {
   const W = canvas.clientWidth || 480, H = canvas.clientHeight || 300;
   canvas.width = W * dpr; canvas.height = H * dpr;
   const g = canvas.getContext("2d");
-  const pad = { l: 56, r: 64, t: 10, b: 30 };
+  const pad = { l: 56, r: 72, t: 14, b: 30 };
   const x0 = pad.l, x1 = W - pad.r, y0 = pad.t, y1 = H - pad.b;
   const ny = z.length, nx = z.length ? z[0].length : 0;
   let vMin = Infinity, vMax = -Infinity;
@@ -674,58 +734,73 @@ function _plotHeat(canvas, xs, ys, z, xLabel, yLabel, vLabel) {
   }
   if (!isFinite(vMin)) { vMin = 0; vMax = 1; }
   if (vMax <= vMin) vMax = vMin + 1;
+  /* 离屏 nx×ny 位图（NaN = 透明）→ 平滑缩放到绘图区 */
+  const off = document.createElement("canvas");
+  off.width = Math.max(1, nx); off.height = Math.max(1, ny);
+  const og = off.getContext("2d");
+  const img = og.createImageData(off.width, off.height);
+  for (let j = 0; j < ny; j++) {
+    for (let i = 0; i < nx; i++) {
+      const v = z[j][i];
+      const o = (j * nx + i) * 4;
+      if (v != null && isFinite(v)) {
+        const [r, gg, b] = _heatColor((v - vMin) / (vMax - vMin));
+        img.data[o] = r; img.data[o + 1] = gg;
+        img.data[o + 2] = b; img.data[o + 3] = 255;
+      }
+    }
+  }
+  og.putImageData(img, 0, 0);
   const X = i => x0 + (nx > 1 ? i / (nx - 1) : 0.5) * (x1 - x0);
   const Y = j => y1 - (ny > 1 ? j / (ny - 1) : 0.5) * (y1 - y0);
-  const cellW = Math.max(1, (x1 - x0) / Math.max(1, nx));
-  const cellH = Math.max(1, (y1 - y0) / Math.max(1, ny));
   const redraw = (hover) => {
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, W, H);
-    for (let j = 0; j < ny; j++) {
-      for (let i = 0; i < nx; i++) {
-        const v = z[j][i];
-        const [r, gr, b] = _heatColor(
-          v != null && isFinite(v) ? (v - vMin) / (vMax - vMin) : 0);
-        g.fillStyle = "rgb(" + r + "," + gr + "," + b + ")";
-        g.fillRect(X(i) - cellW / 2, Y(j) - cellH / 2, cellW + 1, cellH + 1);
-      }
-    }
+    g.fillStyle = "#ffffff"; g.fillRect(0, 0, W, H);
+    g.imageSmoothingEnabled = true;
+    g.imageSmoothingQuality = "high";
+    g.drawImage(off, x0, y0, x1 - x0, y1 - y0);
     g.strokeStyle = "#d0d7de"; g.lineWidth = 1;
     g.strokeRect(x0, y0, x1 - x0, y1 - y0);
     /* 轴刻度 */
-    g.fillStyle = "#57606a"; g.font = "10px sans-serif"; g.textAlign = "center";
+    g.font = "10px sans-serif"; g.fillStyle = "#6e7781"; g.textAlign = "center";
     for (let t = 0; t <= 4; t++) {
-      g.fillText(Number(xs[Math.round(t * (nx - 1) / 4)]).toExponential(1),
-                 x0 + (x1 - x0) * t / 4, y1 + 12);
+      const i = Math.round(t * (nx - 1) / 4);
+      g.fillText(_fmtTick(xs[i] ?? 0), x0 + (x1 - x0) * t / 4, y1 + 14);
     }
     g.textAlign = "left";
     for (let t = 0; t <= 3; t++) {
       const j = Math.round((1 - t / 3) * (ny - 1));
-      g.fillText(Number(ys[j]).toExponential(1), 4, Y(j) + 3);
+      g.fillText(_fmtTick(ys[j] ?? 0), 4, Y(j) + 3);
     }
-    /* 色标 */
+    /* 渐变色标（同色阶正插值）+ 圆角框 */
+    const grad = g.createLinearGradient(0, y1, 0, y0);
+    _HEAT_STOPS.forEach((c, i) =>
+      grad.addColorStop(i / (_HEAT_STOPS.length - 1),
+        "rgb(" + c.map(v => Math.round(v * 255)).join(",") + ")"));
     const cbH = y1 - y0;
-    for (let p = 0; p < cbH; p++) {
-      const [r, gr, b] = _heatColor(1 - p / cbH);
-      g.fillStyle = "rgb(" + r + "," + gr + "," + b + ")";
-      g.fillRect(x1 + 10, y0 + p, 12, 1);
-    }
-    g.strokeStyle = "#d0d7de"; g.strokeRect(x1 + 10, y0, 12, cbH);
-    g.fillStyle = "#57606a"; g.textAlign = "left";
-    g.fillText(vMax.toExponential(1), x1 + 26, y0 + 8);
-    g.fillText(vMin.toExponential(1), x1 + 26, y1);
-    g.fillStyle = "#1f2328";
-    g.fillText(xLabel + " × " + yLabel + (hover == null ? "  （悬停读数）" : ""),
-               x0, y0 - 1);
+    g.fillStyle = grad; g.fillRect(x1 + 12, y0, 12, cbH);
+    g.strokeStyle = "#d0d7de"; g.strokeRect(x1 + 12, y0, 12, cbH);
+    g.fillStyle = "#6e7781"; g.font = "10px sans-serif";
+    g.fillText(_fmtTick(vMax), x1 + 28, y0 + 8);
+    g.fillText(_fmtTick(vMin), x1 + 28, y1);
+    g.fillStyle = "#8b949e"; g.textAlign = "left";
+    g.fillText(vLabel + "（" + xLabel + " × " + yLabel + "）", x0, y0 - 3);
     if (hover) {
       const { i, j } = hover;
-      g.strokeStyle = "#fff"; g.lineWidth = 1.5;
-      g.strokeRect(X(i) - cellW / 2, Y(j) - cellH / 2, cellW, cellH);
-      g.fillStyle = "#1f2328"; g.textAlign = "left";
-      g.fillText(xLabel + "=" + Number(xs[i]).toExponential(3)
-        + "  " + yLabel + "=" + Number(ys[j]).toExponential(3)
-        + "  " + vLabel + "=" + Number(z[j][i]).toExponential(3),
-        x0 + 4, y0 + 12);
+      /* 十字准星 */
+      g.strokeStyle = "rgba(255,255,255,0.85)"; g.lineWidth = 1;
+      g.setLineDash([3, 3]);
+      g.beginPath();
+      g.moveTo(X(i), y0); g.lineTo(X(i), y1);
+      g.moveTo(x0, Y(j)); g.lineTo(x1, Y(j));
+      g.stroke(); g.setLineDash([]);
+      g.strokeStyle = "#ffffff"; g.lineWidth = 1.5;
+      g.beginPath(); g.arc(X(i), Y(j), 3.5, 0, Math.PI * 2); g.stroke();
+      g.strokeStyle = "#1f2328"; g.lineWidth = 0.8; g.stroke();
+      _drawTip(g, X(i), Y(j),
+        `${xLabel}=${_fmtTick(xs[i])}  ${yLabel}=${_fmtTick(ys[j])}`
+        + `  ${vLabel}=${_fmtTick(z[j][i])}`, W, H);
     }
   };
   redraw(null);
