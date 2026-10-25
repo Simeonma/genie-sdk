@@ -447,7 +447,10 @@ class _Chain:
                     f"expression strings, got {x!r}")
             out.append(float(x))
         if all(not isinstance(x, str) for x in out) \
-                and all(abs(x) < 1e-12 for x in out):
+                and math.hypot(*out) < 1e-15:
+            # R22 G158：与线格式 _check_dir 同一口径（hypot 范数 < 1e-15，
+            # _wire.py:253）。此前逐分量 1e-12——[1e-13]×3 builder 拒、
+            # 协议收，同一合法输入两入口判定相反。
             raise ValueError(
                 f"{tag} cannot be a zero vector (rank-1 needs a direction)")
         return out

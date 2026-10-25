@@ -14,11 +14,21 @@ from typing import Any
 from ...models.expr import ExprError, _UNITS, eval_expr
 from ._numfmt import _js_string, py_num, py_str
 
-_FACTOR_LIT = {
-    1e-15: "1e-15", 1e-12: "1e-12", 1e-9: "1e-9", 1e-6: "1e-6",
-    1e-3: "1e-3", 1e-2: "1e-2", 1.0: "1",
-    1e3: "1e3", 1e6: "1e6", 1e9: "1e9", 1e12: "1e12", 1e15: "1e15",
-}
+def _factor_literal(f: float) -> str:
+    """因子 → 脚本字面量：10 的整数次幂 → ``1e<k>``，1 → ``"1"``。
+
+    R22 G157：`_FACTOR_LIT` 从 `_UNITS` 因子集**派生**（此前手工逆表，
+    新增单位静默产出不可编译脚本）；非十进制幂的未来单位退 repr，
+    仍确定。"""
+    if f == 1.0:
+        return "1"
+    k = round(math.log10(f))
+    if f == 10.0 ** k:
+        return f"1e{k}"
+    return repr(f)
+
+
+_FACTOR_LIT = {f: _factor_literal(f) for f in set(_UNITS.values())}
 _UNIT_SUFFIX_RE = re.compile(r"\[([^\[\]]+)\]")
 
 

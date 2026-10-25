@@ -39,7 +39,8 @@ __all__ = [
     "SweepAxisSpec", "SweepSpec",
     # 线格式常量（资源守卫阈值 MAX_CELLS 等是部署策略，留内核 serve 层）
     "FACES", "BC_KINDS", "LIBRARY_FIT_DEFAULTS", "DEFAULT_TIMEOUT_S",
-    "MAX_SWEEP_POINTS", "MAX_SWEEP_AXES", "norm_vertices_pairs",
+    "MAX_GPU_PER_RUN", "MAX_SWEEP_POINTS", "MAX_SWEEP_AXES",
+    "norm_vertices_pairs",
 ]
 
 # __getattr__ 同样可服务的内部名：内核薄壳显式 import（字段台账测试用

@@ -49,7 +49,15 @@ _DEF = {
     "stride": _field_default(_w.DownSampleSpec, "stride"),
     # polarization 缺省 = 线格式归一形态（Field 默认 None 的正典化）
     "pol_default": _w._norm_polarization(None),
+    # R22 G159（R17 收口残余）：center 缺省（geometry/source/monitor
+    # 三处此前各写 [0,0,0] 字面量）；index 监视器 size 缺省 = 全 None
+    # 槽（与 time/freq 的 mon_size=(0,0,0) 是两个不同的正典值）。
+    "center": _field_default(_w.SoftSourceSpec, "center"),
+    "index_size": _field_default(_w.IndexMonSpec, "size"),
 }
+
+# soft_source 的 kind 判别值（R22 G159：判别与发射同源，不再双写）。
+_KIND_MAGNETIC = "magnetic"
 
 
 def _var_name(prefix: str, name, used: set) -> str:
@@ -313,7 +321,7 @@ def _gen_geometry(list_, W: list, env: dict) -> list[str]:
         elif g.get("type") in ("sphere", "cylinder", "ngon_z",
                                "ellipse_z", "ring_z"):
             c = _num_arr(g.get("center"), 3, env, W, f"geometry[{i}].center")
-            if c and not _eq3(g.get("center"), [0, 0, 0]):
+            if c and not _eq3(g.get("center"), _DEF["center"]):
                 parts.append(".center(" + ", ".join(c) + ")")
             if g.get("type") == "sphere":
                 rad = _num(g.get("radius"), env, W, f"geometry[{i}].radius")
@@ -450,7 +458,7 @@ def _gen_source(list_, W: list, env: dict) -> list[str]:
         if s.get("type") == "soft_source":
             first = "f.src.add_soft_source()"
             c = _num_arr(s.get("center"), 3, env, W, f"source[{i}].center")
-            if c and not _eq3(s.get("center"), [0, 0, 0]):
+            if c and not _eq3(s.get("center"), _DEF["center"]):
                 parts.append(".center(" + ", ".join(c) + ")")
             sz = _slot_arr(s.get("size"), 3, "None", env, W, f"source[{i}].size")
             size = s.get("size") or []
@@ -477,8 +485,8 @@ def _gen_source(list_, W: list, env: dict) -> list[str]:
             am = _num(s.get("amplitude"), env, W, f"source[{i}].amplitude")
             if am is not None and s.get("amplitude") != _DEF["amplitude"]:
                 parts.append(".amplitude(" + am + ")")
-            if s.get("kind") == "magnetic":
-                parts.append(".kind('magnetic')")
+            if s.get("kind") == _KIND_MAGNETIC:
+                parts.append(f".kind('{_KIND_MAGNETIC}')")
         elif s.get("type") in ("plane_wave", "gaussian_beam"):
             first = "f.src.add_" + s["type"] + "()"
             if s.get("direction") == "-":
@@ -530,7 +538,7 @@ def _gen_monitor(list_, W: list, env: dict) -> list[str]:
         else:
             warn("缺 name")
         c = _num_arr(m.get("center"), 3, env, W, f"monitor[{i}].center")
-        if c and not _eq3(m.get("center"), [0, 0, 0]):
+        if c and not _eq3(m.get("center"), _DEF["center"]):
             parts.append(".center(" + ", ".join(c) + ")")
         field = py_str(m.get("field"))
         if m.get("type") in ("time", "freq"):
@@ -574,8 +582,7 @@ def _gen_monitor(list_, W: list, env: dict) -> list[str]:
             first = "f.mon.add_index()"
             sz = _slot_arr(m.get("size"), 3, "None", env, W, f"monitor[{i}].size")
             size = m.get("size") or []
-            if sz and not (len(size) == 3 and size[0] is None
-                           and size[1] is None and size[2] is None):
+            if sz and list(size) != list(_DEF["index_size"]):
                 parts.append(".size(" + ", ".join(sz) + ")")
             if field:
                 parts.append(".field(" + field + ")")

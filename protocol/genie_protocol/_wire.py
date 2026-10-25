@@ -127,6 +127,9 @@ def _env_int(name: str, default: int) -> int:
 
 
 DEFAULT_TIMEOUT_S = 3_600
+# 单作业卡数上限（R22 G154 站长裁：提为协议常量，fdtd serve
+# demand.MAX_RANKS import 同一值——上限只有一个出处，改一处双方生效）。
+MAX_GPU_PER_RUN = 4
 MAX_SWEEP_POINTS = _env_int("FDTD_MAX_SWEEP_POINTS", 512)  # sweep 展开点数上限
 MAX_SWEEP_AXES = 32               # sweep 参数轴数上限
 
@@ -916,7 +919,7 @@ MonitorSpec = Annotated[
 
 
 class RunSpec(_StrictModel):
-    gpu: Optional[Annotated[int, Field(ge=1, le=4)]] = None  # 可选上限
+    gpu: Optional[Annotated[int, Field(ge=1, le=MAX_GPU_PER_RUN)]] = None  # 可选上限
     timeout_s: int = Field(default=DEFAULT_TIMEOUT_S, gt=0)
 
 
