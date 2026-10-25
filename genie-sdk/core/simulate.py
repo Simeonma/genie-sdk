@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import threading
 from typing import Any, get_args, get_origin
 
 from pydantic import BaseModel
@@ -158,6 +159,11 @@ class Simulation:
         self._job_id: str | None = None
         self._arrays: dict | None = None   # npz 解包缓存（get_* 惰性共享）
         self._results: dict[tuple, Any] = {}   # (类型, 名) → Result 对象缓存
+        self._result_local_path: str | None = None
+        # K4（R18，站长裁 A）：提交路径锁——并发 run() 的"双查 _job_id
+        # 都是 None → 双提交"窗口是网络 I/O 级（GIL 会释放），后果 =
+        # 双计费 + 孤儿作业。锁内完成 参数落 cfg + submit。
+        self._run_lock = threading.Lock()
 
     # ---- 配置 ----
 
@@ -282,18 +288,34 @@ class Simulation:
         空闲显存过滤 + NV 链挑选（M3-2 语义）+ 切轴接触面最小（auto）。
         显存不足或凑不齐 NV 邻接链 → 作业 FAILED（明确报错，不静默降级）。
         """
-        if self._job_id is not None and any(v is not None for v in (gpu, timeout_s)):
+        # G136 挡板（R18，站长裁 A）：终态实例的重入语义——
+        # · done → 直接返回：重查无收益（结果不会变），只会踩归档陷阱
+        #   （服务端 janitor 已归档 → state=archived → get_* 的 state
+        #   挡板把缓存+本地落盘全拦死，一次误触打死可用实例）；
+        # · failed/killed/archived → 明确报错指路：results() 可读本地
+        #   落盘，重跑请新开 connect() 实例。
+        # 保留的正路：state=running（本地超时后）无参重入 = 纯续查。
+        if self.state == "done":
+            return self
+        if self.state in ("failed", "killed", "archived"):
             raise RuntimeError(
-                "cannot change gpu/timeout_s after submission (the "
-                "config was already sent) — create a new connect() "
-                "instance and reconfigure")
-        if gpu is not None:
-            # 卡数语义（RunSpec 校验权威在服务端，SDK 薄层）
-            self._cfg.run.gpu = int(gpu)
-        if timeout_s is not None:
-            self._cfg.run.timeout_s = int(timeout_s)
-        if self._job_id is None:
-            self._submit()
+                f"job {self._job_id} already finished with state "
+                f"{self.state!r} — results stay available via results()"
+                + (" (local file saved)" if self._result_local_path else "")
+                + "; to re-run, create a new connect() instance")
+        # K4：锁内完成"改参检查 + 参数落 cfg + 提交"（并发 run() 防双提交）
+        with self._run_lock:
+            if self._job_id is not None and any(v is not None for v in (gpu, timeout_s)):
+                raise RuntimeError(
+                    "cannot change gpu/timeout_s after submission (the "
+                    "config was already sent) — create a new connect() "
+                    "instance and reconfigure")
+            if gpu is not None:
+                self._cfg.run.gpu = int(gpu)
+            if timeout_s is not None:
+                self._cfg.run.timeout_s = int(timeout_s)
+            if self._job_id is None:
+                self._submit()
         self.state = "running"
         try:
             st = self._client.wait(self._job_id, poll_interval=poll_interval,
@@ -374,25 +396,32 @@ class Simulation:
 
     # ---- 结果 ----
 
+    def _guard_done_for_fetch(self) -> None:
+        """取数前置守卫（get_* 与 results() 共用，G138/R18）：未成功
+        终态 → RuntimeError + 日志尾（不裸打服务端吃 409/410——两条
+        取数路径异常面统一）。"""
+        if self.state == "done":
+            return
+        tail = ""
+        if self._job_id is not None:
+            try:
+                tail = (self._client.log(self._job_id) or "")[-400:]
+            except Exception:  # noqa: BLE001 —— 日志取不到不拦守卫
+                tail = ""
+        raise RuntimeError(
+            f"job did not finish successfully (state={self.state}); "
+            f"no results to fetch. Job {self._job_id} ended in a "
+            f"failure state"
+            + (f"; log tail:\n{tail}" if tail else
+               " (use client.log(job_id) for the full log)"))
+
     def _result_arrays(self) -> dict:
         """结果 h5（genie-results-h5/1）→ 平铺 key 字典。
 
         h5 结构：/<监视器>/<场或轴>，组 attrs["domain"] ∈ {f,t,i}；
         展平回沿用约定 ``<域>@<监视器>.<场>``——下游
         TimeResult/FreqResult.from_npz/_extract 零改动。"""
-        if self.state != "done":
-            tail = ""
-            if self._job_id is not None:
-                try:
-                    tail = (self._client.log(self._job_id) or "")[-400:]
-                except Exception:  # noqa: BLE001 —— 日志取不到不拦守卫
-                    tail = ""
-            raise RuntimeError(
-                f"job did not finish successfully (state={self.state}); "
-                f"no results to fetch. Job {self._job_id} ended in a "
-                f"failure state"
-                + (f"; log tail:\n{tail}" if tail else
-                   " (use client.log(job_id) for the full log)"))
+        self._guard_done_for_fetch()
         if self._arrays is None:
             import h5py
             import io
@@ -425,6 +454,10 @@ class Simulation:
             if _P(local).is_file():
                 raw = _P(local).read_bytes()
                 return SimData(h5py.File(io.BytesIO(raw), "r"), job_id=jid)
+        # G138（R18）：终态守卫与 get_* 同款（本地落盘可读时上面已放行；
+        # 显式传 job_id = 取他人/历史作业，直取不守）。
+        if job_id is None:
+            self._guard_done_for_fetch()
         if jid is None:
             raise RuntimeError(
                 "no job submitted yet — results() needs a job_id")
