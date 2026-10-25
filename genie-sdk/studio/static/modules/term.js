@@ -372,7 +372,10 @@ function applyCfgSnapshot(c, resolved, seq, origin, paths) {
     apiNotice("改动没被接受，已还原（原因见终端）", "err");
     return;
   }
-  if (origin === "patch") {
+  /* 回声抑制仅当本地已有编辑缓冲才成立：刚加载的页面 cfg 还是 null，
+   * origin=patch 的首拍快照是初始模型而非回声——须走下方整份应用，
+   * 否则刷新后界面永远空模型（会话模型其实是好的）。 */
+  if (origin === "patch" && cfg) {
     _mergeForeignPaths(c, paths);   /* 只并入"不是我改的"那些路径 */
     _serverCfg = snap;              /* 刷新 diff 基准，不重建面板 */
     return;

@@ -587,7 +587,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         _emit_state("submit")
         try:
             out = _orig_sim_run(self, *a, **kw)
-        except BaseException:
+        except BaseException as e:
             # 失败也发 job-done（ok:false）：结果模式切换的锚 = 「一次 run
             # 尝试已了结」这个事实——与 2026-10-14 裁决「快速失败也进结果
             # 态」一致；跑挂更该回结果视图看是哪步炸的。异常原样上抛。
@@ -597,6 +597,26 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
             emit({"ev": "out", "kind": "job-done",
                   "text": f"✗ 作业失败（{jid or '未提交'}）\n",
                   "data": {"job_id": jid or "", "ok": False}})
+            # 连不上网关 = 机器层隧道断了（本地 Studio 形态下最常见的一类
+            # "未提交"失败——隧道是机器基础设施，不是会话的一部分）。
+            # 说人话 + 给下一步动作；traceback 原样保留供诊断（R7：只有
+            # 一种措辞，这里不重复 detail）。判据走因链遍历：client 层把
+            # 传输错误包成 GenieHTTPError（from e），顶层类型探不到。
+            def _conn_dead(exc) -> bool:
+                c = exc
+                while c is not None:
+                    if isinstance(c, (ConnectionError, OSError)):
+                        return True
+                    c = c.__cause__
+                return False
+            if _conn_dead(e):
+                url = getattr(getattr(self, "_client", None),
+                              "base_url", "") or "网关"
+                emit({"ev": "out", "kind": "note",
+                      "text": f"⚠ 连不上 {url}——本机隧道可能断了"
+                              "（它是机器基础设施，重启 studio 救不了）："
+                              "任务计划程序里运行任务 genie-tunnel，"
+                              "或重开 start-studio。\n"})
             raise
         # G13② 结果事件：run 成功（含自动下载落盘）→ job-done 进环，
         # GUI 靠它切结果模式/按 job_id 读会话工作区的 h5（结果=会话状态）。

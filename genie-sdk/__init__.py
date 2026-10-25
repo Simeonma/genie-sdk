@@ -56,7 +56,7 @@ from .integrations.agent_tools import check_script
 # sys.modules 后属性寻址与语句级 import 皆通（material 实体在 core/）。
 _sys.modules[__name__ + ".material"] = material
 
-__version__ = "2.0.0a11"
+__version__ = "2.0.0a12"
 
 
 def _swap_connect(fn):

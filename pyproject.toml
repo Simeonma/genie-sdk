@@ -1,11 +1,15 @@
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "genie-sdk"
-version = "2.0.0a11"
+version = "2.0.0a12"
 description = "GENIE SDK v2 — 脚本构建仿真、f.run() 提交云端 GPU；preview_script 零网络预览（模型与提交互不相干）"
+# 许可面（2026-10-25）：Apache-2.0，LICENSE 随仓 + 随 wheel 分发。
+# PEP 639 的 SPDX 写法要求 setuptools>=77（build-system 已同步抬到这个下限）。
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = [
     "requests>=2.28",

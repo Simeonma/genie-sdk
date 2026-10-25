@@ -279,14 +279,25 @@ def create_app(*, preview_fn=None, static_dir: str | Path | None = None,
                 nk = body.get("nk")
                 if (lib is None) == (nk is None):
                     raise HTTPException(422, detail="library 与 nk 恰给其一")
-                data = (load_library_nk(lib) if lib is not None else
-                        (nk.get("wavelength_m"), nk.get("n"), nk.get("k")))
+                if lib is not None:
+                    data = load_library_nk(lib)
+                else:
+                    # nk 契约 = {wavelength_m, n, k} 等长三列；形状错给
+                    # 干净 422，而不是裸 AttributeError 的 500。
+                    nk = nk if isinstance(nk, dict) else {}
+                    cols = [nk.get(c) for c in ("wavelength_m", "n", "k")]
+                    if (not all(isinstance(c, list) for c in cols)
+                            or len(set(map(len, cols))) != 1):
+                        raise HTTPException(
+                            422, detail="nk 须 {wavelength_m, n, k} 且三列等长")
+                    data = tuple(cols)
                 return fit_nk(
                     data,
                     fit_range=tuple(body.get("fit_range") or (4e-7, 8e-7)),
-                    n_drude=int(body.get("n_drude") or 0),
-                    n_lorentz=int(body.get("n_lorentz") or 2),
-                    maxfev=int(body.get("maxfev") or 5000),
+                    # 缺键才用默认：`or 默认`会把合法的 0（0+0 极点拟合）吞掉。
+                    n_drude=int(body.get("n_drude", 0)),
+                    n_lorentz=int(body.get("n_lorentz", 2)),
+                    maxfev=int(body.get("maxfev", 5000)),
                     name=body.get("name"))
             return await run_in_threadpool(_fit)
 

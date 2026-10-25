@@ -7,8 +7,9 @@
  * GUI 通道，替代已退役的 from_library 死入口（类别错误：把数据引用
  * 塞进 cfg）。
  *
- * 端点：/api/tools/nk_library、/api/tools/material_fit（网关层真实现，
- * studio/host 两侧代理转发；X-API-Key = localStorage 优先）。
+ * 端点：/api/tools/nk_library、/api/tools/material_fit——2026-10-27 G19b
+ * 起为 Studio 本地实现（studio/server.py，genie.core.material + 本地
+ * scipy；网关 tools 面随协议层手术撤除）；X-API-Key = localStorage 优先。
  * 经典 script 按序加载，跨模块引用为运行期全局查找。 */
 const _C0 = 299792458.0;
 let _nkLibCache = null;
@@ -57,14 +58,18 @@ function parseNkText(text) {
 }
 
 /* fit + 入 cfg（对话框与 e2e 共用的函数面）：
- * src = {library:"Au"} 或 {nkText:"…"}；range=[lo,hi] 米。 */
+ * src = {library:"Au"} 或 {nkText:"…"}；range=[lo,hi] 米。
+ * nk 载荷形状 = {wavelength_m, n, k}（端点契约，不是三元组数组）。 */
 async function fitAndInsert(src, range, nDrude, nLorentz, maxfev) {
   const payload = {
     fit_range: range, n_drude: nDrude, n_lorentz: nLorentz,
     maxfev: maxfev || 5000,
   };
   if (src.library) payload.library = src.library;
-  else payload.nk = parseNkText(src.nkText);
+  else {
+    const [wl, n, k] = parseNkText(src.nkText);
+    payload.nk = { wavelength_m: wl, n, k };
+  }
   const r = await fetch("/api/tools/material_fit", { method: "POST",
     headers: { "Content-Type": "application/json",
                "X-API-Key": _apiKey() },
@@ -150,15 +155,22 @@ function openNkFitDialog() {
     const raw = wrap.querySelector('input[name="ml-src"]:checked').value === "raw";
     const lo = Number($("ml-lo").value) * 1e-9, hi = Number($("ml-hi").value) * 1e-9;
     if (!(lo > 0 && hi > lo)) { msg("波段非法（须 0 < 下限 < 上限，nm）", true); return; }
+    /* 空串 → 默认；显式数值（含 0）原样透传（`Number(v)||默认` 会吞 0）。 */
+    const num = (id, dft) => {
+      const t = String($(id).value ?? "").trim();
+      if (t === "") return dft;
+      const v = Number(t);
+      return Number.isFinite(v) ? v : dft;
+    };
     $("ml-fit").disabled = true;
     msg("拟合中…");
     try {
       const src = raw ? { nkText: $("ml-raw").value }
                       : { library: $("ml-lib").value };
       const out = await fitAndInsert(src, [lo, hi],
-                                     Number($("ml-nd").value) || 0,
-                                     Number($("ml-nl").value) || 2,
-                                     Number(5000));
+                                     num("ml-nd", 0),
+                                     num("ml-nl", 2),
+                                     5000);
       const q = out.quality || {};
       msg(`✓ 已入 cfg：${out.n_poles} poles，rmse_n=${q.rmse_n ?? "—"}，`
         + `rmse_k=${q.rmse_k ?? "—"}`);

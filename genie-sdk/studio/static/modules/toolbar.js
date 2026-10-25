@@ -127,10 +127,13 @@ function buildToolbar() {
   if (matBtns) {
     for (const [t, label] of [["const", "const"], ["lorentz", "lorentz"]])
       matBtns.appendChild(mkLabeled("mat", t, "mat_" + t, label));
-    /* G20：library = 拟合对话框（nk 数据 → pole 入 cfg）。from_library
-     * 节点被内核拒收（类别错误），对话框是唯一正路。 */
-    const libBtn = mkLabeled("mat", "from_library", "mat_library", "library");
+    /* G20：library = 拟合对话框（pole 入 cfg）。不能复用 mkLabeled——
+     * 它挂的 addObject 会塞进线格式明确拒收的 from_library 死节点。 */
+    const libBtn = document.createElement("button");
+    libBtn.className = "tb-btn tb-add";
     libBtn.title = "库材料（nk → pole 拟合，按当前波段现算）";
+    libBtn.appendChild(previewEl("mat_library"));
+    libBtn.appendChild(document.createTextNode("library"));
     libBtn.addEventListener("click", () => openNkFitDialog());
     matBtns.appendChild(libBtn);
   }

@@ -376,6 +376,12 @@ def gateway_forward(method: str, path: str, *, key: str = "",
                             detail=f"会话不代拨该路径：/{path}")
     cred = (_stored_cred() if (_CRED_BROKER and not key) else {})
     headers = {}
+    # 体存在才挂 Content-Type——此前本参数是**死参数**（收了从没挂上）：
+    # 经 /gw 的 POST（裸 connect 脚本/console）到网关时无 CT，内核的
+    # FastAPI Body(dict) 会把 body 读成字符串 → 422 dict_type（2026-10-27
+    # D2 结构修法终验踩出；GET 无体不挂）。
+    if data is not None:
+        headers["Content-Type"] = content_type
     if key:
         headers["X-API-Key"] = key
     elif cred.get("api_key"):
