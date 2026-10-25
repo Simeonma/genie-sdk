@@ -84,6 +84,174 @@ def curve(group, mon: str, field: str):
     return axis_key, xs, ys, tag, is_cplx
 
 
+# ── n-D 取数尺（G148 R24c 批 1）───────────────────────────────────────
+#
+# 维度约定（批 0 钉死，源 = 内核 driver `_save_results_h5` +
+# `_monitor/_spatial_alloc.flatten_cells`，fdtd HEAD cb10220）：
+#   · 场数组 ≤ 2D：(n_samples|n_freqs, n_cells)——dim0 是谱/时间轴
+#     （组内 time/freqs 数据集即坐标）；dim1 是**展平格点**；
+#   · 格点 C 序：flat = k·ny·nx + j·nx + i（x 最快，z 最外）；
+#     x/y/z 数据集逐格点给坐标（Yee 交错位置）；
+#   · 反展平判据：n_cells == nx·ny·nz（坐标云唯一值数）且云可由
+#     唯一值按该序外积重建 → 规则子盒，reshape 成 (nz, ny, nx)；
+#     不满足（Yee 裁剪/退化钳位/六分量串接）→ 只提供 "cell" 轴
+#     （格点下标），不硬造网格。
+
+_SPATIAL_KEYS = ("x", "y", "z")
+
+
+def _unflatten_axis_map(group, n_cells: int) -> dict:
+    """坐标云 → 轴选择表 {轴名: 坐标 1D}（规则子盒时）。
+
+    返回 {} 表示无法反展平（调用方退 "cell" 轴）。严格校验：每条云
+    必须精确等于唯一值按 C 序（z 外 → y → x 最快）的外积展开——
+    差一个格都不认，防把 Yee 裁剪盒误读成规则网格。"""
+    clouds = {}
+    for ax in _SPATIAL_KEYS:
+        if ax in group:
+            c = np.asarray(group[ax][()])
+            if c.ndim != 1 or len(c) != n_cells:
+                return {}
+            clouds[ax] = c
+    if not clouds:
+        return {}
+    uniq = {ax: np.unique(c) for ax, c in clouds.items()}
+    n_prod = 1
+    for u in uniq.values():
+        n_prod *= len(u)
+    if n_prod != n_cells:
+        return {}
+    # C 序外积重建：轴序 z,y,x（x 最快 = meshgrid 最后一维）
+    present = [ax for ax in reversed(_SPATIAL_KEYS) if ax in uniq]
+    grids = np.meshgrid(*[uniq[ax] for ax in present], indexing="ij")
+    for ax, g in zip(present, grids):
+        if not np.array_equal(np.asarray(clouds[ax], dtype=np.float64),
+                              np.asarray(g.ravel(), dtype=np.float64)):
+            return {}
+    return uniq
+
+
+def select(group, field: str, *, axes: list | None = None,
+           slices: dict | None = None):
+    """n-D 取数尺（G148 单一真源）：h5 组 + 场 → 选轴视图。
+
+    - ``axes=None``（缺省）：**峰值列折叠**——与 ``curve()`` 同口径
+      （G142 定案），现 GUI 行为零漂移；
+    - ``axes=["x"]``：1D——指定轴为横轴；``axes=["y","x"]``：2D——
+      第一元素 = 横轴（x）、第二元素 = 纵轴（y），输出 data 形状
+      (len(y), len(x))；
+    - 可选轴名：``"time"``/``"freqs"``（谱/时间，dim0）+ 反展平成功
+      的 ``"x"``/``"y"``/``"z"`` + ``"cell"``（格点下标，无法反展平
+      时的空间轴）；
+    - ``slices={"axis": int}``：未选中的轴定切片，**缺省 = 峰值切片**
+      （对"其余全部轴做 max 归约后取 argmax"——每条轴独立决定，
+      全 NaN 退 0；与峰值列折叠同哲学）；
+    - 复数取模（``is_cplx`` 标记）。
+
+    返回 ``{"dim": 1|2, "x": {"key","values"}, "y": {...}|None,
+    "data": ndarray, "tag": str, "is_cplx": bool}``。场缺失 →
+    KeyError（G146 口径）；轴名/切片形状错 → ValueError 带定位。
+
+    维度约定见本节头注（批 0 钉死：场 ≤2D，dim1 = C 序展平格点
+    x 最快，规则子盒才可反展平为 (nz,ny,nx)）。"""
+    if field not in group:
+        raise KeyError(
+            f"field {field!r} not found in monitor group (present: "
+            f"{sorted(k for k in group if k not in _SPATIAL_KEYS)}")
+    arr = np.asarray(group[field][()])
+    is_cplx = np.iscomplexobj(arr)
+    data = np.abs(arr) if is_cplx else arr
+
+    # 可用轴表 + data 的轴序（order[i] ↔ data 第 i 维）
+    spec_key = next((k for k in ("freqs", "time") if k in group), None)
+    coords: dict[str, np.ndarray] = {}
+    order: list[str] = []
+    if data.ndim == 0:
+        data = data.reshape(1)
+    if data.ndim >= 3:
+        raise ValueError(
+            f"field {field!r} has {data.ndim} dims — expected ≤2 "
+            f"(spectral × flattened cells); the file violates the "
+            f"genie-results-h5/1 layout")
+    spec_ax = spec_key or "index"
+    coords[spec_ax] = (np.asarray(group[spec_key][()])
+                       if spec_key else np.arange(data.shape[0]))
+    order.append(spec_ax)
+    if data.ndim == 2:
+        n_cells = data.shape[1]
+        spatial = _unflatten_axis_map(group, n_cells)
+        if spatial:
+            for ax in reversed(_SPATIAL_KEYS):     # x 最快 = 最后一维
+                if ax in spatial:
+                    coords[ax] = spatial[ax]
+                    order.append(ax)
+        else:
+            coords["cell"] = np.arange(n_cells)
+            order.append("cell")
+        data = data.reshape([len(coords[a]) for a in order])
+
+    # 缺省视图 = 峰值列折叠（G142，与 curve() 同口径；mon 形参仅用于
+    # curve 的消息文案，select 面没有监视器名可传，占位空串）
+    if axes is None:
+        axis_key, xs, ys, tag, _ = curve(group, "", field)
+        return {"dim": 1, "x": {"key": axis_key or "index",
+                                "values": xs},
+                "y": None, "data": ys, "tag": tag, "is_cplx": is_cplx}
+
+    if not isinstance(axes, list) or not 1 <= len(axes) <= 2:
+        raise ValueError(
+            f"axes must be a list of 1 (1D) or 2 (2D) axis names, "
+            f"got {axes!r}")
+    for a in axes:
+        if a not in coords:
+            raise ValueError(
+                f"axis {a!r} not available for this field (available: "
+                f"{list(coords)}; spatial axes need a regular monitor "
+                f"sub-box — irregular point clouds only offer 'cell')")
+    if len(set(axes)) != len(axes):
+        raise ValueError(f"axes must be distinct, got {axes!r}")
+
+    slices = dict(slices or {})
+    pick: list = [None] * len(order)
+    for a in axes:
+        pick[order.index(a)] = slice(None)
+    for i, a in enumerate(order):
+        if pick[i] is not None:
+            continue
+        n = data.shape[i]
+        if a in slices:
+            v = slices.pop(a)
+            if isinstance(v, bool) or not isinstance(v, int) \
+                    or not 0 <= v < n:
+                raise ValueError(
+                    f"slice for axis {a!r} must be an int in [0, {n}), "
+                    f"got {v!r}")
+            pick[i] = v
+        else:
+            # 缺省 = 峰值切片：对"其余全部轴 max 归约"后 argmax
+            red = data.max(axis=tuple(j for j in range(len(order))
+                                      if j != i))
+            try:
+                pick[i] = int(np.nanargmax(red))
+            except ValueError:          # 全 NaN——退 0
+                pick[i] = 0
+    if slices:
+        raise ValueError(
+            f"slice keys for unknown/unselected axes: {sorted(slices)} "
+            f"(data axes here: {order})")
+    view = data[tuple(pick)]
+    if len(axes) == 1:
+        return {"dim": 1, "x": {"key": axes[0], "values": coords[axes[0]]},
+                "y": None, "data": np.asarray(view), "tag": "",
+                "is_cplx": is_cplx}
+    # 输出统一 (len(y), len(x))：view 轴序 = order 中保留的轴序
+    seq = [a for a in order if a in axes]
+    out = view if seq == [axes[1], axes[0]] else view.T
+    return {"dim": 2, "x": {"key": axes[0], "values": coords[axes[0]]},
+            "y": {"key": axes[1], "values": coords[axes[1]]},
+            "data": np.asarray(out), "tag": "", "is_cplx": is_cplx}
+
+
 def _extract(arrays: dict, prefix: str, name: str,
              axis_names: tuple[str, ...]) -> tuple[dict, dict]:
     """挑出 ``<prefix>@<name>.<field>`` 键 → (场分量 dict, 轴 dict)。"""

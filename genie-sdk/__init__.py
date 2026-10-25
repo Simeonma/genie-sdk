@@ -82,12 +82,33 @@ def _swap_connect(fn):
 # 注入 core 的 hooks——``import genie`` 即接线，core 永不反向 import 上层。
 # （2026-10-27 G19b 翻转：材质库 HTTP 回退 hook 已退役，材质库纯本地。）
 # 分层守卫 = tests/sdk/test_layering.py。
+def _push_visualize(sim, mon: str, field: str | None = None) -> None:
+    """G148 批 4b 腿 B：外部 SDK 的 ``f.visualize`` → 会话注入端点。
+
+    结果 h5 字节随行上传——外部作业的落盘在**用户机器**
+    （``_auto_save_result``），会话工作区读不到，推图即推数。
+    无门牌（无会话）= 明确报错指路；不做本地画图退化轨（站长定案）。"""
+    if getattr(sim, "_job_id", None) is None:
+        raise RuntimeError(
+            "visualize: 本实例还没有作业——先 f.run()（推的是该作业的"
+            "结果数据）")
+    from .studio.session_client import SessionClient
+    cli = SessionClient.discover()
+    if cli is None:
+        raise RuntimeError(
+            "visualize: 找不到本机会话门牌——先 `genie studio` 开会话"
+            "（在 Studio 里跑脚本则天然可用）；按定案无本地画图退化轨")
+    cli.result_inject(job_id=sim._job_id, mon=mon, field=field or "",
+                      data=sim._result_bytes())
+
+
 def _wire_core_hooks() -> None:
     from .core import preview as _preview, simulate as _simulate
     from .net.expert import ExpertSession
 
     _simulate._wire(
         expert_factory=lambda client: ExpertSession(client),
+        visualize=_push_visualize,
     )
     # 2026-10-27 G19b 翻转：材质库 HTTP 回退（remote_nk_fetch）退役——
     # 材质库纯本地（genie/nkdata 随包分发），材质面不再接线。

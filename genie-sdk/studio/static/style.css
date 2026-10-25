@@ -866,6 +866,20 @@ input::placeholder,textarea::placeholder {
   border: 1px solid var(--border-soft); border-radius: var(--radius);
   background: #fff;
 }
+/* G148 批 3：Plot 交互控件条（模式/轴选择/切片）——canvas 高度相应让位 */
+.plot-ctl {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: 6px 10px; margin-bottom: 8px;
+}
+.plot-ctl-lab {
+  font-size: var(--fs-xs, 11px); color: var(--text-secondary);
+}
+.plot-sel {
+  font-size: var(--fs-xs, 11px); padding: 1px 4px;
+  border: 1px solid var(--border-soft); border-radius: 4px;
+  background: var(--bg-primary, #fff); color: var(--text-primary);
+}
+.plot-head + .plot-ctl + .plot-canvas { height: calc(100% - 76px); }
 .plot-cta {
   margin-top: 14px; padding-top: 10px; border-top: 1px dashed var(--border-soft);
   display: flex; align-items: center; gap: 8px;

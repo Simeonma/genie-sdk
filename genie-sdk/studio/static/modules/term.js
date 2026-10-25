@@ -64,6 +64,13 @@ const SessionSync = {
           window.__mobileProgress(l.data || {});
         continue;
       }
+      if (kind === "plot" && l.data) {
+        /* G148 腿 A：会话内 f.visualize(mon, field) → Plot 面板自动
+         * 开卡（job_id 用实例自己的——外部注入腿带自己的 id）。 */
+        if (typeof addPlot === "function")
+          addPlot(l.data.mon, l.data.field, l.data.job_id);
+        continue;
+      }
       if (kind === "job-done" && l.data) {
         /* G13② 结果事件：会话里任何键盘跑完（或失败了结）的 run 都推到
          * 本页——记 job_id、清结果缓存、刷新结果卡与已开曲线（结果=投影）。

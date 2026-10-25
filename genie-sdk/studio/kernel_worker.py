@@ -132,8 +132,18 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         零网关形态（离线/直驱 harness）用 client=None：connect("") 会抛
         ValueError，空串还会回落 GENIE_URL（串网关风险），故显式分支。
         """
-        return (real_connect(sess_url, sess_key) if sess_url
-                else genie.Simulation(client=None))
+        s = (real_connect(sess_url, sess_key) if sess_url
+             else genie.Simulation(client=None))
+        # G148 腿 A（R24c 批 4）：会话内 f.visualize → ev:plot 事件 →
+        # GUI Plot 面板自动开卡。实例属性遮蔽 Simulation.visualize 的
+        # class 面（组合根未接线时的报错指路版本）——同 session_connect
+        # 的接管模式。
+        def _sim_visualize(mon, field=None, _s=s):
+            emit({"ev": "out", "kind": "plot",
+                  "data": {"mon": str(mon), "field": field,
+                           "job_id": _s._job_id}})
+        s.visualize = _sim_visualize
+        return s
 
     def _insts_of(namespace, sims_list) -> list:
         """某命名空间里"算数的实例全集"：connect 出来的 + 直建的 ns['f']。

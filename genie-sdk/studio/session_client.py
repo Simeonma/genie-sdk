@@ -156,8 +156,9 @@ class SessionClient:
                 detail=f"会话服务不可达（{self.base_url}）：{e}") from e
 
     def _json(self, method: str, path: str, *, json_body=None, params=None,
-              timeout=None) -> dict:
-        r = self._request(method, path, json_body=json_body, params=params,
+              data=None, content_type="", timeout=None) -> dict:
+        r = self._request(method, path, json_body=json_body, data=data,
+                          content_type=content_type, params=params,
                           timeout=timeout)
         if r.status_code >= 400:
             raise HTTPException(status_code=r.status_code,
@@ -233,11 +234,24 @@ class SessionClient:
 
     def result_series(self, *, owner: str = "", job_id: str, mon: str,
                       field: str, session_id: str = "",
-                      maxpoints: int = 1200) -> dict:
+                      maxpoints: int = 1200,
+                      axes: str = "", slices: str = "") -> dict:
         return self._json("GET", "/result/series", params={
             "job_id": job_id, "mon": mon, "field": field,
             "maxpoints": maxpoints, "owner": self._owner(owner),
-            "session_id": self._sid(session_id)})
+            "session_id": self._sid(session_id),
+            "axes": axes, "slices": slices})
+
+    def result_inject(self, *, owner: str = "", session_id: str = "",
+                      job_id: str, mon: str, field: str = "",
+                      data: bytes) -> dict:
+        """外部结果注入（G148 批 4b 腿 B）：h5 字节上传 + plot 事件
+        （外部 SDK 的 f.visualize 走这里——直连会话端口，不经 studio）。"""
+        return self._json("POST", "/result/inject", data=bytes(data),
+                          content_type="application/octet-stream", params={
+                              "job_id": job_id, "mon": mon, "field": field,
+                              "owner": self._owner(owner),
+                              "session_id": self._sid(session_id)})
 
     def health(self) -> dict:
         return self._json("GET", "/health")
@@ -422,8 +436,11 @@ def register_result_routes(app, *, owner_of,
 
     @app.get("/api/result/series")
     async def api_result_series(req: Request, job_id: str, mon: str,
-                                field: str, maxpoints: int = 1200) -> dict:
+                                field: str, maxpoints: int = 1200,
+                                axes: str = "",
+                                slices: str = "") -> dict:
         return await run_in_threadpool(
             cli.result_series, owner=owner_of(req),
             session_id=_sid_of(req), job_id=job_id,
-            mon=mon, field=field, maxpoints=maxpoints)
+            mon=mon, field=field, maxpoints=maxpoints,
+            axes=axes, slices=slices)

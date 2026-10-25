@@ -18,7 +18,102 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-from genie.core.results import AXIS_KEYS, curve
+from genie.core.results import AXIS_KEYS, curve, select
+
+
+def parse_view(axes: str | None, slices: str | None) -> dict | None:
+    """GET 查询串 → select() 的 view 参数（G148 批 2）。
+
+    ``axes="x,y"`` → ["x","y"]；``slices="z:1,time:0"`` →
+    {"z":1,"time":0}。``axes`` 空 → None（缺省峰值列折叠视图，
+    行为零漂移）；slices 无 axes → ValueError（没有选轴就没有切片面）。
+    """
+    if not axes:
+        if slices:
+            raise ValueError("slices 需要 axes（先选轴再定切片）")
+        return None
+    ax = [a.strip() for a in str(axes).split(",") if a.strip()]
+    if not 1 <= len(ax) <= 2:
+        raise ValueError("axes 必须是 1 个（1D）或 2 个（2D）轴名")
+    sl: dict[str, int] = {}
+    if slices:
+        for part in str(slices).split(","):
+            k, sep, v = part.strip().partition(":")
+            if not sep or not k.strip() or not v.strip().lstrip("-").isdigit():
+                raise ValueError(
+                    f"slices 形如 '轴:下标'，拿到 {part!r}")
+            sl[k.strip()] = int(v)
+    return {"axes": ax, "slices": sl}
+
+
+def _pool_max(a: np.ndarray, axis: int, n_target: int) -> np.ndarray:
+    """max-pool 到 ≤ n_target（保峰值结构——峰值列折叠同哲学）。
+
+    块内用 nanmax（NaN 不劫持峰值，G142 口径；全 NaN 块保 NaN）；
+    尾部不足一块的余量丢弃（可视化降采样，非取数语义）。"""
+    n = a.shape[axis]
+    if n <= n_target:
+        return a
+    import warnings
+    stride = math.ceil(n / n_target)
+    k = (n // stride) * stride
+    sl = [slice(None)] * a.ndim
+    sl[axis] = slice(0, k)
+    trimmed = a[tuple(sl)]
+    new_shape = list(trimmed.shape)
+    new_shape[axis] = k // stride
+    new_shape.insert(axis + 1, stride)
+    blocks = trimmed.reshape(new_shape)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        out = np.nanmax(blocks, axis=axis + 1)
+    return out
+
+
+def series(h5path: Path, mon: str, field: str, maxpoints: int = 1200,
+           axes: list | None = None,
+           slices: dict | None = None) -> dict:
+    """结果视图：1D 降采样曲线（缺省）或选轴 1D/2D（G148 批 2）。
+
+    曲线本体 = core.results 取数尺单一真源——缺省视图 ``curve()``
+    （G96/R19，峰值列折叠；不传 axes 行为零漂移），选轴视图
+    ``select()``（G148：任意轴 1D / 2D 切面，未选轴缺省峰值切片）。
+    2D 降采样 = 每轴独立 max-pool 到 ≤ maxpoints（保峰值）。
+    响应 2D 形态：``z`` = 行列表（行 = y 轴，列 = x 轴），外加
+    ``y_label/y``；1D 形态与历史一致，另加 ``dim`` 字段。"""
+    with h5py.File(h5path, "r") as f:
+        if mon not in f or field not in f[mon]:
+            raise KeyError(f"监视器/场不存在: {mon}/{field}")
+        view = (select(f[mon], field, axes=axes, slices=slices)
+                if axes is not None else None)
+        if view is None:
+            axis_key, xs, ys, _tag, _cplx = curve(f[mon], mon, field)
+            view = {"dim": 1, "x": {"key": axis_key or "idx",
+                                    "values": xs}, "y": None, "data": ys}
+    if view["dim"] == 1:
+        ys = np.asarray(view["data"])
+        xs = np.asarray(view["x"]["values"])
+        n = int(min(maxpoints, len(ys))) if maxpoints > 0 else len(ys)
+        stride = max(1, math.ceil(len(ys) / max(1, n)))
+        return {"ok": True, "mon": mon, "field": field, "dim": 1,
+                "x_label": view["x"]["key"],
+                "x": [float(v) for v in xs[::stride]],
+                "y": [float(v) for v in ys[::stride]],
+                "peak": float(np.max(ys)) if len(ys) else 0.0}
+    z = np.asarray(view["data"], dtype=float)
+    if maxpoints > 0:
+        z = _pool_max(z, 0, maxpoints)      # 轴 0 = y
+        z = _pool_max(z, 1, maxpoints)      # 轴 1 = x
+    yv = np.asarray(view["y"]["values"])
+    xv = np.asarray(view["x"]["values"])
+    sy = max(1, math.ceil(len(yv) / z.shape[0]))
+    sx = max(1, math.ceil(len(xv) / z.shape[1]))
+    return {"ok": True, "mon": mon, "field": field, "dim": 2,
+            "x_label": view["x"]["key"], "y_label": view["y"]["key"],
+            "x": [float(v) for v in xv[::sx]],
+            "y": [float(v) for v in yv[::sy]],
+            "z": [[float(v) for v in row] for row in z],
+            "peak": float(np.nanmax(z)) if z.size else 0.0}
 
 
 def results_dir(owner_dir: Path, session_id: str | None = None) -> Path:
@@ -58,7 +153,11 @@ def latest_result(owner_dir: Path, session_id: str | None = None) -> Path | None
 
 
 def meta(h5path: Path) -> dict:
-    """结构清单：监视器/场/轴 + 根 attrs（GUI 结果面板与 Plot 建卡）。"""
+    """结构清单：监视器/场/轴 + 轴长 + 根 attrs（GUI 结果面板与 Plot 建卡）。
+
+    ``axes_len``（G148 批 3）：每条轴的元素数——Plot 面板的切片滑条/
+    下拉需要；轴是否真能当视图轴由 select() 裁决（不规则点云只给
+    cell），meta 只报在场事实。"""
     with h5py.File(h5path, "r") as f:
         mons = []
         for name, grp in f.items():
@@ -67,7 +166,11 @@ def meta(h5path: Path) -> dict:
                 "name": name,
                 "domain": str(grp.attrs.get("domain", "")),
                 "fields": sorted(k for k in keys if k not in AXIS_KEYS),
-                "axes": sorted(k for k in keys if k in AXIS_KEYS)})
+                "axes": sorted(k for k in keys if k in AXIS_KEYS),
+                "axes_len": {k: int(grp[k].shape[0])
+                             for k in keys if k in AXIS_KEYS
+                             and getattr(grp[k], "shape", None)
+                             and len(grp[k].shape) >= 1}})
         st = {
             "ok": True,
             "job_id": h5path.name.removesuffix("_results.h5"),
@@ -76,29 +179,6 @@ def meta(h5path: Path) -> dict:
             "grid_shape": [int(v) for v in f.attrs.get("grid_shape", [])],
             "monitors": mons}
     return st
-
-
-def series(h5path: Path, mon: str, field: str,
-           maxpoints: int = 1200) -> dict:
-    """降采样曲线：|复数| 取模；体监视器（任意维）折叠成峰值格点列。
-    x 轴 = 第一个出现的轴（freqs/time/x/y/z），缺失时用下标。
-
-    曲线本体 = core.results.curve（G96/R19 取数尺单一来源——此前
-    轴优先级/取模/峰值列在本文件与 SimData.plot 各写一份，无相等锁；
-    两侧一致性由 test_results_equivalence 锁死）。"""
-    with h5py.File(h5path, "r") as f:
-        if mon not in f or field not in f[mon]:
-            raise KeyError(f"监视器/场不存在: {mon}/{field}")
-        axis_key, xs, ys, _tag, _cplx = curve(f[mon], mon, field)
-    n = int(min(maxpoints, len(ys))) if maxpoints > 0 else len(ys)
-    stride = max(1, math.ceil(len(ys) / max(1, n)))
-    xs = (xs if xs is not None else np.arange(len(ys)))[::stride]
-    ysel = ys[::stride]
-    return {"ok": True, "mon": mon, "field": field,
-            "x_label": axis_key or "idx",
-            "x": [float(v) for v in xs],
-            "y": [float(v) for v in ysel],
-            "peak": float(np.max(ys)) if len(ys) else 0.0}
 
 
 def prune_over_quota(dir_: Path, quota_bytes: int) -> list[str]:

@@ -224,7 +224,10 @@ def result_meta(job_id: str = "", owner: str = "user",
 @app.get("/result/series")
 def result_series(job_id: str, mon: str, field: str,
                   maxpoints: int = 1200, owner: str = "user",
-                  session_id: str = DEFAULT_SESSION) -> dict:
+                  session_id: str = DEFAULT_SESSION,
+                  axes: str = "", slices: str = "") -> dict:
+    """1D 曲线（缺省峰值列折叠）或选轴 1D/2D 视图（G148 批 2：
+    axes="x,y" / slices="z:1,time:0"）。"""
     from pathlib import Path
     from genie.studio import results_view
     try:
@@ -235,9 +238,44 @@ def result_series(job_id: str, mon: str, field: str,
     if not p.is_file():
         raise HTTPException(status_code=404, detail="结果文件不存在")
     try:
-        return results_view.series(p, mon, field, maxpoints)
+        view = results_view.parse_view(axes, slices)
+        return results_view.series(p, mon, field, maxpoints,
+                                   axes=(view or {}).get("axes"),
+                                   slices=(view or {}).get("slices"))
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@app.post("/result/inject")
+async def result_inject(request: Request, owner: str = "user",
+                        session_id: str = DEFAULT_SESSION,
+                        job_id: str = "", mon: str = "",
+                        field: str = "") -> dict:
+    """外部结果注入（G148 批 4b 腿 B）：body = results h5 字节 →
+    落会话工作区结果目录 + ``plot`` 事件入输出环（GUI Plot 面板
+    自动开卡）。为什么上传字节：外部 SDK 作业的落盘在**用户机器**
+    （``_auto_save_result``），会话工作区读不到——推图即推数。"""
+    from pathlib import Path
+    from genie.studio import results_view
+    if not job_id or not mon:
+        raise HTTPException(status_code=422, detail="job_id/mon 必填")
+    try:
+        p = results_view.result_path(Path(workspace_root()) / owner,
+                                     job_id, session_id)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=422,
+                            detail="body = 结果 h5 字节，不能为空")
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(body)
+    os.chmod(p, 0o600)
+    get_kernel(owner, session_id).emit_external(
+        "plot", {"job_id": job_id, "mon": mon, "field": field or None})
+    return {"ok": True, "job_id": job_id}
 
 
 # ── 唯一网关出口 ────────────────────────────────────────────────

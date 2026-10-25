@@ -504,6 +504,12 @@ class SessionKernel:
                 del self._lines[: len(self._lines) - MAX_LINES]
             self._ring_append(entry)   # B2：append 环后同步落盘一行
 
+    def emit_external(self, kind: str, data: dict) -> None:
+        """外部事件注入（G148 批 4b 腿 B）：外部 SDK 进程经会话服务
+        /result/inject 推 GUI 事件。走 ``_emit`` 环唯一写入口——seq/
+        落盘/GUI 轮询语义与 worker 事件完全同轨（origin="external"）。"""
+        self._emit(kind, "", "external", data=data)
+
     def _op_end(self, eid) -> None:
         """销账：只认自己那一号。attach 的回执是 -1，天然销不掉任何 op。"""
         with self._lock:

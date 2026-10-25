@@ -368,6 +368,23 @@ class Simulation:
         if self._job_id:
             return self._client.cancel(self._job_id)
 
+    def visualize(self, mon: str, field: str | None = None) -> None:
+        """把该监视器推到 Studio 的 Plot 交互面板（G148 定案：交互只住
+        GUI——SDK 面零 matplotlib）。两条触发腿：**会话内脚本**（Studio
+        编辑器/终端——worker 给实例注入会话版 visualize，emit ``plot``
+        事件，本方法被实例属性遮蔽）；**外部 SDK 进程**（组合根 hook →
+        会话注入端点，G148 批 4b）。未接线（无会话）= 明确报错指路。
+        自由画图不是产品面：拿 ``results()`` 的 ndarray 自己写 Python。"""
+        hook = hooks.get("visualize")
+        if hook is None:
+            raise RuntimeError(
+                "visualize needs a GUI session — open `genie studio` and "
+                "run the script inside it (the session wires visualize), "
+                "or connect via a session (bare connect) for the external "
+                "push channel; there is no local plotting fallback by "
+                "design (G148)")
+        return hook(self, mon, field)
+
     def _auto_save_result(self) -> None:
         """run() 成功后自动下载结果到 SDK 所在电脑（genie-results-h5/1，
         2026-10-09 站长裁决：SDK 用户的仿真结果应当机落盘）。

@@ -69,6 +69,34 @@ data.plot("tr", "Ey", ax=ax)         # overlay
 dependency — install `genie-sdk[plot]`); for volume monitors it plots the
 peak grid point curve by default.
 
+> **Deprecation note (2026-10):** `data.plot` is being retired in favor of
+> `f.visualize` — interactive plotting lives in the Studio GUI by design
+> (zero matplotlib on the SDK side). `plot` will be removed at the next
+> breaking release; for free-form figures, take the ndarray
+> (`data["tr"]["Ex"]`) and use any Python plotting library you like.
+
+## f.visualize()
+
+Push a monitor's result to the Studio **Plot panel** — the interactive
+result browser (1D curves with any axis as x, 2D cross-sections with any
+two axes as x/y, slice pickers for the remaining axes, hover readouts,
+zoom). Two trigger paths, one experience:
+
+- **Inside a Studio session** (script editor / terminal): the session wires
+  `f.visualize` for you.
+- **Outside** (your own terminal, bare `genie.connect()`): the result h5 is
+  uploaded to your session and the Plot panel opens automatically.
+
+```python
+f.run()
+f.visualize("tr")            # default field
+f.visualize("tr", "Ex")      # explicit field component
+```
+
+Requires a GUI session (open `genie studio` first); there is no local
+plotting fallback by design — for custom figures, read the ndarrays from
+`results()` and plot them yourself.
+
 **Common pitfalls**
 
 - Slice lazy h5py reads wherever possible (`data.tr.Ex[:, 0]`) instead of

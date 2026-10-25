@@ -77,10 +77,14 @@ class LocalSessionHost:
 
     def result_series(self, *, owner: str, job_id: str, mon: str, field: str,
                       session_id: str = DEFAULT_SESSION,
-                      maxpoints: int = 1200) -> dict:
+                      maxpoints: int = 1200,
+                      axes: str = "", slices: str = "") -> dict:
+        # G148 批 3：axes/slices 选轴视图透传（G115 双写面的既声明代价
+        # ——改 /result/series 签名须同轮改本镜像，e2e 亲验抓出）。
         return _svc.result_series(job_id=job_id, mon=mon, field=field,
                                   maxpoints=maxpoints, owner=owner,
-                                  session_id=session_id)
+                                  session_id=session_id,
+                                  axes=axes, slices=slices)
 
     def health(self) -> dict:
         return _svc.health()
