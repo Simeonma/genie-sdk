@@ -139,6 +139,15 @@ def _apply_bin(op, a: float, b: float, ctx: str) -> float:
     except OverflowError:
         raise ExprError(
             "math", f"{ctx} overflow ({a!r} and {b!r})") from None
+    except TypeError as e:   # G117：如 Mod/Pow 在病态输入下的实现层 TypeError
+        raise ExprError("math", f"{ctx} numeric type error: {e}") from None
+    if isinstance(v, complex):
+        # G117：负底分数幂 Python 返回 complex（(-8)**(1/3)）——本求值器
+        # 只产实数，complex 结果即 math 档（此前 math.isfinite(complex)
+        # 抛裸 TypeError 逃出 ExprError 契约，422 策展变 500）。
+        raise ExprError(
+            "math", f"{ctx} produced a complex result ({v!r}) — negative "
+            "base with fractional exponent is not supported")
     return _check_finite(v, ctx)
 
 
@@ -187,7 +196,15 @@ def eval_expr(expr: str, env: dict[str, float] | None = None) -> float:
                     "nonatomic",
                     f"constant must be numeric, got {v!r} "
                     f"({type(v).__name__})")
-            return float(v)
+            try:
+                fv = float(v)
+            except OverflowError:   # G118：千位级整数字面量超 float 域
+                raise ExprError(
+                    "math", f"constant {v!r} out of float range") from None
+            # G118：1e400 在 AST 里已是 inf 常量——Constant 出口同样
+            # 过 _check_finite（此前静默返回 inf，违反本 docstring 的
+            # "结果非有限 → ExprError" 自宣契约）。
+            return _check_finite(fv, "constant")
         if isinstance(node, ast.Name):
             if node.id in env:
                 return float(env[node.id])
@@ -248,7 +265,13 @@ def eval_expr(expr: str, env: dict[str, float] | None = None) -> float:
             "Constant/Name/BinOp(+-*/%**)/UnaryOp(+-)/"
             "Call(abs,min,max,sqrt)/primary[unit] unit suffix)")
 
-    return ev(tree)
+    # G117：深嵌套表达式在 ev 递归里炸 RecursionError——ExprError 是唯一
+    # 错误面（调用方按 except ExprError 生存），统一收进 syntax 档。
+    try:
+        return ev(tree)
+    except RecursionError:
+        raise ExprError(
+            "syntax", "expression too deeply nested") from None
 
 
 def resolve_parameter_table(params: dict) -> dict[str, float]:
@@ -314,8 +337,13 @@ def resolve_parameter_table(params: dict) -> dict[str, float]:
             return len(params)
 
     _lazy_env = _LazyEnv()
-    for name in params:
-        get(name)
+    try:
+        for name in params:
+            get(name)
+    except RecursionError:   # G117：千级参数引用链同理收进错误面
+        raise ExprError(
+            "cycle", "parameter reference chain too deep (possible very "
+            "long reference chain)") from None
     return resolved
 
 

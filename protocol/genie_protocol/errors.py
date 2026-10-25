@@ -19,6 +19,9 @@ from __future__ import annotations
 
 from typing import Any
 
+__all__ = ["GenieError", "GenieConfigError", "GenieHTTPError",
+           "GenieJobError"]
+
 
 class GenieError(Exception):
     """SDK 基础异常。``status`` = HTTP 状态码（非 HTTP 来源为 None），

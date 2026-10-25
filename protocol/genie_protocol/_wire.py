@@ -59,15 +59,50 @@ from pydantic import (
 from .expr import valid_param_name
 
 
+def _walk_finite(v, path: str) -> None:
+    """数值 isfinite 全量游走（G118 一双手）：float 逐个查；容器递归；
+    None/str/bool/嵌套模型跳过（模型自带本守卫）。"""
+    if v is None or isinstance(v, (bool, str)):
+        return
+    if isinstance(v, float):
+        if not math.isfinite(v):
+            raise ValueError(f"{path} must be finite (got {v!r})")
+    elif isinstance(v, (tuple, list)):
+        for x in v:
+            _walk_finite(x, path)
+    elif isinstance(v, dict):
+        for x in v.values():
+            _walk_finite(x, path)
+
+
+# isfinite 全量游走的唯一豁免：vertices 的 (nan, nan) 哨兵对
+# （_ser_vertices_json 序列化为 [null,null]，2026-10-15 事故定案）。
+_NAN_OK_FIELDS = frozenset({"vertices"})
+
+
 class _StrictModel(BaseModel):
     """线格式纪律（P1 定案 2026-09）：未知字段一律 422 拒绝。
 
     pydantic 默认 ``extra="ignore"`` 曾意味着：可选字段拼错（如
     ``prioraty``）被**静默丢弃**，仿真以默认值跑完——静默的错误物理。
     严格化后所有客户端（curl/UI/SDK/agent）统一大声报错；存量
-    payload 均为已校验的干净形状，回归全绿（见 test_schema.py）。"""
+    payload 均为已校验的干净形状，回归全绿（见 test_schema.py）。
+
+    数值字段全量 isfinite（G118，R16 轮）：NaN/Inf 一律拒——``gt/ge``
+    约束拦不住 inf（``inf > 0`` 成立），NaN 比较全 False 只被"恰有
+    数值约束的字段"顺带拦住。这是 2026-08-31 "eps=inf 穿 >0 静默
+    build" 教训的推广（当年只修了 eps 系）。唯一豁免 =
+    ``vertices`` 的 (nan, nan) 哨兵对（序列化为 [null, null]）。"""
 
     model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="after")
+    def _reject_nonfinite(self):
+        for name in type(self).model_fields:
+            if name in _NAN_OK_FIELDS:
+                continue
+            _walk_finite(getattr(self, name), name)
+        return self
 
 
 # ---------------------------------------------------------------------------
