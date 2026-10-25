@@ -16,7 +16,8 @@
    （本地 ``genie studio`` 与 Pyodide 网页端 ``studio/web.py`` 共用）；
    ``False`` = 纯静态壳。
 
-preview 在本地 Python 端点执行——本端点直接调 ``genie.preview_script``。
+脚本预览经会话执行面（/api/exec）驱动，Studio 不再有独立的 preview 端点
+（G50 已删；``genie.preview_script`` 由 MCP/agent 工具面直接调用）。
 """
 from __future__ import annotations
 
@@ -106,7 +107,6 @@ def create_app(*, static_dir: str | Path | None = None,
     能力一律要求 `X-API-Key`（GUI 登录 token）。env ``GENIE_STUDIO_OPEN=1``
     可显式退回"本机免登录"形态（调试/纯本地离线场景）。
     """
-    preview = genie.preview_script
     static = Path(static_dir) if static_dir else _STUDIO
     # B1 按人隔离：req → owner。缺省 = 本地形态固定 owner（M1 遗留：本地
     # 单用户，owner 不跟随登录账号；见 LEDGER）。

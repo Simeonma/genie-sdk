@@ -166,8 +166,11 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         if not insts:
             return {}
         cfgs = [s.to_config() for s in insts]
+        # R24（S1）：单实例也过 nan_to_none——JSON 安全化与实例数无关
+        # （修前 len==1 直通原文，用户脚本算出的 nan 会以裸 NaN 字面量
+        # 进 emit 的 json.dumps，浏览器 JSON.parse 丢整条 cfg 事件）。
         from genie.core.preview import merge_configs, nan_to_none
-        return nan_to_none(merge_configs(cfgs)) if len(cfgs) > 1 else cfgs[0]
+        return nan_to_none(merge_configs(cfgs))
 
     def current_config() -> dict:
         """会话当前模型（合并后的线格式 dict）。"""

@@ -136,6 +136,35 @@ def _validate_for_submit(cfg: dict) -> None:
         + "\n  ".join(lines))
 
 
+def _apply_run_kwargs(sim: "Simulation", gpu: int | None,
+                      timeout_s: int | None) -> None:
+    """run() kwargs 的共享提交纪律（G102，R24 收敛）：已提交改参拒 +
+    R23 S1 整数槽（float/bool/str 全拒）。``Simulation.run`` 与
+    ``_PreviewSim.run``（core/preview）同一双手——修前三处纪律
+    （改参拒极性/整数收编/异常文案）各漂移一份，parity 锁 =
+    tests/sdk/test_preview_submit_parity.py。"""
+    if sim._job_id is not None and any(v is not None for v in (gpu, timeout_s)):
+        raise RuntimeError(
+            "cannot change gpu/timeout_s after submission (the "
+            "config was already sent) — create a new connect() "
+            "instance and reconfigure")
+    if gpu is not None:
+        # R23 S1：对齐 builder 整数槽纪律——int() 静默收编
+        # （2.5→2、True→1、"2"→2）会带错误数量语义；这里不是
+        # 表达式槽，str 也拒（站长裁"全拒，要求传 int"）。
+        if isinstance(gpu, bool) or not isinstance(gpu, int):
+            raise TypeError(
+                f"gpu: optional cap — pass an int (e.g. gpu=2), "
+                f"got {type(gpu).__name__}: {gpu!r}")
+        sim._cfg.run.gpu = gpu
+    if timeout_s is not None:
+        if isinstance(timeout_s, bool) or not isinstance(timeout_s, int):
+            raise TypeError(
+                f"timeout_s: pass an int (seconds), got "
+                f"{type(timeout_s).__name__}: {timeout_s!r}")
+        sim._cfg.run.timeout_s = timeout_s
+
+
 class Simulation:
     """一次云端仿真的全部状态：本地配置 + 作业生命周期 + 结果缓存。
 
@@ -317,26 +346,7 @@ class Simulation:
                 + "; to re-run, create a new connect() instance")
         # K4：锁内完成"改参检查 + 参数落 cfg + 提交"（并发 run() 防双提交）
         with self._run_lock:
-            if self._job_id is not None and any(v is not None for v in (gpu, timeout_s)):
-                raise RuntimeError(
-                    "cannot change gpu/timeout_s after submission (the "
-                    "config was already sent) — create a new connect() "
-                    "instance and reconfigure")
-            if gpu is not None:
-                # R23 S1：对齐 builder 整数槽纪律——int() 静默收编
-                # （2.5→2、True→1、"2"→2）会带错误数量语义；这里不是
-                # 表达式槽，str 也拒（站长裁"全拒，要求传 int"）。
-                if isinstance(gpu, bool) or not isinstance(gpu, int):
-                    raise TypeError(
-                        f"gpu: optional cap — pass an int (e.g. gpu=2), "
-                        f"got {type(gpu).__name__}: {gpu!r}")
-                self._cfg.run.gpu = gpu
-            if timeout_s is not None:
-                if isinstance(timeout_s, bool) or not isinstance(timeout_s, int):
-                    raise TypeError(
-                        f"timeout_s: pass an int (seconds), got "
-                        f"{type(timeout_s).__name__}: {timeout_s!r}")
-                self._cfg.run.timeout_s = timeout_s
+            _apply_run_kwargs(self, gpu, timeout_s)
             if self._job_id is None:
                 self._submit()
         self.state = "running"

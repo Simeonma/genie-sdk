@@ -42,7 +42,7 @@ import traceback
 from contextlib import redirect_stdout
 from typing import Any
 
-from .simulate import Simulation
+from .simulate import Simulation, _apply_run_kwargs
 
 __all__ = ["preview_script"]
 
@@ -111,10 +111,10 @@ class _PreviewSim(Simulation):
     # ---- 生命周期（录制，不提交）----
 
     def _submit(self) -> "_PreviewSim":
-        if getattr(self._cfg.domain, "total_time", None) is None:
-            raise RuntimeError(
-                "domain.total_time 缺失（唯一时间定义，SI 秒 >0）——"
-                "先 f.domain.total_time = 6e-14 再提交")
+        # G98（R24 站长裁"删硬门，兑现宽容"）：preview 对半成品宽容——
+        # 缺必填是常态，total_time 门只在真提交边界（Simulation._submit）
+        # 有意义；预览只录占位 id。异常型/文案手抄（G85 修复前的中文旧版）
+        # 随本门一并消解。
         self._job_id = "preview"          # 占位 id：防同实例二次提交语义漂移
         self.state = "built"
         return self
@@ -122,18 +122,15 @@ class _PreviewSim(Simulation):
     def run(self, *, gpu: int | None = None,
             timeout_s: int | None = None, poll_interval: float = 2.0,
             progress=None) -> "_PreviewSim":
-        """录制 run 节后即视为完成（不提交、不轮询）。参数语义与真 run
-        完全一致（同款收集与防重复提交纪律）；与真 run 不同处：不过
-        提交边界预检——preview 对半成品宽容（缺必填是常态，GUI 只显示
-        已建造部分）。"""
-        if self._job_id is not None and any(v is not None for v in (gpu, timeout_s)):
-            raise RuntimeError(
-                "已提交的作业不能再改 gpu/timeout_s（配置已发出）——"
-                "新建 connect() 实例重配")
-        if gpu is not None:
-            self._cfg.run.gpu = int(gpu)
-        if timeout_s is not None:
-            self._cfg.run.timeout_s = int(timeout_s)
+        """录制 run 节后即视为完成（不提交、不轮询）。kwargs 纪律与真
+        run 共享同一双手（``simulate._apply_run_kwargs``，G102 R24 收敛：
+        改参拒/R23 S1 整数槽一处实现）；done 态重入 = 幂等返回（与真面
+        G136 挡板同极性，R24 站长裁 F4）；与真 run 不同处：不过提交边界
+        预检——preview 对半成品宽容（缺必填是常态，GUI 只显示已建造
+        部分）。"""
+        if self.state == "done":
+            return self
+        _apply_run_kwargs(self, gpu, timeout_s)
         if self._job_id is None:
             self._submit()
         self.state = "done"
@@ -141,6 +138,17 @@ class _PreviewSim(Simulation):
 
     def sweep(self, *a: Any, **k: Any) -> _Inert:
         return _Inert()
+
+    def results(self, job_id: str | None = None) -> _Inert:
+        """G160（R24 站长裁"补覆写+锁"）：预览不执行作业——results 与
+        get_* 同为宽容占位（修前漏覆写，`_client=None` 直接 AttributeError
+        崩预览，手册 09 的后处理写法在 live 通道整份进 preview 必炸）。"""
+        return _Inert()
+
+    def cancel(self) -> None:
+        """G160（R24）：预览无作业可取消——与真面"无作业返回 None"
+        同语义（修前漏覆写走 `_client.cancel` 崩）。"""
+        return None
 
     def get_time(self, name: str | None = None) -> _Inert:
         return _Inert()
@@ -225,9 +233,11 @@ def preview_script(source: str, *, label: str = "<genie脚本>") -> dict:
     # ② exec：connect 换零网络工厂 + stdout 捕获；finally 恢复
     sims: list[_PreviewSim] = []
 
-    def _fake_connect(base_url: str | None = None, api_key: str | None = None,
-                      username: str | None = None, *, timeout: float = 30.0
-                      ) -> "_PreviewSim":
+    def _fake_connect(*args: Any, **kwargs: Any) -> "_PreviewSim":
+        # G97（R24 站长裁"全吞"）：预览不消费任何凭据/地址参数，签名与
+        # 公开面 connect 全吞对齐（同 kernel_worker 的 session_connect）
+        # ——公开面今后加参数，预览面结构上不可能再 TypeError（修前
+        # 带 password 的文档化直连轨脚本预览直接崩）。
         sim = _PreviewSim()
         sims.append(sim)
         return sim
