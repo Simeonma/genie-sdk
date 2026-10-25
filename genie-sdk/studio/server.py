@@ -34,6 +34,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 
 import genie
+from genie.models import LIBRARY_FIT_DEFAULTS
 
 # 工作区根**唯一解析点**（M2）：此前 studio 侧另有一份 GENIE_SCRIPTS_DIR
 # 解析，只设 GENIE_SESSION_CWD 时两处得出不同根目录——"文件面板看不到
@@ -289,11 +290,18 @@ def create_app(*, static_dir: str | Path | None = None,
                     data = tuple(cols)
                 return fit_nk(
                     data,
-                    fit_range=tuple(body.get("fit_range") or (4e-7, 8e-7)),
-                    # 缺键才用默认：`or 默认`会把合法的 0（0+0 极点拟合）吞掉。
-                    n_drude=int(body.get("n_drude", 0)),
-                    n_lorentz=int(body.get("n_lorentz", 2)),
-                    maxfev=int(body.get("maxfev", 5000)),
+                    # 缺省 = 正典 LIBRARY_FIT_DEFAULTS（G87 清账 2026-10-27：
+                    # 此前手抄四字面量，单一来源锁扫不到端点这层）。
+                    # `or 默认`只用在 fit_range：缺键才回退，0 是合法值
+                    # （0+0 极点拟合）不能吞。
+                    fit_range=tuple(body.get("fit_range")
+                                    or LIBRARY_FIT_DEFAULTS["fit_range"]),
+                    n_drude=int(body.get("n_drude",
+                                         LIBRARY_FIT_DEFAULTS["n_drude"])),
+                    n_lorentz=int(body.get("n_lorentz",
+                                           LIBRARY_FIT_DEFAULTS["n_lorentz"])),
+                    maxfev=int(body.get("maxfev",
+                                        LIBRARY_FIT_DEFAULTS["maxfev"])),
                     name=body.get("name"))
             return await run_in_threadpool(_fit)
 

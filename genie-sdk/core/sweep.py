@@ -27,6 +27,7 @@ import time as _time
 from pathlib import Path
 from typing import Any, Callable
 
+from .job_state import TERMINAL_BAD, TERMINAL_OK
 from ..models.errors import GenieHTTPError, GenieJobError
 
 from ..models import SweepSpec
@@ -171,8 +172,10 @@ class SweepHandle:
         pending → running → done | canceled（abort/取消）/ failed（全灭）
     """
 
-    _GOOD = "succeeded"
-    _BAD = ("failed", "killed")
+    # 子作业终态词表 = 正典 core.job_state（G91：旧手抄漏 archived，整批
+    # 归档时 sweep 终态误报 done）。
+    _GOOD = TERMINAL_OK
+    _BAD = TERMINAL_BAD
     _INFLIGHT = ("queued", "running")
 
     def __init__(self, client: Any, config: dict, spec: dict):

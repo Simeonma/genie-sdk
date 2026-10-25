@@ -164,21 +164,22 @@ def cmd_console(args: argparse.Namespace) -> int:
 
 def cmd_connect(args: argparse.Namespace) -> int:
     """``genie connect``：写/看本机身份配置（G72a 零配置面的入口动作）。"""
-    from genie.net.config import (DEFAULT_GATEWAY, config_path, load_config,
-                                  resolve_gateway, save_config)
+    from genie.net.config import (config_path, gateway_source, load_config,
+                                  save_config)
 
     url = (args.url or "").strip().rstrip("/")
     if not url:
-        # 无 url = 展示当前解析结果（不泄露 key）
+        # 无 url = 展示当前解析结果（不泄露 key）。链与归一 = 真源
+        # gateway_source（G101 清账：手抄链不归一时，展示的地址会和
+        # 实际拨号地址字形不同）。
         cfg = load_config()
-        try:
-            gw = resolve_gateway(None)
-            src = ("env GENIE_URL" if os.environ.get("GENIE_URL")
-                   else "credentials.json" if cfg.get("gateway")
-                   else "内置缺省" if DEFAULT_GATEWAY else "?")
-            print(f"✓ 当前网关：{gw}   （来源：{src}）")
-        except Exception as e:  # noqa: BLE001
-            print(f"✗ {e}")
+        gw, src = gateway_source()
+        _SRC_ZH = {"env": "env GENIE_URL", "config": "credentials.json",
+                   "default": "内置缺省"}
+        if gw:
+            print(f"✓ 当前网关：{gw}   （来源：{_SRC_ZH.get(src, src)}）")
+        else:
+            print("✗ 未配置网关地址（genie connect <服务地址>）")
         print(f"  配置文件：{config_path()}")
         user = cfg.get("username")
         if user:

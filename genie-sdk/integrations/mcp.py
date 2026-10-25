@@ -265,22 +265,17 @@ def _list_materials() -> dict:
 
 
 def _login_status() -> dict:
-    """本机登录/配置状态（零网络；token 本身绝不出现）。"""
-    import os
+    """本机登录/配置状态（零网络；token 本身绝不出现）。
 
-    from ..net.config import DEFAULT_GATEWAY, load_config
+    网关链与 logged_in 判定都走真源（net.config.gateway_source /
+    resolve_credential——G101 清账 2026-10-27，此前手抄份不 strip/不去
+    尾斜杠，报给 agent 的地址可与实际拨号地址字形不同）。
+    """
+    from ..net.config import gateway_source, load_config, resolve_credential
 
     cfg = load_config()
-    has_cfg_gw = bool(cfg.get("gateway"))
-    if os.environ.get("GENIE_URL"):
-        gw, src = os.environ["GENIE_URL"], "env GENIE_URL"
-    elif has_cfg_gw:
-        gw, src = cfg["gateway"], "~/.genie/credentials.json"
-    elif DEFAULT_GATEWAY:
-        gw, src = DEFAULT_GATEWAY, "built-in default"
-    else:
-        gw, src = None, None
-    logged_in = bool(cfg.get("api_key") or os.environ.get("GENIE_API_KEY"))
+    gw, src = gateway_source()
+    logged_in = bool(resolve_credential(None, "GENIE_API_KEY", "api_key"))
     return {
         "ok": True,
         "gateway": gw,

@@ -21,13 +21,12 @@ import os
 import time as _time
 from typing import Any, Callable
 
+from ..core.job_state import TERMINAL_BAD, TERMINAL_OK
 from ..models.errors import GenieHTTPError, GenieJobError
 from ._transport import TransportError, make_transport
 
-TERMINAL_OK = "succeeded"
-# "archived" = 作业已被 janitor 归档（终态，产物在 archive_path 下）。不把它
-# 算终态的话 wait() 会对着一个永远不会再变的状态无限轮询（G24）。
-TERMINAL_BAD = ("failed", "killed", "archived")
+# 终态词表正典 = core.job_state（G24 裁决口径；G91 清账 2026-10-27 起
+# 与 core/sweep 共用同一对常量——本行只是透传，别在这里再写字面量）。
 
 
 def format_detail(d: Any) -> str:

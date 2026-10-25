@@ -92,19 +92,34 @@ def clear_config(*keys: str) -> None:
         p.unlink(missing_ok=True)
 
 
+def gateway_source() -> tuple[str | None, str | None]:
+    """(网关地址, 来源标签) —— resolve_gateway 的非抛版，同一条链、
+    同一归一（strip + 去尾斜杠）。来源标签 ∈ env / config / default。
+
+    报地址给人/agent 看的面（mcp login_status、CLI connect 展示）一律走
+    这里，别手抄链——手抄份不归一时，报出去的地址会和实际拨号地址字形
+    不同（G101 清账 2026-10-27 前的实测病灶）。
+    """
+    for cand, src in ((os.environ.get("GENIE_URL") or None, "env"),
+                      (load_config().get("gateway") or None, "config"),
+                      (DEFAULT_GATEWAY, "default")):
+        if cand and str(cand).strip():
+            return str(cand).strip().rstrip("/"), src
+    return None, None
+
+
 def resolve_gateway(explicit: str | None = None) -> str:
     """按优先级链解析网关地址；解析不出 → 报错并给**下一步动作**。
 
     顺序：显式参数 > env ``GENIE_URL`` > credentials.json ``gateway``
-    > ``DEFAULT_GATEWAY``。
+    > ``DEFAULT_GATEWAY``。链与归一化的唯一实现 = gateway_source()。
     """
     from ..models.errors import GenieConfigError
-    for cand in (explicit,
-                 os.environ.get("GENIE_URL") or None,
-                 load_config().get("gateway") or None,
-                 DEFAULT_GATEWAY):
-        if cand and str(cand).strip():
-            return str(cand).strip().rstrip("/")
+    if explicit and str(explicit).strip():
+        return str(explicit).strip().rstrip("/")
+    gw, _src = gateway_source()
+    if gw:
+        return gw
     raise GenieConfigError(
         "未配置网关地址。三选一：\n"
         "  ① genie connect <服务地址>      写入本机配置（推荐，一次即可）\n"
