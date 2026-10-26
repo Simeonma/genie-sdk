@@ -459,11 +459,13 @@ def create_app(*, static_dir: str | Path | None = None,
         return {"ok": True}
 
     # ── 仿真文件 .gensim（2026-10 站长裁决转正）─────────────────────
-    # zip 容器 = 根级 simconfig.json + workspace/<工作区文件>。存储 =
-    # POST cfg → 服务端流式打包（大 h5 不过浏览器内存）；打开 = 上传
-    # zip → 先验 cfg（genie.models 同一双手）再解包落回工作区（同款
-    # 名守卫/上限）。会话 f 仍是唯一真源——.gensim 只是它的可携快照，
-    # 不构成第二持久化中心。
+    # zip 容器 = 根级 simconfig.json + workspace/<工作区文件>；G148 起
+    # 结果态仿真**自动带结果**（results/<job>_results.h5 + state.json，
+    # 站长裁"有结果就自动带"）——导入端据此还原结果态（按钮 =
+    # Switch to setting）。存储 = POST cfg → 服务端流式打包（大 h5 不过
+    # 浏览器内存）；打开 = 上传 zip → 先验 cfg（genie.models 同一双手）
+    # 再解包落回工作区（同款名守卫/上限）。会话 f 仍是唯一真源——
+    # .gensim 只是它的可携快照，不构成第二持久化中心。
     @app.post("/api/sim/export")
     async def sim_export(req: Request) -> FileResponse:
         body = await req.json()
@@ -472,6 +474,25 @@ def create_app(*, static_dir: str | Path | None = None,
             raise HTTPException(status_code=422,
                                 detail="还没有可存储的配置——先运行脚本或在表单里搭好配置")
         ws = _owner_scripts_dir(req)
+        job_id = str(body.get("job_id") or "")
+        result_p = None
+        state = None
+        if job_id:
+            from genie.studio import results_view
+            from .kernel_session import workspace_root
+            from .session_client import DEFAULT_SESSION
+            sid = req.headers.get("X-Session-Id") or DEFAULT_SESSION
+            try:
+                rp = results_view.result_path(workspace_root() / owner_of(req),
+                                              job_id, sid)
+            except ValueError:
+                rp = None
+            if rp is not None and rp.is_file():
+                result_p = rp
+                st = results_view.meta(rp)
+                state = {"job_id": st["job_id"], "state": "done",
+                         "executed_steps": st["executed_steps"],
+                         "dt": st["dt"], "grid_shape": st["grid_shape"]}
 
         def _pack(tmp_path: str) -> None:
             with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_STORED) as zf:
@@ -481,6 +502,10 @@ def create_app(*, static_dir: str | Path | None = None,
                     if p.is_file() and not p.name.startswith(".") \
                             and not p.name.endswith(".part"):
                         zf.write(p, arcname="workspace/" + p.name)
+                if result_p is not None:
+                    zf.write(result_p, arcname="results/" + result_p.name)
+                    zf.writestr("state.json", json.dumps(
+                        state, ensure_ascii=False, indent=2))
 
         tmp = tempfile.NamedTemporaryFile(suffix=".gensim", delete=False)
         tmp.close()
@@ -545,8 +570,62 @@ def create_app(*, static_dir: str | Path | None = None,
                 # 后解包：逐成员流式落盘（校验先行，失败零落盘）
                 ws = _owner_scripts_dir(req)
                 restored: list[str] = []
+                result_job = None
+                state_obj = None
+                if "state.json" in names:
+                    try:
+                        state_obj = json.loads(
+                            zf.read("state.json").decode("utf-8"))
+                    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+                        raise HTTPException(
+                            status_code=422,
+                            detail="state.json 不是合法 JSON（%s）" % e)
+                    result_job = str(state_obj.get("job_id") or "")
+                res_names = [n for n in names if n.startswith("results/")]
+                if res_names and not result_job:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="容器含 results/ 但缺 state.json（job_id）")
+                from genie.studio import results_view
+                from .kernel_session import workspace_root
+                from .session_client import DEFAULT_SESSION
+                sid = req.headers.get("X-Session-Id") or DEFAULT_SESSION
                 for n in names:
-                    if n == "simconfig.json" or not n:
+                    if n == "simconfig.json" or n == "state.json" or not n:
+                        continue
+                    if n == "results/":
+                        continue
+                    if n.startswith("results/"):
+                        # G148：结果 h5 回落会话结果目录（结果态还原的
+                        # 数据源；job_id 白名单由 result_path 守卫）
+                        if "/" in n[len("results/"):]:
+                            raise HTTPException(
+                                status_code=422,
+                                detail="仿真文件含容器外成员（%s）——拒绝" % n)
+                        base = n[len("results/"):]
+                        try:
+                            rp = results_view.result_path(
+                                workspace_root() / owner_of(req),
+                                result_job, sid)
+                        except ValueError as e:
+                            raise HTTPException(status_code=422, detail=str(e))
+                        info = zf.getinfo(n)
+                        if info.file_size > _MAX_BINARY:
+                            raise HTTPException(
+                                status_code=413,
+                                detail="%s 超 %dMiB 上限"
+                                       % (base, _MAX_BINARY >> 20))
+                        rp.parent.mkdir(parents=True, exist_ok=True)
+                        with zf.open(n) as src, \
+                                rp.with_name(rp.name + ".part") \
+                                .open("wb") as out:
+                            while True:
+                                chunk = src.read(1 << 20)
+                                if not chunk:
+                                    break
+                                out.write(chunk)
+                        rp.with_name(rp.name + ".part").replace(rp)
+                        os.chmod(rp, 0o600)
                         continue
                     if not n.startswith("workspace/") or "/" in n[len("workspace/"):]:
                         raise HTTPException(status_code=422,
@@ -569,7 +648,12 @@ def create_app(*, static_dir: str | Path | None = None,
                             out.write(chunk)
                     p.with_name(p.name + ".part").replace(p)
                     restored.append(base)
-            return {"ok": True, "cfg": cfg, "restored": restored}
+                out_resp: dict = {"ok": True, "cfg": cfg, "restored": restored}
+                if res_names:
+                    out_resp["has_results"] = True
+                    out_resp["job_id"] = result_job
+                    out_resp["state"] = state_obj
+                return out_resp
         finally:
             os.unlink(tmp.name)
 

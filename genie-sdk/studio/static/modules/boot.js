@@ -357,7 +357,7 @@ async function exportCfg(askName = true) {
   try {
     const r = await fetch("/api/sim/export", { method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cfg: c }) });
+      body: JSON.stringify({ cfg: c, job_id: window.__lastJobId || "" }) });
     if (!r.ok) {
       let detail = String(r.status);
       try { detail = (await r.json()).detail || detail; } catch {}
@@ -424,8 +424,18 @@ function importCfg() {
       if (!r.ok) throw new Error(out.detail || String(r.status));
       await replaceModel(out.cfg, "gensim");   /* 整份替换（不再逐字段推） */
       if (window.loadWorkspaceFiles) loadWorkspaceFiles();
+      /* G148（2026-10-27 站长定）：含结果的仿真存档 → 还原**结果态**
+       * （按钮 = Switch to setting；Plot 面板数据源已随包回落会话）。
+       * 无结果的存档维持编辑态（历史行为）。 */
+      if (out.has_results && out.job_id) {
+        window.__lastJobId = out.job_id;
+        window.__resultStatus = null;
+        if (typeof enterResult === "function") enterResult(true);
+        if (typeof refreshResultChip === "function") refreshResultChip();
+      }
       toast("仿真已打开（模型已替换 + " +
-            out.restored.length + " 个文件回工作区）", "ok");
+            out.restored.length + " 个文件回工作区" +
+            (out.has_results ? "；含结果——已进结果态" : "") + "）", "ok");
     } catch (e) {
       toast("打开仿真失败：" + e.message, "err");
     }
