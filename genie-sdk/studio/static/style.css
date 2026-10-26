@@ -856,24 +856,41 @@ input::placeholder,textarea::placeholder {
 #plot-view {
   position: absolute; inset: 0; overflow: auto;
   padding: 16px 20px; background: var(--bg-secondary);
+  /* G148 轴分配表单（R24c）：表单 + 弹性画布的纵向布局 */
+  display: flex; flex-direction: column;
 }
 .plot-head {
   font-size: var(--fs-sm); font-weight: 600; color: var(--text-primary);
   margin-bottom: 10px;
 }
 .plot-canvas {
-  width: 100%; height: calc(100% - 40px); min-height: 240px;
+  flex: 1 1 auto; width: 100%; height: auto; min-height: 220px;
   border: 1px solid var(--border-soft); border-radius: var(--radius);
   background: #fff;
 }
-/* G148 批 3：Plot 交互控件条（场/模式/轴选择/切片）——卡片化容器；
- * G148 美学整备（R24c）：分段视图控件 + 统一 select 手感 */
-.plot-ctl {
+/* G148 批 3：Plot 交互控件 → 轴分配表单（R24c 走查后重做，站长定：
+ * 列出全部变量轴、每行指派角色、切片给滑块；画布吃剩余高度。
+ * 布局主规则住上方 #plot-view / .plot-canvas 基块，此处只放表单件） */
+.plot-form {
   display: flex; flex-wrap: wrap; align-items: center;
-  gap: 6px 12px; margin-bottom: 10px; padding: 8px 12px;
+  gap: 4px 18px; margin-bottom: 10px; padding: 8px 12px;
   background: var(--bg-secondary); border: 1px solid var(--border-soft);
   border-radius: 8px;
 }
+.form-cap {
+  flex-basis: 100%; font-size: var(--fs-xs, 11px);
+  color: var(--text-secondary);
+  border-bottom: 1px dashed var(--border-soft); padding-bottom: 2px;
+}
+.axis-row { display: flex; align-items: center; gap: 6px; min-width: 240px; }
+.ax-name { font-size: var(--fs-xs, 11px); font-weight: 600; color: var(--text-primary); }
+.ax-len { font-size: 10px; color: var(--text-secondary); }
+.ax-manual {
+  font-size: var(--fs-xs, 11px); color: var(--text-secondary);
+  display: inline-flex; align-items: center; gap: 3px;
+}
+.ax-slider { flex: 0 1 120px; accent-color: #1f6feb; }
+.ax-idx { font-size: 10px; color: var(--text-secondary); min-width: 48px; }
 .plot-ctl-lab {
   font-size: var(--fs-xs, 11px); color: var(--text-secondary);
 }
@@ -883,21 +900,6 @@ input::placeholder,textarea::placeholder {
   background: var(--bg-primary, #fff); color: var(--text-primary);
 }
 .plot-sel:focus-visible { outline: 2px solid #1f6feb33; border-color: #1f6feb; }
-.plot-seg {
-  display: inline-flex; border: 1px solid var(--border-soft);
-  border-radius: 6px; overflow: hidden;
-  background: var(--bg-primary, #fff);
-}
-.plot-seg-btn {
-  border: none; background: transparent; padding: 3px 12px;
-  font-size: var(--fs-xs, 11px); color: var(--text-secondary);
-  cursor: pointer;
-}
-.plot-seg-btn + .plot-seg-btn { border-left: 1px solid var(--border-soft); }
-.plot-seg-btn.active {
-  background: #1f6feb; color: #fff;
-}
-.plot-head + .plot-ctl + .plot-canvas { height: calc(100% - 76px); }
 .plot-cta {
   margin-top: 14px; padding-top: 10px; border-top: 1px dashed var(--border-soft);
   display: flex; align-items: center; gap: 8px;

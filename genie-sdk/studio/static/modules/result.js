@@ -235,32 +235,48 @@ function activateTab(id) {
 }
 
 function renderPlotInto(view, spec) {
-  /* G148 批 3：交互面板——模式（1D 曲线/2D 切面）+ 轴选择 + 剩余轴
-   * 切片（缺省"峰"= 服务端峰值切片）。数据走 /api/result/series 的
-   * axes/slices 参数；不选轴 = 峰值列折叠缺省视图（历史行为零漂移）。
-   * 轴能否真当选由服务端 select() 裁决（422 → toast，不硬编规则）。 */
+  /* G148 轴分配表单（R24c 走查后重做，站长定）：列出全部变量轴，
+   * 用户给每条轴指派角色（x 轴 / y 轴 / 切片）——选一条 x = 1D，
+   * x+y = 2D，其余轴是切片：勾"手动"出滑块，缺省"峰"= 服务端
+   * 联合峰值切片。未动任何控件时请求不带 axes/slices（峰值列折叠，
+   * 行为零漂移）。场分量随时可换（缺省只是初始值）。 */
   if (!spec) { view.textContent = ""; return; }
   view.innerHTML = "";
+  view.style.display = "flex";
+  view.style.flexDirection = "column";
   const st = window.__resultStatus;
   const mon = st && st.ok && (st.monitors || []).find(m => m.name === spec.mon);
-  const axesAvail = (mon && mon.axes) || [];
-  const axesLen = (mon && mon.axes_len) || {};
+  const fields = (mon && mon.fields) || [spec.field];
+  const L = (mon && mon.axes_len) || {};
+  const AXES = (Object.keys(L).length ? Object.keys(L)
+    : (mon && mon.axes) || []).slice().sort((a, b) => {
+    const w = k => (k === "cell" ? 9
+      : (k === "freqs" || k === "time") ? 0
+      : (["x", "y", "z"].indexOf(k) + 1));
+    return w(a) - w(b);
+  });
+
+  if (!spec.role) {
+    spec.role = {};
+    const specAx = AXES.find(a => a === "freqs" || a === "time") || AXES[0] || null;
+    for (const a of AXES) spec.role[a] = (a === specAx) ? "x" : "slice";
+    spec.slices = {};
+    spec.touched = false;
+  }
 
   const head = document.createElement("div");
   head.className = "plot-head";
   view.appendChild(head);
-
-  const bar = document.createElement("div");
-  bar.className = "plot-ctl";
-  view.appendChild(bar);
-
+  const form = document.createElement("div");
+  form.className = "plot-form";
+  view.appendChild(form);
   const cv = document.createElement("canvas");
   cv.className = "plot-canvas";
   view.appendChild(cv);
 
-  const updHead = (modeTxt) => {
+  const updHead = (txt) => {
     head.textContent = spec.name + " — " + spec.mon + " · |" + spec.field
-      + "| · 作业 " + (spec.jobId || "?") + modeTxt;
+      + "| · 作业 " + (spec.jobId || "?") + txt;
   };
 
   const _sel = (opts, val, onch) => {
@@ -275,99 +291,109 @@ function renderPlotInto(view, spec) {
     s.addEventListener("change", () => onch(s.value));
     return s;
   };
-
-  const _label = (txt) => {
+  const _lab = (txt, cls) => {
     const l = document.createElement("span");
-    l.className = "plot-ctl-lab"; l.textContent = txt;
+    l.className = cls || "plot-ctl-lab"; l.textContent = txt;
     return l;
   };
 
-  const rebuild = () => {
-    bar.innerHTML = "";
-    // 场分量（用户自主选场——缺省只是初始值，面板内随时换）
-    bar.appendChild(_label("场"));
-    bar.appendChild(_sel(
-      ((mon && mon.fields) || [spec.field]).map(f => ({ v: f, t: f })),
-      spec.field, (v) => { spec.field = v; load(); }));
-    // 模式 = 分段控件（曲线/切面）
-    bar.appendChild(_label("视图"));
-    const seg = document.createElement("div");
-    seg.className = "plot-seg";
-    for (const [v, t] of [["1d", "曲线"], ["2d", "切面"]]) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.textContent = t;
-      b.className = "plot-seg-btn" + (spec.mode === v ? " active" : "");
-      b.setAttribute("aria-pressed", spec.mode === v ? "true" : "false");
-      b.addEventListener("click", () => {
-        if (spec.mode === v) return;
-        spec.mode = v;
-        if (v === "2d" && !spec.xAxis) {
-          /* 缺省：谱轴 + 第一条空间轴（服务端裁决可用性） */
-          spec.xAxis = axesAvail.find(a => a === "freqs" || a === "time")
-            || axesAvail[0] || null;
-          spec.yAxis = axesAvail.find(a => a !== spec.xAxis
-            && a !== "freqs" && a !== "time") || null;
-        }
-        spec.slices = {};
-        rebuild(); load();
-      });
-      seg.appendChild(b);
+  /* 角色不变式：恰一条 x；y 至多一条且需有 x。冲突 = 旧角色降切片。
+   * 晋升候选排除刚改动的轴——否则"把唯一 x 降为切片"会被自指晋升
+   * 弹回，交互等于没发生（R24c e2e 抓出）。 */
+  const applyRole = (a, role) => {
+    const r = spec.role;
+    for (const k in r)
+      if (r[k] === role && k !== a && (role === "x" || role === "y"))
+        r[k] = "slice";
+    r[a] = role;
+    if (!Object.keys(r).some(k => r[k] === "x")) {
+      const cand = AXES.find(k => k !== a && r[k] !== "y" && (L[k] || 1) >= 1);
+      if (cand) r[cand] = "x";
     }
-    bar.appendChild(seg);
+    /* 手动切片记录跟着角色走：不再是切片轴的记录清掉 */
+    for (const k in r)
+      if (r[k] !== "slice" && spec.slices[k] != null)
+        delete spec.slices[k];
+  };
 
-    const axisOpts = [{ v: "", t: "峰（缺省）" }]
-      .concat(axesAvail.map(a => ({ v: a, t: a })));
-    // x 轴
-    bar.appendChild(_label("x 轴"));
-    bar.appendChild(_sel(axisOpts, spec.xAxis || "", (v) => {
-      spec.xAxis = v || null; rebuild(); load();
-    }));
-    // y 轴（仅 2D）
-    if (spec.mode === "2d") {
-      bar.appendChild(_label("y 轴"));
-      bar.appendChild(_sel(
-        axesAvail.filter(a => a !== spec.xAxis)
-          .map(a => ({ v: a, t: a })),
-        spec.yAxis || axesAvail.find(a => a !== spec.xAxis) || "",
-        (v) => { spec.yAxis = v; rebuild(); load(); }));
-    }
-    // 剩余轴切片（有轴长才给下拉；缺省峰=不传）
-    const chosen = [spec.xAxis, spec.mode === "2d" ? spec.yAxis : null]
-      .filter(Boolean);
-    for (const a of axesAvail) {
-      if (chosen.includes(a) || !(a in axesLen)) continue;
-      const n = axesLen[a];
-      if (n < 2) continue;
-      const opts = [{ v: "", t: a + " 峰" }];
-      for (let i = 0; i < n; i++)
-        opts.push({ v: String(i), t: a + "[" + i + "]" });
-      bar.appendChild(_sel(opts, spec.slices[a] != null ? String(spec.slices[a]) : "",
-        (v) => {
-          if (v === "") delete spec.slices[a];
-          else spec.slices[a] = parseInt(v, 10);
-          load();
+  const rebuild = () => {
+    form.innerHTML = "";
+    /* 场行 */
+    const frow = document.createElement("div");
+    frow.className = "axis-row";
+    frow.appendChild(_lab("场分量", "ax-name"));
+    frow.appendChild(_sel(fields.map(f => ({ v: f, t: f })),
+      spec.field, (v) => { spec.field = v; spec.touched = true; load(); }));
+    form.appendChild(frow);
+    /* 轴分配行 */
+    const cap = _lab("轴分配（选 1 条 = 曲线，2 条 = 切面，其余切片）",
+                     "form-cap");
+    form.appendChild(cap);
+    for (const a of AXES) {
+      const n = L[a] || 1;
+      const row = document.createElement("div");
+      row.className = "axis-row";
+      row.dataset.axis = a;
+      const nm = document.createElement("span");
+      nm.className = "ax-name"; nm.textContent = a;
+      row.appendChild(nm);
+      const ln = document.createElement("span");
+      ln.className = "ax-len"; ln.textContent = "×" + n;
+      row.appendChild(ln);
+      row.appendChild(_sel(
+        [{ v: "slice", t: "切片" }, { v: "x", t: "x 轴" }, { v: "y", t: "y 轴" }],
+        spec.role[a] || "slice", (v) => {
+          applyRole(a, v); spec.touched = true; rebuild(); load();
         }));
+      if ((spec.role[a] || "slice") === "slice" && n >= 2) {
+        const manual = spec.slices[a] != null;
+        const cb = document.createElement("input");
+        cb.type = "checkbox"; cb.checked = manual;
+        cb.title = "勾选 = 手动定切片位置；不勾 = 峰值切片（服务端联合取峰）";
+        cb.addEventListener("change", () => {
+          if (cb.checked) spec.slices[a] = 0;
+          else delete spec.slices[a];
+          rebuild(); load();
+        });
+        const cl = _lab("手动", "ax-manual");
+        cl.insertBefore(cb, cl.firstChild);
+        row.appendChild(cl);
+        if (manual) {
+          const rg = document.createElement("input");
+          rg.type = "range"; rg.min = "0"; rg.max = String(n - 1);
+          rg.value = String(spec.slices[a]);
+          rg.className = "ax-slider";
+          const idx = _lab(a + "=" + spec.slices[a], "ax-idx");
+          rg.addEventListener("input", () => {
+            spec.slices[a] = parseInt(rg.value, 10);
+            idx.textContent = a + "=" + rg.value;
+          });
+          rg.addEventListener("change", () => { spec.touched = true; load(); });
+          row.appendChild(rg);
+          row.appendChild(idx);
+        }
+      }
+      form.appendChild(row);
     }
   };
 
   const load = () => {
-    const ax = [];
-    if (spec.xAxis) ax.push(spec.xAxis);
-    if (spec.mode === "2d" && spec.yAxis) ax.push(spec.yAxis);
+    const ax = AXES.filter(a => spec.role[a] === "x")
+      .concat(AXES.filter(a => spec.role[a] === "y"));
     let q = "/api/result/series?job_id=" + encodeURIComponent(spec.jobId || "")
       + "&mon=" + encodeURIComponent(spec.mon)
       + "&field=" + encodeURIComponent(spec.field);
-    if (spec.mode === "2d") q += "&maxpoints=400";
-    if (ax.length) q += "&axes=" + encodeURIComponent(ax.join(","));
+    if (ax.length === 2) q += "&maxpoints=400";
     const sl = Object.entries(spec.slices)
       .filter(([, v]) => v != null)
       .map(([k, v]) => k + ":" + v).join(",");
-    if (sl) q += "&slices=" + encodeURIComponent(sl);
-    const labelTxt = (ax.length
-      ? " · " + ax.join("×") + (sl ? " · 切片 " + sl.replace(/:/g, "=") : "")
-      : "（峰值列）");
-    updHead(labelTxt);
+    /* 未 touched = 峰值列折叠缺省（零漂移）；动过 = 显式 axes/slices */
+    if (spec.touched && ax.length) q += "&axes=" + encodeURIComponent(ax.join(","));
+    if (spec.touched && sl) q += "&slices=" + encodeURIComponent(sl);
+    const roleTxt = ax.length ? " · " + ax.join("×")
+      + (sl ? " · 切片 " + sl.replace(/:/g, "=") : "")
+      : "（峰值列）";
+    updHead(roleTxt);
     cv.textContent = "";
     const KEYH = { "X-API-Key": localStorage.getItem("genie_v2_api_key") || "" };
     fetch(q, { headers: KEYH })
@@ -378,9 +404,9 @@ function renderPlotInto(view, spec) {
                                    d.x_label, d.y_label, "|" + spec.field + "|");
         else {
           _plotLine(cv, d.x, d.y, d.x_label, "|" + spec.field + "|");
-          /* 全零明示（G148 走查修正）：0..1 兜底轴是空数据假象，不当正字 */
+          /* 全零明示（走查修正）：0..1 兜底轴是空数据假象，不当正字 */
           if ((d.y || []).length && d.y.every(v => v === 0))
-            updHead(labelTxt + " · 该分量全零——多半是源偏振正交，换场分量");
+            updHead(roleTxt + " · 该分量全零——多半是源偏振正交，换场分量");
         }
       })
       .catch(e => { cv.textContent = "加载失败: " + e; });

@@ -18,7 +18,7 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-from genie.core.results import AXIS_KEYS, curve, select
+from genie.core.results import AXIS_KEYS, axis_lengths, curve, select
 
 
 def parse_view(axes: str | None, slices: str | None) -> dict | None:
@@ -155,9 +155,9 @@ def latest_result(owner_dir: Path, session_id: str | None = None) -> Path | None
 def meta(h5path: Path) -> dict:
     """结构清单：监视器/场/轴 + 轴长 + 根 attrs（GUI 结果面板与 Plot 建卡）。
 
-    ``axes_len``（G148 批 3）：每条轴的元素数——Plot 面板的切片滑条/
-    下拉需要；轴是否真能当视图轴由 select() 裁决（不规则点云只给
-    cell），meta 只报在场事实。"""
+    ``axes_len``（G148）= core.results.axis_lengths 单一真源：空间轴是
+    **唯一值数**（不是坐标云展平长度——曾把 1600 格点云当 z 轴 1600 个
+    切片位）；轴能否真当选由 select() 裁决。"""
     with h5py.File(h5path, "r") as f:
         mons = []
         for name, grp in f.items():
@@ -167,10 +167,7 @@ def meta(h5path: Path) -> dict:
                 "domain": str(grp.attrs.get("domain", "")),
                 "fields": sorted(k for k in keys if k not in AXIS_KEYS),
                 "axes": sorted(k for k in keys if k in AXIS_KEYS),
-                "axes_len": {k: int(grp[k].shape[0])
-                             for k in keys if k in AXIS_KEYS
-                             and getattr(grp[k], "shape", None)
-                             and len(grp[k].shape) >= 1}})
+                "axes_len": axis_lengths(grp)})
         st = {
             "ok": True,
             "job_id": h5path.name.removesuffix("_results.h5"),

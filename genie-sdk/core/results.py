@@ -143,9 +143,9 @@ def select(group, field: str, *, axes: list | None = None,
     - 可选轴名：``"time"``/``"freqs"``（谱/时间，dim0）+ 反展平成功
       的 ``"x"``/``"y"``/``"z"`` + ``"cell"``（格点下标，无法反展平
       时的空间轴）；
-    - ``slices={"axis": int}``：未选中的轴定切片，**缺省 = 峰值切片**
-      （对"其余全部轴做 max 归约后取 argmax"——每条轴独立决定，
-      全 NaN 退 0；与峰值列折叠同哲学）；
+    - ``slices={"axis": int}``：未选中的轴定切片，**缺省 = 联合峰值
+      切片**——全部缺省轴取全局峰格（同一个格）的坐标，与峰值列折叠
+      严格同值（G142 同义，非"逐轴各自 argmax"）；全 NaN 退 0；
     - 复数取模（``is_cplx`` 标记）。
 
     返回 ``{"dim": 1|2, "x": {"key","values"}, "y": {...}|None,
@@ -215,30 +215,41 @@ def select(group, field: str, *, axes: list | None = None,
     pick: list = [None] * len(order)
     for a in axes:
         pick[order.index(a)] = slice(None)
+    manual: dict[int, int] = {}
     for i, a in enumerate(order):
-        if pick[i] is not None:
+        if pick[i] is not None or a not in slices:
             continue
         n = data.shape[i]
-        if a in slices:
-            v = slices.pop(a)
-            if isinstance(v, bool) or not isinstance(v, int) \
-                    or not 0 <= v < n:
-                raise ValueError(
-                    f"slice for axis {a!r} must be an int in [0, {n}), "
-                    f"got {v!r}")
-            pick[i] = v
-        else:
-            # 缺省 = 峰值切片：对"其余全部轴 max 归约"后 argmax
-            red = data.max(axis=tuple(j for j in range(len(order))
-                                      if j != i))
-            try:
-                pick[i] = int(np.nanargmax(red))
-            except ValueError:          # 全 NaN——退 0
-                pick[i] = 0
+        v = slices.pop(a)
+        if isinstance(v, bool) or not isinstance(v, int) or not 0 <= v < n:
+            raise ValueError(
+                f"slice for axis {a!r} must be an int in [0, {n}), "
+                f"got {v!r}")
+        pick[i] = v
+        manual[i] = v
     if slices:
         raise ValueError(
             f"slice keys for unknown/unselected axes: {sorted(slices)} "
             f"(data axes here: {order})")
+    # 缺省切片 = 联合峰值（G142 同义）：先施手动切片，在余空间里取
+    # **全局峰格**的坐标分派给各缺省轴——axes=[谱轴] 的自动切片与
+    # 峰值列折叠严格同值（同一格），不是"逐轴各自 argmax"的近似。
+    auto_rows = [i for i in range(len(order)) if pick[i] is None]
+    if auto_rows:
+        sub = data
+        for j in sorted(manual, reverse=True):
+            sub = np.take(sub, manual[j], axis=j)
+        sub_axes = [a for j, a in enumerate(order) if j not in manual]
+        try:
+            g = int(np.nanargmax(sub))
+            c = np.unravel_index(g, sub.shape)
+            for jj, a in enumerate(sub_axes):
+                if a in axes:
+                    continue                    # 选中轴保持 slice(None)
+                pick[order.index(a)] = int(c[jj])
+        except ValueError:                      # 全 NaN——全部退 0
+            for i in auto_rows:
+                pick[i] = 0
     view = data[tuple(pick)]
     if len(axes) == 1:
         return {"dim": 1, "x": {"key": axes[0], "values": coords[axes[0]]},
@@ -250,6 +261,36 @@ def select(group, field: str, *, axes: list | None = None,
     return {"dim": 2, "x": {"key": axes[0], "values": coords[axes[0]]},
             "y": {"key": axes[1], "values": coords[axes[1]]},
             "data": np.asarray(out), "tag": "", "is_cplx": is_cplx}
+
+
+def axis_lengths(group) -> dict:
+    """轴存在表 + 长度（G148：meta/面板的单一真源）。
+
+    - ``time``/``freqs`` = 轴长；
+    - 空间轴 = **唯一值数**（规则子盒反展平后的每维元数——不是坐标云
+      的展平长度！曾把 1600 格点云当 z 轴 1600 个切片位，造出
+      "z[0..1599]" 的假轴，站长真机质询抓出）；
+    - 云无法反展平（Yee 裁剪/退化）→ 只报 ``cell`` = n_cells；
+    - 点监视器（场 1D、无云）→ 只有谱轴。
+    面板据此渲染轴行/滑条；轴能否真当选仍由 select() 裁决。"""
+    out: dict[str, int] = {}
+    spec = next((k for k in ("freqs", "time") if k in group), None)
+    if spec is not None:
+        out[spec] = int(np.asarray(group[spec][()]).size)
+    fields = [k for k in group if k not in _SPATIAL_KEYS and k != spec]
+    n_cells = None
+    for k in fields:
+        shp = np.asarray(group[k][()]).shape
+        if len(shp) >= 2:
+            n_cells = int(shp[1])
+            break
+    if n_cells is not None:
+        spatial = _unflatten_axis_map(group, n_cells)
+        if spatial:
+            out.update({a: int(len(v)) for a, v in spatial.items()})
+        else:
+            out["cell"] = n_cells
+    return out
 
 
 def _extract(arrays: dict, prefix: str, name: str,
