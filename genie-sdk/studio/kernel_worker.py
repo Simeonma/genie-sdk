@@ -184,8 +184,12 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         # R24（S1）：单实例也过 nan_to_none——JSON 安全化与实例数无关
         # （修前 len==1 直通原文，用户脚本算出的 nan 会以裸 NaN 字面量
         # 进 emit 的 json.dumps，浏览器 JSON.parse 丢整条 cfg 事件）。
+        # R28 P3：run 只从实际 run 过的实例取末位（ran 判据 = _job_id
+        # 非空）——修前未 run 实例的 dense 默认值静默 clobber 前面实例
+        # 的显式 run（gpu/timeout_s）。与 preview_script 同一函数同愈。
         from genie.core.preview import merge_configs, nan_to_none
-        return nan_to_none(merge_configs(cfgs))
+        ran = [getattr(s, "_job_id", None) is not None for s in insts]
+        return nan_to_none(merge_configs(cfgs, ran))
 
     def current_config() -> dict:
         """会话当前模型（合并后的线格式 dict）。"""

@@ -425,6 +425,33 @@ class Simulation:
         聚合/下载/逐点句柄见 SweepHandle。基底配置 = 当前实例收集的配置；
         与 run() 不同，sweep 不占用本实例的 job_id（每点自带 job）。
         """
+        points, _axis_names = self._sweep_points(
+            parameters, gpus_per_sim=gpus_per_sim,
+            max_parallel=max_parallel, on_failure=on_failure, mode=mode)
+
+        hooks_factory = hooks.get("sweep_sim_factory")
+        sims = []
+        for pt in points:
+            s = (hooks_factory() if hooks_factory
+                 else Simulation(client=self._client))
+            s.load_config(pt)
+            sims.append(s)
+        return SweepHandle(sims, _axis_names,
+                           points=points, client=self._client,
+                           gpus_per_sim=gpus_per_sim,
+                           max_parallel=max_parallel, on_failure=on_failure)
+
+    def _sweep_points(self, parameters, *, gpus_per_sim: int,
+                      max_parallel: int, on_failure: str,
+                      mode: str | None) -> tuple[list[dict], list[str]]:
+        """sweep 规格校验 + 本地展开（**纯本地零网络**）→ (points, 轴名)。
+
+        R28 S1 提取（站长裁）：真面 sweep 与 preview 的惰性化前校验
+        **共享同一双手**——修前 preview 把 sweep 整个换成 _Inert，连这层
+        纯本地校验（轴形态/轴名在基底 parameters 键集/逐点展开）也吞
+        了，check_script 对坏轴报 ok=True，LLM 推到会话执行才炸
+        SweepExpandError。preview 只该宽容网络/作业，不该宽容本地
+        形状校验。"""
         from ..models import SweepSpec
         from ..models.sweep_expand import (SweepExpandError,
                                            validate_sweep_config)
@@ -457,18 +484,7 @@ class Simulation:
             first = str(e.errors()[0].get("msg", e))
             raise SweepExpandError(f"sweep 规格不合法：{first}") from e
         points = validate_sweep_config(spec_model, self.to_config())
-
-        hooks_factory = hooks.get("sweep_sim_factory")
-        sims = []
-        for pt in points:
-            s = (hooks_factory() if hooks_factory
-                 else Simulation(client=self._client))
-            s.load_config(pt)
-            sims.append(s)
-        return SweepHandle(sims, [a["name"] for a in axes],
-                           points=points, client=self._client,
-                           gpus_per_sim=gpus_per_sim,
-                           max_parallel=max_parallel, on_failure=on_failure)
+        return points, [a["name"] for a in axes]
 
     # ---- 结果 ----
 

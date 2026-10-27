@@ -95,7 +95,13 @@ class _Inert:
         return "<preview 占位>"
 
     def __format__(self, spec: str) -> str:
-        return format(str(self), spec)
+        # R28 P4：数值类 spec（".3f"/"d"）对 str 非法——修前
+        # f"{t:.3f}" 直接 ValueError，宽容占位对最常见的 f-string
+        # 打印形态反而不宽容。非法 spec 退占位字符串。
+        try:
+            return format(str(self), spec)
+        except ValueError:
+            return str(self)
 
 
 class _PreviewSim(Simulation):
@@ -136,7 +142,24 @@ class _PreviewSim(Simulation):
         self.state = "done"
         return self
 
-    def sweep(self, *a: Any, **k: Any) -> _Inert:
+    def sweep(self, parameters=None, *, gpus_per_sim: int = 1,
+              max_parallel: int = 1, on_failure: str = "continue",
+              mode: str | None = None, **_ignored: Any) -> _Inert:
+        """R28 S1（站长裁）：**纯本地校验照做**——规格/轴名/展开错当场
+        SweepExpandError（信封带行号，check_script 体检承诺兑现；修前
+        preview 把 sweep 整个吞成 _Inert，坏轴名要到会话执行才炸）。
+        校验过后宽容占位（预览不跑作业）。与真面共享 ``_sweep_points``
+        同一双手，无第二份校验实现。"""
+        self._sweep_points(parameters, gpus_per_sim=gpus_per_sim,
+                           max_parallel=max_parallel,
+                           on_failure=on_failure, mode=mode)
+        return _Inert()
+
+    def visualize(self, *a: Any, **k: Any) -> _Inert:
+        """R28 P2（G160/G162 同族第三瓣）：预览不推图——真面 visualize
+        走会话 hook/结果数据（`_client=None` 必崩且该行后构建全丢，
+        手册 09 教的 `f.run(); f.visualize('pt')` 写法在预览整份进脚本
+        即炸），与 results/get_*/expert 同口径宽容占位。"""
         return _Inert()
 
     def results(self, job_id: str | None = None) -> _Inert:
@@ -173,30 +196,50 @@ class _PreviewSim(Simulation):
         return {"preview": True}
 
 
-def merge_configs(cfgs: list[dict]) -> dict:
+def merge_configs(cfgs: list[dict], ran: list[bool] | None = None) -> dict:
     """多 connect 实例的捕获合并：节 dict 后者覆盖、列表按声明序拼接、
-    run 取最后实际 run 的、parameters 逐名后者覆盖
+    run 取**最后实际 run 的实例**、parameters 逐名后者覆盖
     （"每个作业用新 connect 实例"的脚本语义）。
 
     判据注意（阶段 ④）：输入是 model_dump(mode="json") 的 dense dict——
     ``run``/``parameters`` 键恒在场（run 带 gpu/timeout_s 默认、
-    parameters 为 None），合并规则相应取「run 末位覆盖、parameters 逐名后者覆盖、全缺省补 None」——保证单 sim 场景
-    与 to_config() 逐键同形（smoke 往返锚）。"""
+    parameters 为 None）。**R28 P3（站长裁）**：dense 默认值在从未被碰
+    过的实例 dump 里也随身在场，"后者覆盖"分不清显式与默认——修前
+    ``a.run(gpu=2)`` 后接一个不 run 的实例，gpu=2 被默认值静默 clobber
+    （与旧 docstring"取最后实际 run 的"相反）。``ran[i]`` 标记第 i 个
+    实例是否真调过 run（判据 = ``_job_id is not None``），run 只从
+    实际 run 的实例取末位；``ran=None`` 视同全部实际 run（单实例
+    行为与 to_config() 逐键同形——smoke 往返锚不变）。domain/mesh/
+    列表维持"后者覆盖/按序拼接"（每实例新配置语义，站长同轮裁）。
+
+    双消费方 = preview_script 与 studio.kernel_worker._merged（会话
+    提交/快照同一口径），改这里两侧同愈。"""
+    if ran is not None and len(ran) != len(cfgs):
+        raise ValueError(
+            f"merge_configs: ran 长度须与 cfgs 一致"
+            f"（{len(ran)} != {len(cfgs)}）")
+    if ran is None:
+        ran = [True] * len(cfgs)
     merged: dict[str, Any] = {
         "domain": {}, "mesh": {}, "materials": [], "geometry": [],
         "source": [], "monitor": [], "run": {},
     }
-    for c in cfgs:
+    last_run: dict | None = None
+    for c, r in zip(cfgs, ran):
         for k in ("domain", "mesh"):
             merged[k].update(c.get(k) or {})
         for k in ("materials", "geometry", "source", "monitor"):
             merged[k].extend(c.get(k) or [])
-        if c.get("run"):
-            merged["run"] = c["run"]
+        if r and c.get("run"):
+            last_run = c["run"]
         if c.get("parameters"):
             merged.setdefault("parameters", {}).update(c["parameters"])
     if "parameters" not in merged:
         merged["parameters"] = None
+    # 无人实际 run → 回退末位实例的 dense 默认（run 键恒在场的 dense
+    # 契约不破——golden/预检锁冻着它；单实例与 to_config 逐键同形）。
+    merged["run"] = last_run if last_run is not None else (
+        cfgs[-1].get("run") if cfgs else {})
     return merged
 
 
@@ -281,11 +324,28 @@ def preview_script(source: str, *, label: str = "<genie脚本>") -> dict:
     # 直建实例——脚本可以 `f = genie.Simulation(client=None)` 绕开
     # connect，"预览显示脚本建造的模型"对任何写法成立（崩溃路径同样
     # 收：已捕获部分照常返回）。按身份去重，connect 出来的已在 sims。
-    for v in ns.values():
-        if isinstance(v, Simulation) and not any(v is s for s in sims):
-            sims.append(v)
-    if sims:
-        out["cfg"] = nan_to_none(merge_configs([s.to_config() for s in sims]))
+    # R28 P1：捕获/合并段同样在诊断信封之内——修前 parameters 透传槽
+    # 塞不可序列化值（object()/ndarray）会让 to_config 在信封**之外**
+    # 裸抛 PydanticSerializationError，check_script（LLM 自纠）/MCP/
+    # GUI 预览整条崩，{ok,cfg,error} 契约对该阶段不成立。
+    try:
+        for v in ns.values():
+            if isinstance(v, Simulation) and not any(v is s for s in sims):
+                sims.append(v)
+        if sims:
+            # R28 P3：ran 标记实际 run 过的实例（判据 = _job_id 非空）
+            out["cfg"] = nan_to_none(merge_configs(
+                [s.to_config() for s in sims],
+                ran=[getattr(s, "_job_id", None) is not None
+                     for s in sims]))
+    except Exception as e:  # noqa: BLE001 —— 信封承诺：不向调用方裸抛
+        out["ok"] = False
+        out["error"] = {
+            "kind": type(e).__name__,
+            "message": f"捕获失败：{e}（parameters 等透传槽的值需可 "
+                       f"JSON 序列化）",
+            "line": 0, "traceback": traceback.format_exc(limit=4)}
+    if sims and out["cfg"]:
         # G19a（G3 方向 2）：设计态估算随行——格数/dt 估/步数估，与内核
         # 守卫同一把尺子（genie.models.estimate 单一真源）。preview 对
         # 半成品宽容：domain/mesh 缺字段就静默省略此节。
