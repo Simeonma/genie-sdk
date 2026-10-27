@@ -328,7 +328,7 @@ SDK Docs</a></div></div>
 <div id="navmask"></div>
 <main id="main">
 <div class="docwrap"><div class="crumbs"><a href="index.html">Docs</a> › results (get_* &amp; SimData) · <a class="src" href="09-results.md" title="Markdown source">.md</a></div><h1 id="09-results-get-simdata">results (get_* &amp; SimData)</h1>
-<div class="intro">Three ways to retrieve results: <code>get_time/get_freq/get_index</code> (raw data, cached), <code>results()</code> (full h5 view + plotting), and <code>digest()</code> (numeric summary, see <a href="#f-submit-lifecycle">Submit &amp; lifecycle</a>). Prerequisite: the job state must be <code>done</code>.</div>
+<div class="intro">Three ways to retrieve results: <code>get_time/get_freq/get_index</code> (raw data, cached), <code>results()</code> (full h5 view + plotting), and <code>digest()</code> (numeric summary, see <a href="#f-submit-lifecycle">Submit &amp; lifecycle</a>). Prerequisite: the job state must be <code>done</code>. Since G170 the digest is carried inside the result h5 itself (root attrs), so one downloaded file = waveforms + axes + summary metrics; <code>digest()</code> reads the local file first (zero extra HTTP) and falls back to the gateway endpoint for older result files.</div>
 <h2 id="f-get-time-get-freq-get-index"><a class="anchor" href="#f-get-time-get-freq-get-index" aria-label="Link to this section">#</a>f.get_time() / get_freq() / get_index()</h2>
 <p>Fetch the raw result object by monitor name; name omitted = first monitor of that type. Cached — repeated calls cost no extra downloads.</p>
 <div class="tblwrap"><table>
@@ -360,6 +360,7 @@ fr.fields                      <span class="cm"># {field name: ndarray}</span></
 <thead><tr><th>Access</th><th>Gives</th></tr></thead><tbody>
 <tr><td><code>data.monitors</code></td><td>list of monitor names, e.g. <code>['tr', 'pt', …]</code></td></tr>
 <tr><td><code>data.attrs</code></td><td>root attributes: executed_steps / dt / grid_shape / format</td></tr>
+<tr><td><code>data.digest</code></td><td>numeric summary dict carried in the h5 root attrs (<code>None</code> on older result files — fall back to <code>digest()</code>)</td></tr>
 <tr><td><code>data.tr.Ex</code></td><td>attribute access → lazy h5py Dataset (slice it, or use <code>[()]</code> for the ndarray)</td></tr>
 <tr><td><code>data["tr"]["Ex"]</code></td><td>subscripting → ndarray directly</td></tr>
 <tr><td><code>data.tr.keys()</code></td><td>all dataset names for that monitor</td></tr>

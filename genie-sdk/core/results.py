@@ -583,6 +583,24 @@ class SimData:
         return dict(self._f.attrs)
 
     @property
+    def digest(self) -> dict | None:
+        """作业 digest（G170 定案：fdtd 算好随根 attrs 带出，SDK 只读
+        不算）——峰频/幅值/透过率等摘要指标，payload = digest.json 同源。
+        缺键 = 旧产物（内核未升级前）→ None，上层回退
+        ``GET /api/jobs/{id}/digest``；坏 JSON 不拦取数，同样回退。"""
+        raw = self._f.attrs.get("digest")
+        if raw is None or raw == "":
+            return None
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "replace")
+        try:
+            import json
+            parsed = json.loads(raw)
+        except ValueError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    @property
     def monitors(self) -> list[str]:
         return list(self._f.keys())
 

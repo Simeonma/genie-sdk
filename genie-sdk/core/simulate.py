@@ -641,11 +641,29 @@ class Simulation:
             print(f"  {k}: {v}")
         return d
 
+    def _digest_from_local(self, jid) -> dict | None:
+        """本地 auto-save 的 h5 里读 digest attrs（G170：fdtd 随结果带出，
+        0 次 HTTP）。文件不在/缺键/坏 JSON → None（调用方回退 GET）。"""
+        p = getattr(self, "_result_local_path", None)
+        if not p:
+            return None
+        try:
+            import h5py
+            from .results import SimData
+            with h5py.File(p, "r") as h5:
+                return SimData(h5, job_id=jid).digest
+        except Exception:  # noqa: BLE001 —— 本地读不到就走 HTTP，不拦
+            return None
+
     def digest(self, job_id: str | None = None) -> dict:
         """结果数值摘要：各监视器峰频/幅值；面监视器含透过率
         min/max/中心频值（``normalized=true`` 才是物理 T；点监视器无
         面积分不含 T——已知方言边界）。数字服务端算好、读取零 GPU，
         不拉 npz（比较/调参轮次读这个，别下结果文件）。
+
+        G170：digest 已随结果 h5 根 attrs 带出——本地 auto-save 在场时
+        **本地优先**（0 次 HTTP）；旧产物缺键回退 GET（同旧行为）。
+        ``data.digest`` 亦可直接从 results() 的 SimData 读。
 
         job_id 缺省用本实例已提交的作业。F3 修复段 1.2：默认 Analysis
         模板（app.js ``DEFAULT_ANALYSIS_CODE``）在浏览器 Pyodide 里调
@@ -658,4 +676,8 @@ class Simulation:
                 "no job_id to query the digest for (instance not "
                 "submitted and no job_id passed) — call run() first, or "
                 "pass digest(job_id) explicitly")
+        if job_id is None or job_id == self._job_id:
+            d = self._digest_from_local(jid)
+            if d is not None:
+                return d
         return self._client.digest(jid)

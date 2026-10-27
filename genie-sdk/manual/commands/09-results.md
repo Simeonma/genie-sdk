@@ -3,7 +3,10 @@
 > Three ways to retrieve results: `get_time/get_freq/get_index` (raw data,
 > cached), `results()` (full h5 view + plotting), and `digest()` (numeric
 > summary, see [Submit & lifecycle](#f-submit-lifecycle)). Prerequisite: the job state must be
-> `done`.
+> `done`. Since G170 the digest is carried inside the result h5 itself
+> (root attrs), so one downloaded file = waveforms + axes + summary metrics;
+> `digest()` reads the local file first (zero extra HTTP) and falls back to
+> the gateway endpoint for older result files.
 
 ## f.get_time() / get_freq() / get_index()
 
@@ -55,6 +58,7 @@ historical job can be revisited).
 |---|---|
 | `data.monitors` | list of monitor names, e.g. `['tr', 'pt', …]` |
 | `data.attrs` | root attributes: executed_steps / dt / grid_shape / format |
+| `data.digest` | numeric summary dict carried in the h5 root attrs (`None` on older result files — fall back to `digest()`) |
 | `data.tr.Ex` | attribute access → lazy h5py Dataset (slice it, or use `[()]` for the ndarray) |
 | `data["tr"]["Ex"]` | subscripting → ndarray directly |
 | `data.tr.keys()` | all dataset names for that monitor |

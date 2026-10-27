@@ -345,14 +345,24 @@ class SweepHandle:
     # ---- 聚合与落盘 ----
 
     def digests(self) -> list[dict | None]:
-        """逐点 digest（成功点拉取；失败/取消/未跑 = None → NaN 行）。"""
+        """逐点 digest（成功点拉取；失败/取消/未跑 = None → NaN 行）。
+
+        G170 起本地优先：digest 随各点结果 h5 根 attrs 带出，直接读
+        auto-save 的本地文件——聚合 0 次 HTTP（G166 的服务端拉取时序
+        随之消失）。旧产物缺键/本地不可得回退 GET（同旧行为）。"""
         out: list[dict | None] = []
-        for i, s in enumerate(self.states):
-            if s == self._GOOD and self.job_ids[i]:
-                try:
-                    out.append(self._client.digest(self.job_ids[i]))
-                except GenieHTTPError:
-                    out.append(None)
+        for i, s in enumerate(self.sims):
+            if self.states[i] == self._GOOD and self.job_ids[i]:
+                d = None
+                get_local = getattr(s, "_digest_from_local", None)
+                if get_local is not None:
+                    d = get_local(self.job_ids[i])
+                if d is None:
+                    try:
+                        d = self._client.digest(self.job_ids[i])
+                    except GenieHTTPError:
+                        d = None
+                out.append(d)
             else:
                 out.append(None)
         return out
