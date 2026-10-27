@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from .builder import Domain, Geometry, Materials, Mesh, Monitor, Source
 from ..models.errors import GenieConfigError, GenieJobError
 from ..models import DomainSpec, LorentzMatSpec, MeshSpec, RunSpec, SimConfig
-from .sweep import SweepHandle, build_sweep_spec
+from .sweep import SweepHandle
 
 # ── 组合根注入点（G1 分层契约，2026-10-11 定案）──────────────────────
 # core 只依赖 models：expert/sync/pull/attach 的实现在上层
@@ -406,42 +406,69 @@ class Simulation:
             print(f"[genie] 结果自动下载失败（results() 会现场重取）: {e!r}",
                   flush=True)
 
-    def sweep(self, config: dict | None = None, sweep: dict | None = None,
-              *, parameters: list | None = None, gpus_per_sim: int = 1,
-              max_parallel: int = 1,
-              on_failure: str = "continue",
+    def sweep(self, parameters=None, *, gpus_per_sim: int = 1,
+              max_parallel: int = 1, on_failure: str = "continue",
               mode: str | None = None) -> "SweepHandle":
-        """参数扫描（G29b：客户端编排普通作业）→ :class:`SweepHandle`。
+        """参数扫描（G29b 客户端编排；R24c run() 化重写）→ SweepHandle。
 
-        - ``config``：base SimConfig JSON；缺省 = 当前实例收集的配置
-          （``to_config()``——链式配好后直接 ``f.sweep(...)``）。
-        - ``sweep`` / ``parameters`` 二选一：前者 SweepSpec dict（少数字
-          段全控）；后者轴便捷形态——list of axis dict
-          （参数系统批 2 name 轴：``{"name": "dx", "linspace":
-          [10e-9, 40e-9, 4]}``，name = 基底配置 ``parameters`` 键集内的
-          参数名）。轴语法/互斥/点数上限/名在参数表
-          内的权威在服务端（422 透传）。
-        - ``gpus_per_sim`` / ``max_parallel`` / ``on_failure`` / ``mode``
-          同 SweepSpec 字段（手册 08-sweep 页）；``mode`` 缺省
-          ``product``，**两种形态都能表达 ``zip``**（C3-b 前便利形态发不出
-          ``mode`` ⇒ zip 扫描只能改写 ``sweep=`` 全字典）。
-
-        提交即返回句柄，**不等待**（等终态用 ``h.wait()``）；与 run()
-          不同，sweep 不占用本实例的 job_id（父作业是另一轨道）。
+        - ``parameters``：轴列表，每项 ``{"name": 参数名, "values" |
+          "linspace" | "logspace": …}``；name 必须在基底配置 parameters
+          键集内（本地展开期裁决，SweepExpandError 调用点即抛——G92：
+          规格形状/展开/校验错误统一此类型）。
+        - 每点 = 一个独立 Simulation 实例走 **run() 全原语**：本地校验、
+          auto-save（逐点 h5 落会话结果目录）、visualize/结果面随原语。
+        - ``gpus_per_sim``：每点作业的 gpu 上限（run(gpu=…)——旋钮真实
+          生效，G90 构造性修复）。
+        - ``max_parallel``：并发窗（缺省 1 = 顺序；受配额上限约束）。
+        - ``on_failure``：``continue``（缺省，坏点记 failed 继续）/
+          ``abort``（首坏点停排新点 + 取消在途——G89 重写语义）。
+        聚合/下载/逐点句柄见 SweepHandle。基底配置 = 当前实例收集的配置；
+        与 run() 不同，sweep 不占用本实例的 job_id（每点自带 job）。
         """
-        if config is None:
-            config = self.to_config()
-        elif not isinstance(config, dict):
-            raise TypeError(
-                f"config must be a dict (SimConfig JSON), got "
-                f"{type(config).__name__}")
-        _validate_for_submit(config)
-        spec = build_sweep_spec(sweep, parameters, gpus_per_sim=gpus_per_sim,
-                                max_parallel=max_parallel,
-                                on_failure=on_failure, mode=mode)
-        # G29b：本地展开 + 滑动窗口编排（内核 sweep 面已退役）——
-        # 展开错（SweepExpandError）在此抛，对应旧 POST 422 面
-        return SweepHandle(self._client, config, spec)
+        from ..models import SweepSpec
+        from ..models.sweep_expand import (SweepExpandError,
+                                           validate_sweep_config)
+        from pydantic import ValidationError
+        if parameters is None:
+            raise SweepExpandError(
+                "sweep 需要 parameters 轴列表"
+                "（每项 {name, values|linspace|logspace}）")
+        axes = []
+        for a in parameters:
+            if not isinstance(a, dict) or "name" not in a:
+                raise SweepExpandError(
+                    f"轴须 dict 且带 name（参数名轴形态）：{a!r}")
+            given = [k for k in ("values", "linspace", "logspace") if k in a]
+            if len(given) != 1:
+                raise SweepExpandError(
+                    f"轴 {a['name']!r} 取值三选一（values/linspace/logspace），"
+                    f"给了 {given}")
+            axes.append({"name": a["name"], given[0]: a[given[0]]})
+        spec: dict[str, Any] = {"parameters": axes,
+                                "gpus_per_sim": gpus_per_sim,
+                                "max_parallel": max_parallel,
+                                "on_failure": on_failure}
+        if mode is not None:
+            spec["mode"] = mode
+        # G92：规格形状错（pydantic）与展开错（轴名/逐点）统一 SweepExpandError
+        try:
+            spec_model = SweepSpec.model_validate(spec)
+        except ValidationError as e:
+            first = str(e.errors()[0].get("msg", e))
+            raise SweepExpandError(f"sweep 规格不合法：{first}") from e
+        points = validate_sweep_config(spec_model, self.to_config())
+
+        hooks_factory = hooks.get("sweep_sim_factory")
+        sims = []
+        for pt in points:
+            s = (hooks_factory() if hooks_factory
+                 else Simulation(client=self._client))
+            s.load_config(pt)
+            sims.append(s)
+        return SweepHandle(sims, [a["name"] for a in axes],
+                           points=points, client=self._client,
+                           gpus_per_sim=gpus_per_sim,
+                           max_parallel=max_parallel, on_failure=on_failure)
 
     # ---- 结果 ----
 

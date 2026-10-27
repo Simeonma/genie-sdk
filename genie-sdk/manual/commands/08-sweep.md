@@ -3,32 +3,31 @@
 > `f.sweep(...)` expands the sweep **locally** and returns a `SweepHandle`
 > immediately — no submission, no waiting, at call time. A sweep is a pure
 > client-side composition of ordinary jobs: there is no parent job and no
-> server-side sweep track; each point is submitted as a regular job under
-> the signed-in user. The handle keeps all state local.
+> server-side sweep track. **Each point is a full `Simulation` instance
+> driven through the ordinary `run()` primitive** — local validation,
+> auto-save (per-point h5 into the session results directory) and the
+> whole results surface come with it.
 
 ## `f.sweep()`
 
-Expands the SweepSpec against the base configuration at the call site:
+Expands the axes against the base configuration at the call site:
 `SweepSpec` validation plus `validate_sweep_config` (axis-name check,
-expansion, per-point re-resolution). An invalid spec raises
-`SweepExpandError` **locally** at the call point. A valid call returns a
-`SweepHandle` with the per-point **resolved** configurations ready to
-submit — nothing has been sent yet.
+expansion, per-point re-resolution). All spec-shape, axis-name and
+per-point errors raise `SweepExpandError` **locally** at the call point
+(one error type — G92). A valid call returns a `SweepHandle` holding one
+independent `Simulation` per point — nothing has been submitted yet.
 
 | Param | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `config` | dict | no | `to_config()` | Base SimConfig JSON; defaults to the current instance's collected configuration |
-| `sweep` | dict | no | — | Fully-controlled SweepSpec dict; mutually exclusive with `parameters` (both given → `ValueError`) |
-| `parameters` | list | no | — | Convenient axis form: `[{"name": "dx", "linspace": [10e-9, 40e-9, 4]}, …]`; each axis is `{"name": …}` plus exactly one of `values` / `linspace` / `logspace` (mutually exclusive, violating → `ValueError`); `name` must be a key of the base `parameters` table |
-| `mode` | str | no | `"product"` | `"product"` (Cartesian, axis order = outermost loop first) / `"zip"` (axes paired element-wise, equal lengths required) |
-| `gpus_per_sim` | int | no | 1 | GPUs per point (1–8) |
-| `max_parallel` | int | no | 1 | Local cap on points in flight (1–16) |
-| `on_failure` | str | no | `"continue"` | `"continue"` (failed points become NaN rows, the rest run) / `"abort"` (first failure cancels the remainder) |
+| `parameters` | list | yes | — | Axis form: `[{"name": "pitch", "linspace": [10e-9, 40e-9, 4]}, …]`; each axis is `{"name": …}` plus exactly one of `values` / `linspace` / `logspace` (violating → `SweepExpandError`); `name` must be a key of the base `parameters` table |
+| `gpus_per_sim` | int | no | 1 | GPU cap per point — passed to each point's `run(gpu=…)` (a real knob) |
+| `max_parallel` | int | no | 1 | Concurrent points in flight (1 = strictly sequential; capped by your quota) |
+| `on_failure` | str | no | `"continue"` | `"continue"` (bad points mark `failed`, the rest run) / `"abort"` (first bad point **of any bad kind** — `failed`/`killed`/`archived` — stops scheduling and cancels in-flight points) |
+| `mode` | str | no | `"product"` | `"product"` (Cartesian) / `"zip"` (axes paired element-wise, equal lengths required) |
 
 **Local expansion constraints** (`SweepExpandError` at the `f.sweep()`
 call point): at most 32 axes; at most 512 expanded points by default
-(a server-side cap; over-limit rejected with the count and the cap);
-`zip` axes of equal
+(over-limit rejected with the count and the cap); `zip` axes of equal
 length; every axis `name` must exist in the base `parameters` key set
 (else the error lists the available names). `linspace`/`logspace` take
 `[start, stop, n]` with `n ≥ 2` and `start != stop`; `logspace`
@@ -43,12 +42,22 @@ h = f.sweep(parameters=[
 h.wait(progress=True)
 ```
 
-### Submission semantics (sliding window)
+### Submission semantics (run() primitive, one instance per point)
 
-Points are submitted as ordinary jobs, one per point, through a sliding
-window: at most `max_parallel` jobs are kept in flight, and each finished
-point frees a slot for the next pending one. The window is a politeness
-measure only — server-side admission remains authoritative.
+Each point is an independent `Simulation` driven through `run()` — the
+single submission primitive. What each point gets for free:
+
+- local pre-submit validation (expressions resolved; errors before network);
+- **auto-save**: the point's result h5 lands in the session results
+  directory, exactly like a standalone run — plot it, `visualize` it,
+  fetch it later;
+- ordinary-job tracking (job id, digest, cancellation) through the
+  session gateway.
+
+The concurrency window executes the points: `max_parallel=1` runs them
+strictly in order; `>1` uses a thread pool with one `Simulation` per
+thread (instances share nothing). The window is a politeness measure —
+your quota remains authoritative.
 
 ## SweepHandle
 
@@ -60,27 +69,30 @@ compatibility):
 
 | Attribute | Type | Description |
 |---|---|---|
-| `h.id` | str | A local sweep id
+| `h.id` | str | A local sweep id |
 | `h.state` | str | Handle state: `pending` / `running` / `done` / `canceled` / `failed` |
-| `h.points` | list[dict] | Per-point **resolved configurations** (what each child job was or will be submitted with) |
+| `h.sims` | list[Simulation] | The per-point instances — full `Simulation` surface per point |
+| `h.points` | list[dict] | Per-point **resolved configurations** (what each child job was submitted with) |
 | `h.axis_names` | list[str] | Axis parameter names, in spec order |
-| `h.job_ids` | list[str \| None] | Per-point child job ids; `None` until submitted |
-| `h.states` | list[str] | Per-point states (`pending` / `queued` / `running` / `succeeded` / `failed` / `killed` / `canceled`) — snapshot as of the last refresh |
+| `h.job_ids` | list[str \| None] | Per-point child job ids; `None` until that point's `run()` submitted |
+| `h.states` | list[str] | Per-point states (`pending` / `running` / `succeeded` / `failed` / `killed` / `archived` / `canceled`) — snapshot as of the last refresh |
 
 | Method | Description |
 |---|---|
-| `wait(timeout=None, poll=2.0, progress=None)` | Drive the orchestration (one `pump()` per `poll` seconds) to a terminal state and return the final status dict. `done` → returned; `failed`/`canceled` → raises `GenieJobError` carrying the rollup. `timeout` expiry → `GenieHTTPError` (408); nothing is killed — re-enter `wait()` with no arguments to resume the same handle. `progress=True` prints a one-line rollup per step; a callable receives `progress(status)` |
-| `pump()` | Advance one step locally: fill the submission window, refresh in-flight states, rule on abort/cancel, judge terminal state |
-| `status()` | Pure local assembly `{sweep_id, state, rollup, points: [{idx, state, job_id}]}` — **no network call**; in-flight states are the snapshot from the last refresh (call `wait`/`pump` first for fresh data) |
+| `wait(timeout=None, progress=None)` | Execute all points to a terminal state and return the final status dict. `done` → returned; `failed`/`canceled` → raises `GenieJobError` carrying the rollup. `timeout` expiry → `GenieHTTPError` (408); execution is not killed — re-enter `wait()` with no arguments to resume (finished points are skipped). `progress=True` prints a one-line rollup per step; a callable receives `progress(status)` |
+| `results(i)` | The i-th point's `SimData` — reads the point's auto-saved h5 through the ordinary results surface |
+| `status()` | Pure local assembly `{sweep_id, state, rollup, points: [{idx, state, job_id}]}` — **no network call** |
 | `rollup()` | Local count dict over per-point states (`{"succeeded": 3, "running": 1, …}`) |
-| `cancel()` | Idempotent (no 409 path): in-flight child jobs are cancelled one by one, remaining points marked `canceled` |
+| `cancel()` | Idempotent: in-flight child jobs are cancelled one by one (via each point's live job id), remaining points marked `canceled` |
 | `digests()` | Per-point `GET /api/jobs/{id}/digest`; failed / canceled / not-yet-run points → `None` (NaN rows downstream) |
 | `aggregate()` | **Local** aggregation as a plain column dict (see below) — not npz bytes, not an HTTP fetch; never 404/410 |
-| `download(dir)` | Lands exactly two files into `dir`: `manifest.json` (verbatim `status()` output) and `aggregate.npz`. No `pNNNN/` per-point directories — each point is an ordinary job; per-point full results are fetched through the ordinary results surface after `genie.connect()` |
+| `download(dir)` | Lands exactly two files into `dir`: `manifest.json` (verbatim `status()` output) and `aggregate.npz` |
 
-`on_failure="abort"` semantics: only a point that ends `failed` triggers
-automatic cancellation of the remaining points; a `killed` point does
-not.
+`on_failure="abort"` semantics (rewritten 2026-10-27): the **first bad
+terminal of any kind** (`failed` / `killed` / `archived`) stops
+scheduling new points and cancels the in-flight ones; unstarted points
+are marked `canceled`. The handle ends `canceled` (unless every point
+bad → `failed`).
 
 ### Aggregate column contract
 
@@ -101,12 +113,12 @@ per-point digests; the column names are a consumed contract
 
 **Common pitfalls**
 
-- Calling old-surface methods — `manifest()`, `.result(idx)`,
-  `child_id(idx)` and per-point `pNNNN/` downloads do not exist on the
-  current handle; per-point results come from the child jobs (ordinary
-  jobs) through the ordinary results surface.
+- Calling old-surface methods — `manifest()`, `child_id(idx)` and
+  per-point `pNNNN/` downloads do not exist on the current handle;
+  per-point results are auto-saved by each point's `run()` and reachable
+  via `h.results(i)` or the ordinary results surface.
 - Taking the `f` after `f.run()`, tweaking parameters, and sweeping —
-  the `config` default pulls `to_config()`, i.e. the **current**
+  the sweep base pulls `to_config()`, i.e. the **current**
   configuration, which is locked after a run; don't run before
   sweeping.
 - Assuming one failed point means total failure — under

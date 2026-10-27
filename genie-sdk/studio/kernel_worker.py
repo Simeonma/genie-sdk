@@ -145,6 +145,11 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         s.visualize = _sim_visualize
         return s
 
+    # R24c（G148 批 4 同款接管模式）：sweep 的点实例走 _new_sim 工厂——
+    # 会话凭据 + visualize 注入随点免费；点实例不进 sink（非会话模型）。
+    from genie.core import simulate as _sim_mod
+    _sim_mod.hooks["sweep_sim_factory"] = _new_sim
+
     def _insts_of(namespace, sims_list) -> list:
         """某命名空间里"算数的实例全集"：connect 出来的 + 直建的 ns['f']。
 
@@ -267,13 +272,20 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
             node.append(val)
             return f"{p}.{len(node) - 1}"
         if verb == "remove":
-            head, _, idx = p.rpartition(".")
+            head, _, last = p.rpartition(".")
             if not head:
-                raise KeyError(f"{p}：remove 要指到数组元素（如 source.0 / source.s0）")
+                raise KeyError(f"{p}：remove 要指到元素（如 source.0 / parameters.d）")
             node = _lookup(root, head)
+            if isinstance(node, dict):
+                # G60①（R24c）：dict 键删除——参数表等 dict 节点的键移除
+                # （GUI 参数页删除走这条；数组元素删除走下方下标分支）
+                if last not in node:
+                    raise KeyError(f"{head} 无键 {last!r}")
+                del node[last]
+                return p
             if not isinstance(node, list):
-                raise TypeError(f"{head} 不是数组，不能 remove")
-            i = _index_of(node, idx)
+                raise TypeError(f"{head} 不是数组/dict，不能 remove")
+            i = _index_of(node, last)
             if not -len(node) <= i < len(node):
                 raise IndexError(f"{p}：下标越界（{head} 共 {len(node)} 个）")
             del node[i]

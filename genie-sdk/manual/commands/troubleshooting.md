@@ -193,10 +193,10 @@ Fix: `bloch` with `from_source=True` (or explicit `k`) — see
 The sweep returns a `SweepHandle` fine, but takes forever, some points are
 marked failed, or results for some indices come back as 409.
 
-**Cause: `max_parallel` left at 1.** The default runs one point at a time;
-the sweep is serialized on the server regardless of GPU availability.
-Diagnostic: check the `max_parallel` passed (allowed 1–16) and
-`gpus_per_sim` (1–8).
+**Cause: `max_parallel` left at 1.** The default runs one point at a time
+(sequentially, through each point's own `run()`). Diagnostic: check the
+`max_parallel` passed (allowed 1–16) and `gpus_per_sim` (1–8 — a real
+knob: it is passed to every point's `run(gpu=…)`).
 Fix: raise `max_parallel` to match idle GPUs — see
 [sweep-f-sweep-sweephandle.html](08-sweep.html).
 

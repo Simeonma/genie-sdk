@@ -352,7 +352,8 @@ def register_session_routes(
     async def api_model_patch(req: Request) -> dict:
         """模型**路径级增量**（表单/树/工具条/agent 的一次改动）。
 
-        一条 op = ``{path, value, verb?}``，verb ∈ set（缺省）/append/remove。
+        一条 op = ``{path, value, verb?}``，verb ∈ set（缺省）/append/remove
+        （remove 删数组元素或 dict 键——G60① 起 parameters 表删除走它）。
         客户端只发它改了什么——服务端是模型的唯一权威。一批 op 全对或全错；
         回声快照带 ``origin=patch``（已落地）或 ``origin=reject``（被拒）。
         """

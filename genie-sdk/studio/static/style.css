@@ -388,6 +388,16 @@ button:not(:disabled):active,.tool-btn:not(:disabled):active,.tb-btn:not(:disabl
   font-size: var(--fs-2xs); color: var(--text-muted);
   letter-spacing: 0.02em; line-height: 1.6; padding: 0 0 8px;
 }
+/* G60①（R24c）：参数页可编辑件——名字列只读、值列可编辑、行内删除 */
+.param-name, .param-value {
+  font-size: var(--fs-xs, 11px); padding: 3px 6px;
+  border: 1px solid var(--border-soft); border-radius: 6px;
+  background: var(--bg-primary, #fff); color: var(--text-primary);
+}
+.param-name { flex: 0 0 110px; }
+.param-value { flex: 1 1 auto; min-width: 0; }
+.param-name[readonly] { color: var(--text-secondary); background: var(--bg-secondary); }
+.frow .param-name + .param-value { margin-left: 6px; }
 /* 中栏容器 = 纵向 flex：让 .pane-body 吃满高度，空态才能在面板里垂直居中
  * （2026-10-21：空态若贴在顶部，读作"内容没加载出来"）。 */
 #config-content { display: flex; flex-direction: column; min-height: 100%; }
