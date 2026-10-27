@@ -18,7 +18,8 @@ from typing import Union, get_args, get_origin
 from pydantic import BaseModel, ValidationError
 
 from .expr import (PARAM_NAME_RULE, ExprError, eval_expr,
-                   resolve_parameter_table, valid_param_name)
+                   param_name_error, resolve_parameter_table,
+                   valid_param_name)
 from ._wire import SimConfig
 
 __all__ = ["unwrap_annotation", "discriminator_name", "select_union_member",
@@ -203,11 +204,8 @@ def check_raw_param_keys(data: dict) -> None:
         return
     for k in params:
         if not valid_param_name(k):
-            raise ExprError(
-                "syntax",
-                f"parameter name {k!r} is invalid: {PARAM_NAME_RULE} — "
-                f"it is referenced by expression slots in numeric fields "
-                f"and by sweep axes (parameters[name])")
+            # G151：整段文案复用 expr.param_name_error（构造性单源）
+            raise ExprError("syntax", param_name_error(k))
 
 def validate_resolved(resolved: dict, expr_at: dict) -> SimConfig:
     """求值结果的模型校验（parse_config 与 sweep 逐点校验共用）。

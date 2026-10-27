@@ -42,7 +42,7 @@ import unicodedata
 from collections.abc import Mapping
 
 __all__ = ["ExprError", "eval_expr", "resolve_parameter_table",
-           "valid_param_name"]
+           "valid_param_name", "param_name_error"]
 
 # 参数名规则文案（单一来源——G124⑦：此前 resolve.check_raw_param_keys
 # 与 _wire.SimConfig._check_param_names 双手复制同段文案，2026-10-18
@@ -50,6 +50,17 @@ __all__ = ["ExprError", "eval_expr", "resolve_parameter_table",
 PARAM_NAME_RULE = (
     "must be an identifier (starting with a letter or underscore, "
     "letters/digits/underscores only, <= 64 chars)")
+
+
+def param_name_error(k: str) -> str:
+    """非法参数名的完整指路报错（G151 收口：**整段文案**的单一来源——
+    规则常量 G124⑦ 已单源，指路后半段此前仍在 resolve 与 _wire 手抄
+    两份）。消费方 = resolve.check_raw_param_keys（求值前检查）与
+    _wire.SimConfig._check_param_names（线格式契约守卫——sweep 展开
+    路径对**未引用**坏名的唯一拦截者，不可删）。"""
+    return (f"parameter name {k!r} is invalid: {PARAM_NAME_RULE} — "
+            f"it is referenced by expression slots in numeric fields "
+            f"and by sweep axes (parameters[name])")
 
 # Call 白名单：名 → (最少参数个数, 最多参数个数)
 _FUNCTIONS = {

@@ -61,8 +61,7 @@ from pydantic import (
     model_validator,
 )
 
-from .expr import PARAM_NAME_RULE as _PNR
-from .expr import valid_param_name
+from .expr import param_name_error, valid_param_name
 
 
 def _walk_finite(v, path: str) -> None:
@@ -945,10 +944,11 @@ class SimConfig(_StrictModel):
             return v
         for k in v:
             if not valid_param_name(k):
-                raise ValueError(
-                    f"parameter name {k!r} is invalid: {_PNR} — "
-                    f"it is referenced by expression slots in numeric fields "
-                    f"and by sweep axes (parameters[name])")
+                # G151：报错文案复用 expr.param_name_error 同一实现
+                # （构造性单源，不靠手抄巧合）。此守卫是 sweep 展开路径
+                # （sweep_expand 无前置检查）对**未引用**坏名的唯一
+                # 拦截者，不可删。
+                raise ValueError(param_name_error(k))
         return v
 
     @model_validator(mode="after")
