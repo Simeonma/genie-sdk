@@ -209,6 +209,7 @@ def result_meta(job_id: str = "", owner: str = "user",
     回退数据源）。"""
     from pathlib import Path
     from genie.studio import results_view
+    owner = check_owner(owner)   # R25 确凿 5：修前 ../ 跨目录读他人 h5
     d = Path(workspace_root()) / owner
     try:
         p = (results_view.result_path(d, job_id, session_id) if job_id
@@ -230,6 +231,7 @@ def result_series(job_id: str, mon: str, field: str,
     axes="x,y" / slices="z:1,time:0"）。"""
     from pathlib import Path
     from genie.studio import results_view
+    owner = check_owner(owner)   # R25 确凿 5：修前 ../ 跨目录读他人 h5
     try:
         p = results_view.result_path(Path(workspace_root()) / owner,
                                      job_id, session_id)
@@ -259,6 +261,9 @@ async def result_inject(request: Request, owner: str = "user",
     （``_auto_save_result``），会话工作区读不到——推图即推数。"""
     from pathlib import Path
     from genie.studio import results_view
+    # R25 确凿 5：修前 owner 先拼路径写盘、事后才在 get_kernel 里
+    # 校验（写已经发生）——校验必须先于任何文件系统动作。
+    owner = check_owner(owner)
     if not job_id or not mon:
         raise HTTPException(status_code=422, detail="job_id/mon 必填")
     try:

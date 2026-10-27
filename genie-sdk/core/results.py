@@ -48,6 +48,20 @@ def ensure_supported_format(h5) -> None:
             f"upgrade genie-sdk")
 
 
+def _reject_axis_dataset(group, field: str) -> None:
+    """field 不得是轴数据集（R25 确凿 2）。
+
+    ``x``/``y``/``z``/``time``/``freqs`` 在组内是轴——修前 field="x"
+    被当成功读入，坐标云当场、谱轴当 ys，两条长度不等的列表照样打包
+    成曲线（静默错值）。统一在这里拒（curve 与 select 共用）。"""
+    axis_keys = tuple(k for k in AXIS_KEYS + ("time", "freqs") if k in group)
+    if field in axis_keys:
+        raise ValueError(
+            f"field {field!r} is an axis dataset (axes here: {axis_keys}) "
+            f"— expected a field component like 'Ex'; axes are selected "
+            f"via axes=, not read as data")
+
+
 def curve(group, mon: str, field: str):
     """取数尺（G96/R19 唯一一份）：h5 组 → (axis_key, xs, ys, tag, is_cplx)。
 
@@ -64,6 +78,7 @@ def curve(group, mon: str, field: str):
     两个外壳共用本尺：`SimData.plot`（matplotlib）与
     `studio.results_view.series`（降采样 + JSON）——两侧曲线必须
     逐点一致（test_results_equivalence 锁）。"""
+    _reject_axis_dataset(group, field)
     arr = group[field][()]
     is_cplx = np.iscomplexobj(arr)
     ys = np.abs(arr) if is_cplx else arr
@@ -73,6 +88,11 @@ def curve(group, mon: str, field: str):
     tag = ""
     if ys.ndim > 1:
         m = ys.reshape(ys.shape[0], -1)
+        if m.shape[1] == 1:
+            # 单格点（点监视器 (nf,1)）：直接展开，无"峰值格"可选——
+            # R25 可疑 7：修前恒打 " (peak cell #0)" 无意义后缀
+            ys = m[:, 0]
+            return axis_key, xs, ys, tag, is_cplx
         try:
             cell = int(np.nanargmax(m)) % m.shape[1]
         except ValueError:              # 全 NaN——无峰可选，诚实标注
@@ -158,6 +178,7 @@ def select(group, field: str, *, axes: list | None = None,
         raise KeyError(
             f"field {field!r} not found in monitor group (present: "
             f"{sorted(k for k in group if k not in _SPATIAL_KEYS)}")
+    _reject_axis_dataset(group, field)
     arr = np.asarray(group[field][()])
     is_cplx = np.iscomplexobj(arr)
     data = np.abs(arr) if is_cplx else arr
@@ -179,20 +200,52 @@ def select(group, field: str, *, axes: list | None = None,
     order.append(spec_ax)
     if data.ndim == 2:
         n_cells = data.shape[1]
-        spatial = _unflatten_axis_map(group, n_cells)
+        if n_cells > 1:
+            spatial = _unflatten_axis_map(group, n_cells)
+            if spatial:
+                for ax in reversed(_SPATIAL_KEYS):     # x 最快 = 最后一维
+                    if ax in spatial:
+                        coords[ax] = spatial[ax]
+                        order.append(ax)
+            else:
+                coords["cell"] = np.arange(n_cells)
+                order.append("cell")
+            data = data.reshape([len(coords[a]) for a in order])
+        else:
+            # 点监视器 (nf,1)：单格点无空间轴（R25 确凿 3——修前
+            # 报假轴 cell:1，与"点监视器只有谱轴"的文档违约）
+            data = data[:, 0]
+    elif (data.ndim == 1 and spec_key is None
+          and any(ax in group for ax in _SPATIAL_KEYS)):
+        # R25 缺口 8：无谱轴的 1D 场 + 逐格点云（index 监视器的
+        # eps/mu）——dim0 就是格点，用空间轴**替换**合成 index 轴
+        # （修前三面口径打架：curve 缺省能画 eps vs x 云，select 却
+        # 只认 index、axis_lengths 报 {}，选轴视图表达不回缺省视图）。
+        # 云不匹配（非逐格点）→ 退 cell 轴。带谱轴的 1D 场不属此形态
+        # （真产物无此组合），维持谱轴解读。
+        n = data.shape[0]
+        coords.pop(spec_ax)
+        order.remove(spec_ax)
+        spatial = _unflatten_axis_map(group, n)
         if spatial:
-            for ax in reversed(_SPATIAL_KEYS):     # x 最快 = 最后一维
+            for ax in reversed(_SPATIAL_KEYS):
                 if ax in spatial:
                     coords[ax] = spatial[ax]
                     order.append(ax)
+            data = data.reshape([len(coords[a]) for a in order])
         else:
-            coords["cell"] = np.arange(n_cells)
+            coords["cell"] = np.arange(n)
             order.append("cell")
-        data = data.reshape([len(coords[a]) for a in order])
 
     # 缺省视图 = 峰值列折叠（G142，与 curve() 同口径；mon 形参仅用于
     # curve 的消息文案，select 面没有监视器名可传，占位空串）
     if axes is None:
+        if slices:
+            # R25 小案：缺省视图无切片面——GUI parse_view 早有同口径
+            # 拦截（"slices 需要 axes"），SDK 直调面修前静默丢弃。
+            raise ValueError(
+                "slices require axes= — the default (peak-fold) view has "
+                "no slice surface; pass e.g. axes=['freqs'] first")
         axis_key, xs, ys, tag, _ = curve(group, "", field)
         return {"dim": 1, "x": {"key": axis_key or "index",
                                 "values": xs},
@@ -212,6 +265,14 @@ def select(group, field: str, *, axes: list | None = None,
         raise ValueError(f"axes must be distinct, got {axes!r}")
 
     slices = dict(slices or {})
+    for a in axes:
+        # R25 确凿 4：修前已选轴的 slice 键落进"unknown/unselected"
+        # 文案——与事实相反（该轴明明是 selected）。先答真话再谈范围。
+        if a in slices:
+            raise ValueError(
+                f"slice for axis {a!r} which is already selected in "
+                f"axes={axes} — a selected axis spans the view; slice an "
+                f"unselected axis instead")
     pick: list = [None] * len(order)
     for a in axes:
         pick[order.index(a)] = slice(None)
@@ -282,7 +343,13 @@ def axis_lengths(group) -> dict:
     for k in fields:
         shp = np.asarray(group[k][()]).shape
         if len(shp) >= 2:
-            n_cells = int(shp[1])
+            if shp[1] > 1:      # (nf,1) 点监视器不算空间轴（R25 确凿 3）
+                n_cells = int(shp[1])
+                break
+        elif len(shp) == 1 and any(a in group for a in _SPATIAL_KEYS):
+            # R25 缺口 8：1D 场 + 逐格点云（index 的 eps/mu）也按
+            # 格点数报空间轴——修前报 {}，面板对 index 监视器无轴行。
+            n_cells = int(shp[0])
             break
     if n_cells is not None:
         spatial = _unflatten_axis_map(group, n_cells)

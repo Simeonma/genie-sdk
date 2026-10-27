@@ -46,6 +46,15 @@ def parse_view(axes: str | None, slices: str | None) -> dict | None:
     return {"axes": ax, "slices": sl}
 
 
+def _pool_stride(n: int, n_target: int) -> int:
+    """池化步长（_pool_max 与坐标步进共用的单一真源）。
+
+    R25 确凿 1：修前坐标步进用 ``ceil(len(coord)/z.shape)`` 另算一套，
+    轴长非整除时坐标列表长度 ≠ z 行列数（101@30 → 25 列 vs 21 个 x），
+    热图错位。池化输出长 = ``floor(n/stride)``，坐标必须走同一 stride。"""
+    return 1 if n <= n_target else math.ceil(n / n_target)
+
+
 def _pool_max(a: np.ndarray, axis: int, n_target: int) -> np.ndarray:
     """max-pool 到 ≤ n_target（保峰值结构——峰值列折叠同哲学）。
 
@@ -55,7 +64,7 @@ def _pool_max(a: np.ndarray, axis: int, n_target: int) -> np.ndarray:
     if n <= n_target:
         return a
     import warnings
-    stride = math.ceil(n / n_target)
+    stride = _pool_stride(n, n_target)
     k = (n // stride) * stride
     sl = [slice(None)] * a.ndim
     sl[axis] = slice(0, k)
@@ -87,9 +96,10 @@ def series(h5path: Path, mon: str, field: str, maxpoints: int = 1200,
         view = (select(f[mon], field, axes=axes, slices=slices)
                 if axes is not None else None)
         if view is None:
-            axis_key, xs, ys, _tag, _cplx = curve(f[mon], mon, field)
+            axis_key, xs, ys, tag, _cplx = curve(f[mon], mon, field)
             view = {"dim": 1, "x": {"key": axis_key or "idx",
-                                    "values": xs}, "y": None, "data": ys}
+                                    "values": xs}, "y": None,
+                    "data": ys, "tag": tag}
     if view["dim"] == 1:
         ys = np.asarray(view["data"])
         xs = np.asarray(view["x"]["values"])
@@ -99,21 +109,25 @@ def series(h5path: Path, mon: str, field: str, maxpoints: int = 1200,
                 "x_label": view["x"]["key"],
                 "x": [float(v) for v in xs[::stride]],
                 "y": [float(v) for v in ys[::stride]],
-                "peak": float(np.max(ys)) if len(ys) else 0.0}
+                "peak": float(np.max(ys)) if len(ys) else 0.0,
+                "tag": view.get("tag", "")}   # R25 缺口 9：透传 GUI
     z = np.asarray(view["data"], dtype=float)
     if maxpoints > 0:
         z = _pool_max(z, 0, maxpoints)      # 轴 0 = y
         z = _pool_max(z, 1, maxpoints)      # 轴 1 = x
     yv = np.asarray(view["y"]["values"])
     xv = np.asarray(view["x"]["values"])
-    sy = max(1, math.ceil(len(yv) / z.shape[0]))
-    sx = max(1, math.ceil(len(xv) / z.shape[1]))
+    # R25 确凿 1：坐标与 z 同 stride 截到 z 行列数（xv[::sx] 在 n 非整除
+    # stride 时比 z 多一个余量点，尾部截齐）。
+    sy = _pool_stride(len(yv), maxpoints) if maxpoints > 0 else 1
+    sx = _pool_stride(len(xv), maxpoints) if maxpoints > 0 else 1
     return {"ok": True, "mon": mon, "field": field, "dim": 2,
             "x_label": view["x"]["key"], "y_label": view["y"]["key"],
-            "x": [float(v) for v in xv[::sx]],
-            "y": [float(v) for v in yv[::sy]],
+            "x": [float(v) for v in xv[::sx][:z.shape[1]]],
+            "y": [float(v) for v in yv[::sy][:z.shape[0]]],
             "z": [[float(v) for v in row] for row in z],
-            "peak": float(np.nanmax(z)) if z.size else 0.0}
+            "peak": float(np.nanmax(z)) if z.size else 0.0,
+            "tag": view.get("tag", "")}   # R25 缺口 9：透传 GUI
 
 
 def results_dir(owner_dir: Path, session_id: str | None = None) -> Path:
