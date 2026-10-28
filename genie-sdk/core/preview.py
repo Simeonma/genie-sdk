@@ -144,12 +144,14 @@ class _PreviewSim(Simulation):
 
     def sweep(self, parameters=None, *, gpus_per_sim: int = 1,
               max_parallel: int = 1, on_failure: str = "continue",
-              mode: str | None = None, **_ignored: Any) -> _Inert:
+              mode: str | None = None) -> _Inert:
         """R28 S1（站长裁）：**纯本地校验照做**——规格/轴名/展开错当场
         SweepExpandError（信封带行号，check_script 体检承诺兑现；修前
         preview 把 sweep 整个吞成 _Inert，坏轴名要到会话执行才炸）。
         校验过后宽容占位（预览不跑作业）。与真面共享 ``_sweep_points``
-        同一双手，无第二份校验实现。"""
+        同一双手，无第二份校验实现。签名与真面严格一致（R30 C-C：修前
+        ``**_ignored`` 比真面宽容——拼错 kwargs 真面 TypeError、预览
+        静默 ok，与 S1"不宽容本地形状校验"的立论自相矛盾）。"""
         self._sweep_points(parameters, gpus_per_sim=gpus_per_sim,
                            max_parallel=max_parallel,
                            on_failure=on_failure, mode=mode)

@@ -213,15 +213,12 @@ class SweepHandle:
                 self.states[i] = "canceled"
             else:
                 self.states[i] = e.state or "failed"
-            err = e
         except Exception as e:  # noqa: BLE001 —— 编排面坏点记 failed
             self.job_ids[i] = s.job_id or self.job_ids[i]
             self.errors[i] = e
             self.states[i] = "failed"
-            err = e
         else:
             self.job_ids[i] = s.job_id
-            err = None
         finally:
             newly = False
             with self._lock:
@@ -249,19 +246,26 @@ class SweepHandle:
                                 s2._client.cancel(jid2)
                             except Exception:  # noqa: BLE001 —— 取消尽力而为
                                 pass
-                    if _pass == 0:
+                    if _pass == 0 and self.max_parallel > 1:
+                        # R30 卫生：顺序路径（max_parallel=1）无并发提交
+                        # 竞态，第二遍必然空转——只在并行面睡这 0.2s。
                         _time.sleep(0.2)
-        if err is not None and not isinstance(err, GenieJobError):
-            # 非作业终态异常（网络等）：留在 errors 里供诊断，不再上抛
-            # ——编排语义 = 坏点记 failed 继续/中止，不炸整个 sweep。
-            pass
+        # （R30 GAP 清理：原"非作业终态异常不上抛"的守卫段在 P1 把
+        #  GenieJobError 也落 errors[] 之后成为死码，删——编排语义
+        #  "坏点记 failed/canceled 继续，不炸 sweep"由上方 except 面承袭。）
 
     def _window(self) -> int:
-        """并发窗 = min(max_parallel, 配额并发上限)——少撞 429 的礼貌。"""
+        """并发窗 = min(max_parallel, 配额并发上限)——少撞 429 的礼貌。
+
+        配额**查不到按用户声明值**：whoami 异常与在线但 quota 缺键
+        （R30 C-B：修前 `or 1` 把缺键静默塌成 1，声明 max_parallel=3
+        被无视，与本文档承诺相反）都不收窄。"""
         cap = self.max_parallel
         try:
             q = self._client.whoami().get("quota") or {}
-            cap = min(cap, max(1, int(q.get("max_concurrent_runs") or 1)))
+            mcr = q.get("max_concurrent_runs")
+            if mcr:
+                cap = min(cap, max(1, int(mcr)))
         except Exception:  # noqa: BLE001 —— 查不到配额按用户声明值
             pass
         return max(1, cap)
@@ -275,9 +279,13 @@ class SweepHandle:
         self._futures = [self._ex.submit(self._run_point, i) for i in range(n)]
 
     def _finalize(self) -> None:
-        for i, s in enumerate(self.states):
-            if s == "pending" or s in self._INFLIGHT:
-                self.states[i] = "canceled"
+        # R30 S-A：states 写入进锁——修前无锁写"canceled"恰是 S2 锁内
+        # check-then-set 挡不住的写者（点线程锁内读到 running 通过检查
+        # → _finalize 无锁写 canceled → 点线程写 _GOOD 覆盖定格）。
+        with self._lock:
+            for i, s in enumerate(self.states):
+                if s == "pending" or s in self._INFLIGHT:
+                    self.states[i] = "canceled"
         bad = SWEEP_TERMINAL_BAD + ("killed", "archived")
         if any(s == "canceled" for s in self.states):
             self.state = "canceled"

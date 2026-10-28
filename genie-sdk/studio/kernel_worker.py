@@ -521,14 +521,18 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
                 else:
                     emit({"ev": "out", "kind": "error",
                           "text": f"取消失败: {e}\n"})
-        # R29 C2：活跃 sweep 句柄也在收尸面——sweep 点实例不进会话 sink
-        # （sweep_sim_factory 注释明示，不污染模型合并），修前停止/超时后
-        # 在途点作业孤儿烧卡（A2「长任务必须能掐」）。cancel() 会取消
-        # 在途点 + 余点定格 canceled。
+        # R29 C2（R30 S-B 最小修：只碰**有在途点**的句柄，终态句柄静默
+        # 跳过——修前对已 done 的句柄也发"已取消"假 note；后台续跑的
+        # 扫描若仍有在途点仍会被收（停止语义 = 掐断在途计算，跨 exec
+        # 的取舍随 G168 事件设计一并裁）。点实例不进会话 sink（不污染
+        # 模型合并），修前停止/超时后在途点作业孤儿烧卡（A2）。
         try:
             from genie.core.sweep import active_handles as _active_sweeps
             for h in _active_sweeps():
                 try:
+                    if not ({"pending", "running"}
+                            & set(h.rollup().keys())):
+                        continue                 # 终态句柄：静默跳过
                     h.cancel()
                     emit({"ev": "out", "kind": "note",
                           "text": f"扫参 {h.id} 已取消（在途点收尸）\n"})
@@ -728,6 +732,10 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
             ok, err = False, str(e)
             emit({"ev": "out", "kind": "error",
                   "text": f"⏱ {e}——会话仍在，可继续敲命令\n"})
+            # R30 C-A：超时路径同样收尸——R29 C2 的承诺面是"停止/超时"，
+            # 修前只有 StopExec 分支调收尸，SIGALRM 掐断 sweep 轮询后
+            # 在途点作业继续烧卡（承诺只兑现了一半）。
+            _cancel_orphan_jobs()
         except StopExec:
             # 用户停止（A2）：置于 TimeoutError 与 BaseException 之间——
             # 后者会吞掉一切 BaseException，顺序即语义。
