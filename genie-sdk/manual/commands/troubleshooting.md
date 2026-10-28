@@ -195,8 +195,9 @@ marked failed, or results for some indices come back as 409.
 
 **Cause: `max_parallel` left at 1.** The default runs one point at a time
 (sequentially, through each point's own `run()`). Diagnostic: check the
-`max_parallel` passed (allowed 1–16) and `gpus_per_sim` (1–8 — a real
-knob: it is passed to every point's `run(gpu=…)`).
+`max_parallel` passed (allowed 1–16) and `gpus_per_sim` (1–4, the same
+cap as `run(gpu=…)` — a real knob: it is passed to every point's
+`run(gpu=…)`).
 Fix: raise `max_parallel` to match idle GPUs — see
 [sweep-f-sweep-sweephandle.html](08-sweep.html).
 

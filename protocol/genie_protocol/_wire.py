@@ -961,6 +961,18 @@ class SimConfig(_StrictModel):
                 raise ValueError(
                     f"duplicate {mtype} monitor names: {dups} (monitor "
                     f"names must be unique within each type)")
+        # 材料重名守卫（G40 L0 半，R39 站长裁）：材料名是 geometry.material
+        # 引用的身份——重名 = "后者覆盖先写"，第一个材料求解时静默失效
+        # （GUI 曾系统性制造 fitted/fitted 碰撞，R38 改库名入名；本守卫
+        # 把残余手改重名也拦在校验边界）。材料名必填非空（min_length=1），
+        # 全员参与查重。
+        mnames = [m.name for m in self.materials]
+        if len(mnames) != len(set(mnames)):
+            dups = sorted({n for n in mnames if mnames.count(n) > 1})
+            raise ValueError(
+                f"duplicate material names: {dups} — material names are "
+                f"what geometry references; a duplicate silently shadows "
+                f"the earlier definition (rename one of them)")
         # geometry 显示名唯一（2026-10-21 用户定案）：名字是树/3D 里的身份，
         # 允许重名就等于允许两行同名对象——找不到、删错一个都是实际代价。
         # 未命名（None）不参与查重：多个匿名对象是合法工作流。
@@ -1096,25 +1108,26 @@ class SweepAxisSpec(_StrictModel):
 
 
 class SweepSpec(_StrictModel):
-    """顶层参数扫描描述（P2-α：纯线格式 + 展开面，不含调度）。
+    """顶层参数扫描**定义**（纯线格式：哪些点；P2-α 起源 + R39 C+ 纯化）。
 
     - ``parameters``：1..32 轴（SweepAxisSpec）；
     - ``mode``：``product``（默认，笛卡尔积）| ``zip``（各轴等长逐点
       配对，长度不等 → 422）；
-    - ``gpus_per_sim``：单点仿真占用卡数（1..8；>=2 调度要求 NV
-      邻接链——同 run.gpu {"count": k} 语义，归 P2-β 调度门）；
-    - ``max_parallel``：并行点数上限（1..16，调度层提示性字段）；
-    - ``on_failure``：``continue``（默认）| ``abort``；
     - 展开点数上限 ``FDTD_MAX_SWEEP_POINTS``（默认 512，超限 422
       带点数/上限）。
+
+    R39（G169 站长裁 C+）：执行旋钮 ``gpus_per_sim`` / ``max_parallel`` /
+    ``on_failure`` 自本类退役——它们是"服务端跑扫描"年代搭 wire 车的
+    本地执行参数，R24c 客户端展开后 SweepSpec 根本不上线（唯一消费方
+    是 SDK 本地校验+展开），却自带一份抄错的上限（le=8 vs RunSpec.gpu
+    le=4，G169 矛盾的病根）。旋钮唯一住所 = ``f.sweep()`` 的 Python
+    签名（转发每点 ``run(gpu=…)``），上限单一来源 MAX_GPU_PER_RUN，
+    sweep 调用点早校验（core/simulate._sweep_points）。
     """
 
     parameters: list[SweepAxisSpec] = Field(min_length=1,
                                             max_length=MAX_SWEEP_AXES)
     mode: Literal["product", "zip"] = "product"
-    gpus_per_sim: int = Field(default=1, ge=1, le=8)
-    max_parallel: int = Field(default=1, ge=1, le=16)
-    on_failure: Literal["continue", "abort"] = "continue"
 
     @model_validator(mode="after")
     def _check(self):

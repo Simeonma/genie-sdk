@@ -439,7 +439,7 @@ class Simulation:
         SweepExpandError，不留到提交边界之后（历史：修前已退役的
         preview 面曾把 sweep 整个换成宽容占位，连本地校验也吞掉，
         坏轴名要到会话执行才炸）。"""
-        from ..models import SweepSpec
+        from ..models import SweepSpec, MAX_GPU_PER_RUN
         from ..models.sweep_expand import (SweepExpandError,
                                            validate_sweep_config)
         from pydantic import ValidationError
@@ -447,6 +447,21 @@ class Simulation:
             raise SweepExpandError(
                 "sweep 需要 parameters 轴列表"
                 "（每项 {name, values|linspace|logspace}）")
+        # R39（G169 C+）：执行旋钮早校验接管——旋钮自 SweepSpec 退役后
+        # 这里是它们唯一的校验点。上限引跨仓契约常量 MAX_GPU_PER_RUN
+        # （= RunSpec.gpu 的 le=4，单一来源；修前 SweepSpec 抄成 le=8，
+        # 5..8 的扫描定义过了本地校验、每个点提交时才死——G169 病根）。
+        if not 1 <= int(gpus_per_sim) <= MAX_GPU_PER_RUN:
+            raise SweepExpandError(
+                f"gpus_per_sim must be 1..{MAX_GPU_PER_RUN} "
+                f"(same cap as run(gpu=…)), got {gpus_per_sim!r}")
+        if not 1 <= int(max_parallel) <= 16:
+            raise SweepExpandError(
+                f"max_parallel must be 1..16, got {max_parallel!r}")
+        if on_failure not in ("continue", "abort"):
+            raise SweepExpandError(
+                f"on_failure must be 'continue' or 'abort', "
+                f"got {on_failure!r}")
         axes = []
         for a in parameters:
             if not isinstance(a, dict) or "name" not in a:
@@ -458,10 +473,8 @@ class Simulation:
                     f"轴 {a['name']!r} 取值三选一（values/linspace/logspace），"
                     f"给了 {given}")
             axes.append({"name": a["name"], given[0]: a[given[0]]})
-        spec: dict[str, Any] = {"parameters": axes,
-                                "gpus_per_sim": gpus_per_sim,
-                                "max_parallel": max_parallel,
-                                "on_failure": on_failure}
+        # SweepSpec = 纯定义（parameters/mode）；执行旋钮不进规格（R39）
+        spec: dict[str, Any] = {"parameters": axes}
         if mode is not None:
             spec["mode"] = mode
         # G92：规格形状错（pydantic）与展开错（轴名/逐点）统一 SweepExpandError
