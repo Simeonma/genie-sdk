@@ -26,6 +26,7 @@ import json
 import secrets
 import threading
 import time as _time
+import weakref
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -38,7 +39,20 @@ SWEEP_TERMINAL_BAD = ("failed", "canceled")
 
 AGGREGATE_NAME = "aggregate.npz"
 _AXES_KEYS = ("values", "linspace", "logspace")
-_INFLIGHT = ("queued", "running")
+
+# ── 活跃句柄登记表（R29 C2，站长裁"模块级登记"）──────────────────────
+# 会话停止/超时的收尸面用：sweep 点实例**不进会话 sink**（不污染模型
+# 合并——kernel_worker 工厂注释明示），收尸侧（_cancel_orphan_jobs）
+# 修前扫不到在途点 → 停止后点作业孤儿烧卡（违反 A2「长任务必须能掐」）。
+# WeakSet = 句柄被 GC 自动除名，零泄漏。
+_ACTIVE_SWEEPS: "weakref.WeakSet[SweepHandle]" = weakref.WeakSet()
+_ACTIVE_LOCK = threading.Lock()
+
+
+def active_handles() -> list["SweepHandle"]:
+    """当前进程内所有存活 SweepHandle（收尸/审计面用）。"""
+    with _ACTIVE_LOCK:
+        return list(_ACTIVE_SWEEPS)
 
 
 def unique_column(base: str, taken: set) -> str:
@@ -70,8 +84,10 @@ def flatten_numeric(obj, prefix: str = "") -> tuple[dict, list]:
             out.update(sub)
             skipped.extend(sub_skip)
     elif isinstance(obj, list):
+        # C1（R29）：本分支原写 str(k)——k 只在 dict 分支存在，无 prefix
+        # 的顶层 list 直接 NameError；正确形态是下标 i。
         for i, v in enumerate(obj):
-            key = f"{prefix}.{i}" if prefix else str(k)
+            key = f"{prefix}.{i}" if prefix else str(i)
             sub, sub_skip = flatten_numeric(v, key)
             out.update(sub)
             skipped.extend(sub_skip)
@@ -150,6 +166,8 @@ class SweepHandle:
         self._lock = threading.Lock()
         self._ex: ThreadPoolExecutor | None = None
         self._futures: list = []
+        with _ACTIVE_LOCK:               # R29 C2：收尸登记表
+            _ACTIVE_SWEEPS.add(self)
 
     # ---- 编排 ----
 
@@ -179,9 +197,16 @@ class SweepHandle:
         s = self.sims[i]
         try:
             s.run(gpu=self.gpus_per_sim)
-            self.states[i] = self._GOOD
+            with self._lock:
+                # R29 S2：cancel()/_finalize 可能在 run 进行中已把本点
+                # 定格 canceled（取消请求 best-effort 迟到/失败）——成功
+                # 回写不得覆盖取消定格，否则终态归并对偶不一致
+                # （handle.state=canceled 而 rollup 全 succeeded）。
+                if self.states[i] != "canceled":
+                    self.states[i] = self._GOOD
         except GenieJobError as e:
             self.job_ids[i] = s.job_id
+            self.errors[i] = e    # R29 P1：坏终态细节也落 errors（消费面）
             with self._lock:
                 aborting = self._aborting
             if aborting and e.state in ("killed", "canceled"):
@@ -205,20 +230,27 @@ class SweepHandle:
                         and not self._aborting):
                     self._aborting = newly = True
             if newly:
-                for j, s2 in enumerate(self.sims):
-                    if j == i:
-                        continue
-                    with self._lock:
-                        inflight = self.states[j] in self._INFLIGHT
-                    # 实时 job_id 在点实例身上（提交即设）——句柄侧
-                    # self.job_ids[j] 要等 run() 返回才回填， abort 取消
-                    # 恰发生在 run 进行中，读句柄数组会拿到 None 空转。
-                    jid2 = getattr(s2, "job_id", None) or self.job_ids[j]
-                    if inflight and jid2:
-                        try:
-                            s2._client.cancel(jid2)
-                        except Exception:  # noqa: BLE001 —— 取消尽力而为
-                            pass
+                # R29 S1：取消级联跑两遍（间隔 0.2s）——单遍在兄弟点
+                # "states→running 之后、submit 赋 job_id 之前"的微秒窗
+                # 读到 None 空转，该点漏取消自然跑完（G89 残余洞）；
+                # 双遍把窗口收窄到 0.2s 内仍未提交的极端情形。
+                for _pass in range(2):
+                    for j, s2 in enumerate(self.sims):
+                        if j == i:
+                            continue
+                        with self._lock:
+                            inflight = self.states[j] in self._INFLIGHT
+                        # 实时 job_id 在点实例身上（提交即设）——句柄侧
+                        # self.job_ids[j] 要等 run() 返回才回填， abort 取消
+                        # 恰发生在 run 进行中，读句柄数组会拿到 None 空转。
+                        jid2 = getattr(s2, "job_id", None) or self.job_ids[j]
+                        if inflight and jid2:
+                            try:
+                                s2._client.cancel(jid2)
+                            except Exception:  # noqa: BLE001 —— 取消尽力而为
+                                pass
+                    if _pass == 0:
+                        _time.sleep(0.2)
         if err is not None and not isinstance(err, GenieJobError):
             # 非作业终态异常（网络等）：留在 errors 里供诊断，不再上抛
             # ——编排语义 = 坏点记 failed 继续/中止，不炸整个 sweep。
@@ -272,6 +304,18 @@ class SweepHandle:
                               + " ".join(f"{k}={v}" for k, v in
                                          sorted(st["rollup"].items()))))
             if progress is True else None)
+
+        def _safe_progress(st: dict) -> None:
+            # R29 S3（站长裁"吞掉+警告继续"）：progress 是观测面，不该有
+            # 控制权——修前回调异常直接炸 wait 且顺序路径停排新点、state
+            # 卡 running（隐式 abort）。异常打警告进诊断，扫描继续。
+            if on_progress is None:
+                return
+            try:
+                on_progress(st)
+            except Exception as e:  # noqa: BLE001 —— 观测面异常不拦编排
+                print(f"[sweep {self.id}] progress 回调异常（忽略，"
+                      f"扫描继续）: {e!r}", flush=True)
         if self.state == "pending":
             self.state = "running"
             if self.max_parallel > 1:
@@ -287,8 +331,7 @@ class SweepHandle:
                     break
                 self._run_point(i)
                 st = self.status()
-                if on_progress is not None:
-                    on_progress(st)
+                _safe_progress(st)
                 if self.on_failure == "abort" and self._aborting:
                     break
                 if _timed_out():
@@ -299,8 +342,7 @@ class SweepHandle:
         else:
             while True:
                 st = self.status()
-                if on_progress is not None:
-                    on_progress(st)
+                _safe_progress(st)
                 if all(f.done() for f in self._futures):
                     break
                 if _timed_out():
@@ -318,13 +360,6 @@ class SweepHandle:
                 self.id, st["state"],
                 "rollup: " + json.dumps(st["rollup"], ensure_ascii=False))
         return st
-
-    def status(self) -> dict:
-        return {"sweep_id": self.id, "state": self.state,
-                "rollup": self.rollup(),
-                "points": [{"idx": i, "state": s, "job_id": j}
-                           for i, (s, j) in enumerate(zip(self.states,
-                                                          self.job_ids))]}
 
     def cancel(self) -> dict:
         """取消：在途子作业走 cancel，余点标 canceled。"""
@@ -379,15 +414,21 @@ class SweepHandle:
 
     def download(self, dir: str | Path) -> Path:
         """manifest + aggregate.npz 落地本地目录（形状同旧服务端产物，
-        下游零迁移）。逐点完整结果已由各点实例 auto-save（run() 原语）。"""
+        下游零迁移）。逐点完整结果已由各点实例 auto-save（run() 原语）。
+
+        R29 S4 死面收口：``_meta``（ok/file/n_result_columns/axes——旧
+        服务端 manifest 的聚合摘要字段）修前算出即丢，现并入 manifest
+        的 ``aggregate`` 键（与旧产物逐字段的全量兼容核对另挂账）。"""
         import numpy as np
         root = Path(dir)
         root.mkdir(parents=True, exist_ok=True)
+        arrays, meta = build_aggregate(self.points, self.axis_names,
+                                       self.digests())
+        manifest = self.status()
+        manifest["aggregate"] = meta
         (root / "manifest.json").write_text(
-            json.dumps(self.status(), ensure_ascii=False, indent=2),
+            json.dumps(manifest, ensure_ascii=False, indent=2),
             encoding="utf-8")
-        arrays, _meta = build_aggregate(self.points, self.axis_names,
-                                        self.digests())
         np.savez_compressed(root / "aggregate.npz", **arrays)
         return root
 

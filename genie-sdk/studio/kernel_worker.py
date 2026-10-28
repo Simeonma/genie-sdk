@@ -521,6 +521,21 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
                 else:
                     emit({"ev": "out", "kind": "error",
                           "text": f"取消失败: {e}\n"})
+        # R29 C2：活跃 sweep 句柄也在收尸面——sweep 点实例不进会话 sink
+        # （sweep_sim_factory 注释明示，不污染模型合并），修前停止/超时后
+        # 在途点作业孤儿烧卡（A2「长任务必须能掐」）。cancel() 会取消
+        # 在途点 + 余点定格 canceled。
+        try:
+            from genie.core.sweep import active_handles as _active_sweeps
+            for h in _active_sweeps():
+                try:
+                    h.cancel()
+                    emit({"ev": "out", "kind": "note",
+                          "text": f"扫参 {h.id} 已取消（在途点收尸）\n"})
+                except Exception:   # noqa: BLE001
+                    pass
+        except Exception:           # noqa: BLE001 —— 登记表不可用不炸收尸
+            pass
 
     def on_int(signum, frame):
         # 状态感知 SIGINT（A2）：exec 期 → StopExec 掐断（冲出用户代码
