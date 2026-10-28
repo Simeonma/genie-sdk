@@ -79,14 +79,14 @@ compatibility):
 
 | Method | Description |
 |---|---|
-| `wait(timeout=None, progress=None)` | Execute all points to a terminal state and return the final status dict. `done` → returned; `failed`/`canceled` → raises `GenieJobError` carrying the rollup. `timeout` expiry → `GenieHTTPError` (408); execution is not killed — re-enter `wait()` with no arguments to resume (finished points are skipped). `progress=True` prints a one-line rollup per step; a callable receives `progress(status)` |
+| `wait(timeout=None, progress=None)` | Execute all points to a terminal state and return the final status dict. `done` → returned; `failed`/`canceled` → raises `GenieJobError` carrying the rollup. `timeout` expiry → `GenieHTTPError` (408); execution is not killed — re-enter `wait()` with no arguments to resume (finished points are skipped). In sequential mode (the default) the timeout is checked between points, so the raise can land later than `timeout` if a point runs long. `progress=True` prints a one-line rollup per step; a callable receives `progress(status)` |
 | `results(i)` | The i-th point's `SimData` — reads the point's auto-saved h5 through the ordinary results surface |
 | `status()` | Pure local assembly `{sweep_id, state, rollup, points: [{idx, state, job_id}]}` — **no network call** |
 | `rollup()` | Local count dict over per-point states (`{"succeeded": 3, "running": 1, …}`) |
 | `cancel()` | Idempotent: in-flight child jobs are cancelled one by one (via each point's live job id), remaining points marked `canceled` |
 | `digests()` | Per-point `GET /api/jobs/{id}/digest`; failed / canceled / not-yet-run points → `None` (NaN rows downstream) |
 | `aggregate()` | **Local** aggregation as a plain column dict (see below) — not npz bytes, not an HTTP fetch; never 404/410 |
-| `download(dir)` | Lands exactly two files into `dir`: `manifest.json` (verbatim `status()` output) and `aggregate.npz` |
+| `download(dir)` | Lands exactly two files into `dir`: `manifest.json` (verbatim `status()` output plus an `aggregate` summary) and `aggregate.npz`. This format is canonical — there is no legacy server-side sweep artifact to stay compatible with |
 
 `on_failure="abort"` semantics (rewritten 2026-10-27): the **first bad
 terminal of any kind** (`failed` / `killed` / `archived`) stops

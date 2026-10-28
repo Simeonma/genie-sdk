@@ -14,9 +14,10 @@ sweep = 编排层：把"跑一个仿真"原语（Simulation.run）用 N 次。
 - **abort（G89 重写）**：首个坏终态停排新点 + 取消在途——不再有
   "首个成功点之后失效"的窗口；缺省 continue = 坏点记 failed 继续排；
 - **gpus_per_sim（G90 构造性修复）**：每点 run(gpu=...)——旋钮真实生效；
-- **digest 聚合**：逐点 GET /api/jobs/{id}/digest（小 JSON）→ 本地
-  build_aggregate（NaN 语义零变化）。transmission 换算依赖内核
-  source 谱归一——物理不过 SDK（铁律），digest 保持服务端读取。
+- **digest 聚合**：本地优先（G170：digest 随各点结果 h5 attrs 带出，
+  0 次 HTTP）→ 缺键/本地不可得回退 GET → build_aggregate（NaN 语义
+  零变化）。transmission 换算依赖内核 source 谱归一——物理不过 SDK
+  （铁律）。
 
 铁律沿用：零计算零物理——SDK 只做线格式搬运与编排，仿真永远是内核的事。
 """
@@ -341,16 +342,16 @@ class SweepHandle:
     def _terminal(self) -> bool:
         return self.state in (SWEEP_TERMINAL_OK,) + SWEEP_TERMINAL_BAD
 
-    def wait(self, timeout: float | None = None, poll: float = 2.0,
+    def wait(self, timeout: float | None = None,
              progress: bool | Callable[[dict], None] | None = None) -> dict:
         """阻塞编排直至终态。返回终态 status；坏终态抛 GenieJobError。
 
-        ``max_parallel=1`` 顺序执行（超时抛 408 后无参重入 wait() 从
-        未跑点继续）；``>1`` 线程窗（超时后后台线程继续跑，重入续等）。
+        ``timeout``：本地等待墙钟（G172/R35 定案语义，两路径不同——
+        **并行路径**每 ~0.5s 检查一次，到点即抛，后台线程继续跑、无参
+        重入续等；**顺序路径**只在点间检查——当前点会跑完才抛，单点
+        长跑可远超 timeout，408 后无参重入 wait() 从未跑点继续）。
         ``progress``：每步回调 ``progress(status)``；True = 打印 rollup。
         """
-        if poll < 0:
-            raise ValueError("poll 须 ≥ 0")
         on_progress = progress if callable(progress) else (
             (lambda st: print(f"[sweep {self.id}] "
                               + " ".join(f"{k}={v}" for k, v in
@@ -389,7 +390,8 @@ class SweepHandle:
                 if _timed_out():
                     raise GenieHTTPError(
                         f"本地等待超时（>{timeout}s）：sweep {self.id} 当前 "
-                        f"{self.state}——无参重入 wait() 从未跑点继续",
+                        f"{self.state}——顺序执行在点间检查超时（当前点跑完"
+                        f"才抛）；无参重入 wait() 从未跑点继续",
                         status=408)
         else:
             while True:
@@ -402,7 +404,7 @@ class SweepHandle:
                         f"本地等待超时（>{timeout}s）：sweep {self.id} 当前 "
                         f"{self.state}——后台线程继续，无参重入 wait() 续等",
                         status=408)
-                _time.sleep(min(poll, 0.5) if poll else 0.05)
+                _time.sleep(0.5)
             if self._ex is not None:
                 self._ex.shutdown(wait=True)
         self._finalize()
@@ -465,12 +467,15 @@ class SweepHandle:
         return self.sims[i].results()
 
     def download(self, dir: str | Path) -> Path:
-        """manifest + aggregate.npz 落地本地目录（形状同旧服务端产物，
-        下游零迁移）。逐点完整结果已由各点实例 auto-save（run() 原语）。
+        """manifest + aggregate.npz 落地本地目录。**格式以本实现为正典**
+        （G172/R35 核对定案：旧服务端 sweep.json 随内核 G29b 退役，无
+        已知消费者；manifest 与旧格式的字段差异清单存档 WAR_LOG R35——
+        aggregate.npz 同源零漂移）。逐点完整结果已由各点实例 auto-save
+        （run() 原语）。
 
-        R29 S4 死面收口：``_meta``（ok/file/n_result_columns/axes——旧
-        服务端 manifest 的聚合摘要字段）修前算出即丢，现并入 manifest
-        的 ``aggregate`` 键（与旧产物逐字段的全量兼容核对另挂账）。"""
+        R29 S4：``_meta``（ok/file/n_result_columns/axes——旧服务端
+        manifest 的聚合摘要字段）修前算出即丢，现并入 manifest 的
+        ``aggregate`` 键。"""
         import numpy as np
         root = Path(dir)
         root.mkdir(parents=True, exist_ok=True)
