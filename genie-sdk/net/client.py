@@ -63,8 +63,8 @@ class Client:
                 "connect() 需要 base_url（或设置环境变量 GENIE_URL）")
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
-        # 结果下载独立超时（audit 批 α）：fetch_npz 拉大 npz 不该被
-        # 30s 常规请求超时掐断——None=不限，显式数值可覆写。
+        # 结果下载独立超时（audit 批 α）：fetch_result 拉大结果文件
+        # 不该被 30s 常规请求超时掐断——None=不限，显式数值可覆写。
         self._timeout_download = timeout_download
         self._s = make_transport()
         # audit 批 β 账 3：key 缺省（None/空）时**不发** X-API-Key 头。
@@ -189,12 +189,10 @@ class Client:
 
     def fetch_result(self, job_id: str) -> bytes:
         """GET /api/jobs/{id}/result → 结果文件字节（genie-results-h5/1，
-        h5py.File(io.BytesIO(...)) 直接可开；旧名 fetch_npz 已废）。"""
+        h5py.File(io.BytesIO(...)) 直接可开。npz 时代的旧别名 fetch_npz
+        已随 G106 硬摘轮删除——2026-10-28 前零调用实证在案）。"""
         return self._req("GET", f"/api/jobs/{job_id}/result",
                          timeout=self._timeout_download).content
-
-    # 兼容别名（2026-10-09 格式 npz→h5 前的旧调用名；语义同 fetch_result）
-    fetch_npz = fetch_result
 
     # ---- agent 车道端点（P1/P2：MCP 服务器与 agent 运行时消费；
     #      有意不进 Simulation 人类表面——极简定案由

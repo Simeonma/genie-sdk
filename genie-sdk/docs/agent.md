@@ -151,9 +151,6 @@ cli.result_series(job_id=job, mon="t1", field="Ey")
 | `run_model` | 提交当前模型（不改模型） | §4 |
 | `get_results` | 结果清单 / 曲线 | §5 |
 
-（`check_script` 已随 G174 退役：自纠 = `run_script(mode="build")` 读
-带行号的错误；"看模型不跑" = build 成功后 `get_model`。）
-
 工具描述本身就是 prompt，先读它再调。写是异步的，但 `edit_model` /
 `run_script` 会**等到落地才返回**，所以不用自己写轮询。
 

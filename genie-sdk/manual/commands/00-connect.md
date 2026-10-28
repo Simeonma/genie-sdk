@@ -55,20 +55,6 @@ f = genie.connect("https://genie.example.com", api_key="…")
 
 **See also** [Simulation state machine & run()](#f-submit-lifecycle)
 
-## `genie.preview_script()` — deprecated
-
-**Removed engine (G174, 2026-10-28).** The zero-network preview engine — and
-the separate "verification" step it served — no longer exists. One execution
-engine remains (the session worker), one semantics: real execution, where
-errors come back with the script line number. `genie.preview_script()` and
-`genie.check_script()` keep their names importable until the next breaking
-release; calling them now raises `RuntimeError` pointing at the session.
-
-To run a script and see the model it builds, execute it in the session:
-Studio's Terminal, or the agent tool `run_script(mode="build")` followed by
-`get_model`. A failing script reports the line number — that loop **is** the
-self-correction step; there is deliberately no local dry-run or check tool.
-
 ## Lifecycle of f (overview)
 
 ```

@@ -112,45 +112,13 @@ def _wire_agent_surface() -> None:
 _wire_agent_surface()
 
 
-# ── 退役面 deprecated 桩（G174，2026-10-28 站长三连裁决）────────────
-# preview 零网络执行引擎与 check_script 体检面已整体删除："验证"不是
-# 用户任务的步骤，执行本身就是验证（会话 worker 一个引擎、真执行语义）。
-# 两个公开名**保留到下一次 breaking 发版**（与 G106 fetch_npz 一并摘除，
-# 手册同轮标注 deprecated）——期间调用即报错指路，不做任何静默降级。
-
-def preview_script(source: str, *, label: str = "<genie脚本>") -> dict:
-    """Deprecated（G174 已退役）：零网络预览引擎已删除，不再执行脚本。
-
-    替代：把脚本送进会话执行面——``genie studio`` 的 Terminal / MCP 工具
-    ``run_script(mode="build")``（错误带行号，成功即得模型，配合
-    ``get_model`` 看"跑出来的模型"）。
-    """
-    raise RuntimeError(
-        "genie.preview_script 已退役（G174）：零网络预览引擎已删除。"
-        "脚本请送会话执行（genie studio 的 Terminal，或 MCP 工具 "
-        "run_script(mode=\"build\") + get_model）——错误会带行号返回。")
-
-
-def check_script(source: str, *, label: str = "<agent脚本>",
-                 timeout_s: float = 30.0) -> dict:
-    """Deprecated（G174 已退役）：本地脚本体检面已删除。
-
-    替代：agent 自纠回路 = 会话执行原生能力——``run_script(mode=\"build\")``
-    报带行号的错误、"看模型不跑" = build 成功后 ``get_model``。
-    """
-    raise RuntimeError(
-        "genie.check_script 已退役（G174）：本地体检面已删除。自纠请走"
-        "会话执行（MCP 工具 run_script(mode=\"build\")，错误带行号；"
-        "模型用 get_model 读）。")
-
-
-# 公共表面：connect → Simulation（构建+提交）+ 结果对象 + 异常；
-# preview_script/check_script 为退役 deprecated 桩（见上，breaking 发版
-# 摘除）。Domain/Mesh/… 经 f.domain 等属性到达；Client 是内部传输层。
+# 公共表面：connect → Simulation（构建+提交）+ 结果对象 + 异常。
+# Domain/Mesh/… 经 f.domain 等属性到达；Client 是内部传输层。
 # ``material`` 是 client-side 纯函数子模块。
+# （G174/R33：preview_script/check_script 公开名已随硬摘轮删除——
+#  锁 = test_public_surface_contract「名字不在公开面」。）
 __all__ = [
-    "connect", "Simulation", "preview_script",
-    "check_script", "SweepHandle",
+    "connect", "Simulation", "SweepHandle",
     "TimeResult", "FreqResult", "IndexResult",
     "GenieError", "GenieHTTPError", "GenieJobError", "GenieConfigError",
     "material",
