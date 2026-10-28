@@ -365,11 +365,7 @@ fr.fields                      <span class="cm"># {field name: ndarray}</span></
 <tr><td><code>data["tr"]["Ex"]</code></td><td>subscripting → ndarray directly</td></tr>
 <tr><td><code>data.tr.keys()</code></td><td>all dataset names for that monitor</td></tr>
 </tbody></table></div>
-<pre class="code"><code>data = f.<span class="fn">results</span>()
-ax = data.<span class="fn">plot</span>(<span class="str">&quot;tr&quot;</span>, <span class="str">&quot;Ex&quot;</span>)
-data.<span class="fn">plot</span>(<span class="str">&quot;tr&quot;</span>, <span class="str">&quot;Ey&quot;</span>, ax=ax)         <span class="cm"># overlay</span></code></pre>
-<p><code>data.plot(mon, field, ax=None)</code> returns a matplotlib Axes (optional dependency — install <code>genie-sdk[plot]</code>); for volume monitors it plots the peak grid point curve by default.</p>
-<div class="intro"><strong>Deprecation note (2026-10):</strong> <code>data.plot</code> is being retired in favor of <code>f.visualize</code> — interactive plotting lives in the Studio GUI by design (zero matplotlib on the SDK side). <code>plot</code> will be removed at the next breaking release; for free-form figures, take the ndarray (<code>data["tr"]["Ex"]</code>) and use any Python plotting library you like.</div>
+<p>For figures, take the ndarray (<code>data["tr"]["Ex"]</code>) and use any Python plotting library you like — or push the monitor to the Studio <strong>Plot panel</strong> with <code>f.visualize</code> (below). The SDK ships no plotting code of its own: interactive plotting lives in the Studio GUI by design (zero matplotlib on the SDK side; the old <code>data.plot</code> was removed — R36).</p>
 <h2 id="f-visualize"><a class="anchor" href="#f-visualize" aria-label="Link to this section">#</a>f.visualize()</h2>
 <p>Push a monitor's result to the Studio <strong>Plot panel</strong> — the interactive result browser (1D curves with any axis as x, 2D cross-sections with any two axes as x/y, slice pickers for the remaining axes, hover readouts, zoom). Two trigger paths, one experience:</p>
 <ul><li><strong>Inside a Studio session</strong> (script editor / terminal): the session wires <code>f.visualize</code> for you.</li><li><strong>Outside</strong> (your own terminal, bare <code>genie.connect()</code>): the result h5 is uploaded to your session and the Plot panel opens automatically.</li></ul>

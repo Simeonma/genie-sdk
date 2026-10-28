@@ -374,7 +374,7 @@ f = genie.<span class="fn">connect</span>()   <span class="cm"># or genie.connec
 <h3 id="my-spectrum-has-ringing-sidelobes-around-a-sharp-peak-why">My spectrum has ringing/sidelobes around a sharp peak. Why?</h3>
 <p>A finite record convolves the spectrum with a sinc — a truncated ring-down; run longer or apodize — mechanisms and diagnostics in <a href="troubleshooting.html">Troubleshooting</a>.</p>
 <h3 id="how-do-i-read-the-results">How do I read the results?</h3>
-<p>Three paths into the same auto-downloaded h5: <code>f.get_freq('tr')</code> (cached raw arrays), <code>f.results()</code> (whole-file view + <code>.plot()</code>), <code>f.digest()</code> (server-side numeric summary, no file). The job must be <code>done</code>; a wrong name raises <code>KeyError</code> with a hint. See <a href="09-results.html">09 · Results</a> and <a href="tut6.html">Tutorial 6</a>.</p>
+<p>Three paths into the same auto-downloaded h5: <code>f.get_freq('tr')</code> (cached raw arrays), <code>f.results()</code> (whole-file view), <code>f.digest()</code> (server-side numeric summary, no file). The job must be <code>done</code>; a wrong name raises <code>KeyError</code> with a hint. See <a href="09-results.html">09 · Results</a> and <a href="tut6.html">Tutorial 6</a>.</p>
 <pre class="code"><code>fr = f.<span class="fn">get_freq</span>(<span class="str">&#x27;tr&#x27;</span>);  spec = <span class="fn">abs</span>(fr.fields[<span class="str">&#x27;Ex&#x27;</span>])**<span class="num">2</span></code></pre>
 <h2 id="materials"><a class="anchor" href="#materials" aria-label="Link to this section">#</a>Materials</h2>
 <h3 id="how-do-i-fit-gold-or-any-metal">How do I fit gold (or any metal)?</h3>

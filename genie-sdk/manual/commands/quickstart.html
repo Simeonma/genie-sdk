@@ -402,7 +402,6 @@ f.<span class="fn">run</span>()</code></pre>
 T  = <span class="fn">abs</span>(fr.fields[<span class="str">&#x27;Ex&#x27;</span>])**<span class="num">2</span> <span class="cm"># normalization/plotting is up to the analysis code</span>
 
 data = f.<span class="fn">results</span>()           <span class="cm"># full h5 view: data.tr.Ex, data.attrs</span>
-data.<span class="fn">plot</span>(<span class="str">&#x27;tr&#x27;</span>, <span class="str">&#x27;Ex&#x27;</span>)        <span class="cm"># quick matplotlib plot (optional dependency)</span>
 
 <span class="fn">print</span>(f.<span class="fn">digest</span>())            <span class="cm"># numeric summary (server-computed, zero-GPU)</span></code></pre>
 <p>See <a href="09-results.html">09 · results</a> for the full data surface.</p>

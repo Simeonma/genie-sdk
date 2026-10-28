@@ -18,11 +18,12 @@ from ..models import DomainSpec, LorentzMatSpec, MeshSpec, RunSpec, SimConfig
 from .sweep import SweepHandle
 
 # ── 组合根注入点（G1 分层契约，2026-10-11 定案）──────────────────────
-# core 只依赖 models：expert/sync/pull/attach 的实现在上层
+# core 只依赖 models：上层能力（visualize 注入等）的实现在上层
 # （net / integrations），由 ``genie/__init__`` 组合根在 import 时经
-# ``_wire`` 注入。缺省 = 离线降级（sync/pull 返回 False、
-# expert 报未接线）——只有绕过 ``import genie`` 直捣 core 子模块的形态
-# 才会遇到缺省态，产品面不可达。分层守卫 = tests/sdk/test_layering.py。
+# ``_wire`` 注入。缺省 = 离线降级（visualize 报未接线）——只有绕过
+# ``import genie`` 直捣 core 子模块的形态才会遇到缺省态，产品面不可达。
+# （历史 hooks：expert_factory 随 R36 专家面退役；材质库回退随 G19b。）
+# 分层守卫 = tests/sdk/test_layering.py。
 hooks: dict = {}
 
 
@@ -248,20 +249,6 @@ class Simulation:
         字节锁测试见 tests/test_script.py）。溯源/分享/论文用。"""
         from .script import render
         return render(self.to_config(), origin)
-
-    @property
-    def expert(self):
-        """专家会话面（framework §六「问/托 分离」：公共服务统一专家端点）。
-        ``f.expert.ask(...)`` / ``f.expert.delegate(cfg=…)``——SDK 与云宿主
-        同一份客户端代码（阶段 7⑤ 骨架转正）。实现经组合根注入
-        （hooks["expert_factory"]，见模块头「组合根注入点」）。"""
-        factory = hooks.get("expert_factory")
-        if factory is None:
-            raise RuntimeError(
-                "expert interface is not wired — the composition root "
-                "(genie/__init__) injects it; a normal `import genie` "
-                "completes the wiring")
-        return factory(self._client)
 
     @property
     def job_id(self) -> str | None:
@@ -566,9 +553,10 @@ class Simulation:
     def results(self, job_id: str | None = None) -> "SimData":
         """拉取作业结果 → SimData 结构体（genie-results-h5/1）。
 
-        ``data.<监视器>.<场>`` 直取（h5py 惰性读）；``data.plot(mon, field)``
-        画图（matplotlib 可选依赖）；``data.attrs["executed_steps"]`` 实际
-        执行步数。job_id 缺省 = 本 Simulation 最近一次提交的作业。"""
+        ``data.<监视器>.<场>`` 直取（h5py 惰性读）；
+        ``data.attrs["executed_steps"]`` 实际执行步数。job_id 缺省 =
+        本 Simulation 最近一次提交的作业。（画图走 Studio 的 Plot
+        面板——R36 起画图单一实现，SDK 不再内置 matplotlib 面。）"""
         from .results import SimData, ensure_supported_format
         import h5py
         import io

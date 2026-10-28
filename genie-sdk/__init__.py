@@ -53,7 +53,7 @@ __version__ = "2.0.0a14"
 
 
 # ── 组合根（G1 分层契约，2026-10-11 定案）───────────────────────────
-# core 只依赖 models；expert 的实现在上层（integrations），在此一次性
+# core 只依赖 models；上层能力（画图注入等）在此一次性
 # 注入 core 的 hooks——``import genie`` 即接线，core 永不反向 import 上层。
 # （2026-10-27 G19b 翻转：材质库 HTTP 回退 hook 已退役，材质库纯本地。）
 # 分层守卫 = tests/sdk/test_layering.py。
@@ -79,16 +79,17 @@ def _push_visualize(sim, mon: str, field: str | None = None) -> None:
 
 def _wire_core_hooks() -> None:
     from .core import simulate as _simulate
-    from .net.expert import ExpertSession
 
     _simulate._wire(
-        expert_factory=lambda client: ExpertSession(client),
         visualize=_push_visualize,
     )
     # 2026-10-27 G19b 翻转：材质库 HTTP 回退（remote_nk_fetch）退役——
     # 材质库纯本地（genie/nkdata 随包分发），材质面不再接线。
     # 2026-10-28 G174：preview 的 connect 交换钩子（_swap_connect）随
-    # 零网络预览引擎一并退役——组合根现役 hooks 只剩 simulate。
+    # 零网络预览引擎一并退役。
+    # 2026-10-28 R36：expert_factory 钩子随专家会话面（net/expert.py、
+    # f.expert、expert_post）整体退役——问/托不是产品主链的一环
+    # （存在权清理，见 WAR_LOG R36；网关 /expert/* 端点的归宿归服务仓）。
 
 
 _wire_core_hooks()

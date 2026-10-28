@@ -63,21 +63,11 @@ historical job can be revisited).
 | `data["tr"]["Ex"]` | subscripting → ndarray directly |
 | `data.tr.keys()` | all dataset names for that monitor |
 
-```python
-data = f.results()
-ax = data.plot("tr", "Ex")
-data.plot("tr", "Ey", ax=ax)         # overlay
-```
-
-`data.plot(mon, field, ax=None)` returns a matplotlib Axes (optional
-dependency — install `genie-sdk[plot]`); for volume monitors it plots the
-peak grid point curve by default.
-
-> **Deprecation note (2026-10):** `data.plot` is being retired in favor of
-> `f.visualize` — interactive plotting lives in the Studio GUI by design
-> (zero matplotlib on the SDK side). `plot` will be removed at the next
-> breaking release; for free-form figures, take the ndarray
-> (`data["tr"]["Ex"]`) and use any Python plotting library you like.
+For figures, take the ndarray (`data["tr"]["Ex"]`) and use any Python
+plotting library you like — or push the monitor to the Studio **Plot
+panel** with `f.visualize` (below). The SDK ships no plotting code of
+its own: interactive plotting lives in the Studio GUI by design (zero
+matplotlib on the SDK side; the old `data.plot` was removed — R36).
 
 ## f.visualize()
 

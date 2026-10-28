@@ -217,18 +217,6 @@ class Client:
         """结果数值摘要（峰频/幅值/透过率，读取零 GPU）。"""
         return self._req("GET", f"/api/jobs/{job_id}/digest").json()
 
-    # ---- 专家会话面（/expert/*，阶段 7；公共服务统一专家端点）----
-
-    def expert_post(self, path: str, body: dict) -> dict:
-        r = self._s.post(self.base_url + path, json=body,
-                         timeout=self.timeout)
-        if r.status_code >= 400:
-            from ..models.errors import GenieHTTPError
-            raise GenieHTTPError(
-                f"专家端点 {path} 失败（{r.status_code}）",
-                status=r.status_code, detail=r.text[:400])
-        return r.json()
-
     # ---- Sweep 父作业（P2-δ；子作业结果复用上面 /api/jobs 面）----
 
     def whoami(self) -> dict:

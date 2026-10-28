@@ -552,8 +552,9 @@ class SimData:
     组 = 监视器，数据集 = 场/轴；属性直达: ``data.tr.Ex`` → 惰性
     h5py Dataset（切片或 ``[()]`` 才是 ndarray；C2/R19 措辞修正——
     此前误写"complex ndarray"）。元信息: ``data.attrs``（根属性
-    executed_steps/dt/grid_shape/format）。画图: ``data.plot("tr","Ex")``
-    （matplotlib 为可选依赖，import 才触发）。
+    executed_steps/dt/grid_shape/format）。（R36：``plot()`` 方法随
+    存在权清理退役——画图单一实现 = Studio 的 Plot 面板，取数尺
+    ``curve()`` 保留供其消费。）
     """
 
     def __init__(self, h5file, job_id: str = "") -> None:
@@ -623,32 +624,3 @@ class SimData:
     def __repr__(self) -> str:
         return (f"SimData(job_id={self.job_id!r}, monitors={self.monitors}, "
                 f"attrs={self.attrs})")
-
-    def plot(self, mon: str, field: str, ax=None):
-        """画监视器某场。体监视器（任意维）缺省画**峰值格点**的曲线
-        （峰值格点号入图例，ASCII 标签避免字体缺字形）；matplotlib 为可选依赖
-        （pip install genie-sdk[plot]）。返回 Axes。"""
-        try:
-            import matplotlib.pyplot as plt  # 可选依赖，import 才触发
-        except ImportError as e:
-            # G146（R19）：报错带安装指路（docstring 承诺的 extras 名）。
-            raise ImportError(
-                "plot() needs matplotlib (optional dependency) — "
-                "pip install 'genie-sdk[plot]'") from e
-        # G146：缺监视器/缺场给可定位的 KeyError（对照 series 侧）
-        if mon not in self._f:
-            raise KeyError(f"monitor {mon!r} not found in result "
-                           f"(monitors: {self.monitors})")
-        if field not in self._f[mon]:
-            raise KeyError(f"field {field!r} not found in monitor {mon!r} "
-                           f"(datasets: {list(self._f[mon].keys())})")
-        # G96：曲线本体走取数尺（任意维折叠 + 峰值列，G143 根治 3D 崩）
-        axis_key, xs, ys, tag, is_cplx = curve(self._f[mon], mon, field)
-        created = ax is None
-        ax = ax or plt.gca()
-        ax.plot(xs, ys, label=f"{mon}.{field}{tag}")
-        ax.set_xlabel(axis_key or "idx")
-        ax.set_ylabel(("|" + field + "|") if is_cplx else field)
-        if created:
-            ax.legend()
-        return ax

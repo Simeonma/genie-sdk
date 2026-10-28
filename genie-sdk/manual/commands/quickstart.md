@@ -107,7 +107,6 @@ fr = f.get_freq('tr')        # raw arrays: fr.freqs (Hz), fr.fields
 T  = abs(fr.fields['Ex'])**2 # normalization/plotting is up to the analysis code
 
 data = f.results()           # full h5 view: data.tr.Ex, data.attrs
-data.plot('tr', 'Ex')        # quick matplotlib plot (optional dependency)
 
 print(f.digest())            # numeric summary (server-computed, zero-GPU)
 ```

@@ -36,8 +36,6 @@ server = ["fastapi>=0.104", "uvicorn>=0.24", "python-multipart>=0.0.32",
 agent = ["mcp>=2.0,<3"]
 # 材料拟合（fit_nk/add_from_library 需要 scipy.curve_fit）
 fit = ["scipy>=1.10"]
-# 结果画图（SimData.plot —— matplotlib 按需，不进核心依赖）
-plot = ["matplotlib>=3.7"]
 dev = ["pytest>=7"]
 
 [project.scripts]

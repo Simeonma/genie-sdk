@@ -140,7 +140,3 @@ chained APIs (`f.domain` / `f.mat` / `f.geom` / `f.src` / `f.mon`) plus
   `f.load_config()` is an **internal load-bearing channel, not a committed
   API** (session rollback / form channel only); its name and behavior are
   not guaranteed. Always rebuild via `to_script()` + a fresh `genie.connect()`.
-
-**See also**　[f.expert](00-connect.html#00-connections-entry)
-(ask / delegate to an expert surface), once a session is connected:
-`f.expert.ask(...)` / `f.expert.delegate(cfg=...)`.

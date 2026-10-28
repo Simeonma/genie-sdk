@@ -41,7 +41,8 @@ __all__ = ["fit_nk", "load_library_nk", "list_library_materials"]
 # ── 组合根注入点（G1 分层契约，2026-10-11 定案）──────────────────────
 # 2026-10-27 G19b 翻转：材质库 HTTP 回退（remote_nk_fetch hook）随协议层
 # 手术退役——n-k 库随包分发，load_library_nk 纯本地（未命中即报错）。
-# simulate.expert_factory 的 hook 注入仍在组合根；本模块已无 hook 面。
+# 本模块已无 hook 面。（历史注：simulate 的 expert_factory hook 已随
+# R36 专家面退役。）
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -44,7 +44,7 @@ Three read paths, one file:
 
 ```python
 fr   = f.get_freq('tr')   # typed object, cached: fr.freqs, fr.fields
-data = f.results()        # whole-file view: data.tr.Ex, data.attrs, data.plot()
+data = f.results()        # whole-file view: data.tr.Ex, data.attrs
 d    = f.digest()         # numeric summary computed on the server (no file)
 ```
 
@@ -170,7 +170,6 @@ peak = fr.freqs[int(np.argmax(spec))]  # peak frequency (Hz)
 
 data = f.results()
 print(data.attrs['executed_steps'])    # steps actually run
-data.plot('tr', 'Ex')                  # quick matplotlib look
 ```
 
 This snippet is the first minute of analysis, not the last. It locates

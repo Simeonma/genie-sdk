@@ -96,7 +96,7 @@ A finite record convolves the spectrum with a sinc — a truncated ring-down; ru
 
 ### How do I read the results?
 
-Three paths into the same auto-downloaded h5: `f.get_freq('tr')` (cached raw arrays), `f.results()` (whole-file view + `.plot()`), `f.digest()` (server-side numeric summary, no file). The job must be `done`; a wrong name raises `KeyError` with a hint. See [09 · Results](09-results.html) and [Tutorial 6](tut6.html).
+Three paths into the same auto-downloaded h5: `f.get_freq('tr')` (cached raw arrays), `f.results()` (whole-file view), `f.digest()` (server-side numeric summary, no file). The job must be `done`; a wrong name raises `KeyError` with a hint. See [09 · Results](09-results.html) and [Tutorial 6](tut6.html).
 
 ```python
 fr = f.get_freq('tr');  spec = abs(fr.fields['Ex'])**2
