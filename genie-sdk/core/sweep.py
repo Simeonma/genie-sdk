@@ -323,10 +323,19 @@ class SweepHandle:
         else:
             self.state = SWEEP_TERMINAL_OK
         # G168/R34：扫描终态事件（调用方可能多次 _finalize——cancel 后
-        # 重入 wait 再终态；消费侧按 sweep_id 去重）。
+        # 重入 wait 再终态；消费侧按 sweep_id 去重）。last_job_id =
+        # 最后一个成功点的作业号——会话面在终态补发单条 job-done
+        # （结果态切换平价：修前由每点的 job-done 顺带完成，降噪后由
+        # 这里一次性接手）。
+        last_job = None
+        for _i in range(len(self.states) - 1, -1, -1):
+            if self.states[_i] == self._GOOD and self.job_ids[_i]:
+                last_job = self.job_ids[_i]
+                break
         _emit_event({"type": "sweep_done", "sweep_id": self.id,
                      "state": self.state,
                      "rollup": self.rollup(),
+                     "last_job_id": last_job,
                      "total": len(self.sims)})
 
     def _terminal(self) -> bool:

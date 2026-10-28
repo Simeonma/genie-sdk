@@ -229,6 +229,12 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
             emit({"ev": "out", "kind": "sweep-progress", "text": "",
                   "data": {"sweep_id": sid, "state": ev.get("state"),
                            "total": total, "rollup": r}})
+            # 结果态切换平价（G168/R34）：修前每点的 job-done 顺带把 GUI
+            # 切进结果态；降噪后由扫描终态一次性接手——最后成功点的
+            # job-done 恰一条（term.js 由此记 __lastJobId + enterResult）。
+            if ev.get("state") == "done" and ev.get("last_job_id"):
+                emit({"ev": "out", "kind": "job-done", "text": "",
+                      "data": {"job_id": ev["last_job_id"], "ok": True}})
 
     _sweep_mod.hooks["on_event"] = _on_sweep_event
 
