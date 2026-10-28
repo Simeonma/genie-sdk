@@ -68,6 +68,14 @@ const SessionSync = {
           window.__mobileProgress(l.data || {});
         continue;
       }
+      if (kind === "sweep-progress") {
+        /* G168/R34（站长裁"汇总为王，点级降噪"）：扫描级汇总
+         * （X/N · 失败数）——不落终端，喂 result-chip；点级过程事件
+         * 已在 worker 侧静默，每点终态行照常走文本环。 */
+        if (typeof window.__sweepProgress === "function")
+          window.__sweepProgress(l.data || {});
+        continue;
+      }
       if (kind === "plot" && l.data) {
         /* G148 腿 A：会话内 f.visualize(mon, field) → Plot 面板自动
          * 开卡（job_id 用实例自己的——外部注入腿带自己的 id）。 */

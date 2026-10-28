@@ -626,6 +626,43 @@ window.__jobProgress = (function () {
   };
 })();
 
+/* ── 扫描进度（G168/R34，站长裁"汇总为王，点级降噪"）──
+ * 数据链：SweepHandle 点/扫描终态 → worker sweep-progress 事件 →
+ * term.js 转喂本入口。显示 = 「扫描 X/N · 失败 F」（F=0 不显示）+
+ * 定宽进度条（总量已知，与单作业的样本外推不同）；逐点进度条/弹窗
+ * 裁决不做（诊断入口 = 终端每点一行终态 + 扫描终态汇总行的失败点名，
+ * 低频信息走低频通道）。终态事件交还 chip 给结果摘要。 */
+window.__sweepProgress = function (d) {
+  const chip = document.getElementById("result-chip");
+  if (!chip || !d || !d.sweep_id) return;
+  const total = Number(d.total) || 0;
+  if (!total) return;
+  if (d.state && d.state !== "running") {   /* 终态：chip 交还摘要 */
+    refreshResultChip();
+    return;
+  }
+  const r = d.rollup || {};
+  const done = (r.succeeded || 0) + (r.failed || 0);
+  const bad = done - (r.succeeded || 0);
+  chip.classList.remove("hidden");
+  chip.innerHTML = "";
+  const wrap = document.createElement("span");
+  wrap.className = "jobprog";
+  wrap.title = "参数扫描 " + d.sweep_id + " · 共 " + total + " 点";
+  const bar = document.createElement("span");
+  bar.className = "jobprog-bar";
+  const fill = document.createElement("i");
+  fill.style.width = Math.min(100, Math.round(done / total * 100)) + "%";
+  bar.appendChild(fill);
+  const txt = document.createElement("span");
+  txt.className = "jobprog-txt";
+  txt.textContent = "扫描 " + done + "/" + total
+    + (bad ? " · 失败 " + bad : "");
+  wrap.appendChild(bar);
+  wrap.appendChild(txt);
+  chip.appendChild(wrap);
+};
+
 /* ── 极简折线图（结果标签卡曲线）：坐标轴 + 悬停读数卡 ──────────
  * 2026-10-10 站长实测踩坑修复：旧版 mousemove 增量叠画（连续移动=
  * 游标线/读数残影涂抹成一片），mouseleave 又 clearRect 曲线区（曲线

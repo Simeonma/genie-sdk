@@ -48,6 +48,24 @@ _AXES_KEYS = ("values", "linspace", "logspace")
 _ACTIVE_SWEEPS: "weakref.WeakSet[SweepHandle]" = weakref.WeakSet()
 _ACTIVE_LOCK = threading.Lock()
 
+# ── 事件钩子（G168/R34，站长裁"汇总为王，点级降噪"）──────────────────
+# 会话面注入的**观测面**（与 simulate.hooks 同款注入模式）：
+#   每点终态 {"type":"point", sweep_id, idx, state, job_id, total, rollup}
+#   扫描终态 {"type":"sweep_done", sweep_id, state, rollup, total}
+# None（缺省）= 零开销直通——独立 SDK 使用者无感。回调异常吞掉
+# （R29 S3 同款纪律：观测面不得有控制权，不拦编排）。
+hooks: dict = {"on_event": None}
+
+
+def _emit_event(ev: dict) -> None:
+    cb = hooks.get("on_event")
+    if cb is None:
+        return
+    try:
+        cb(ev)
+    except Exception:  # noqa: BLE001 —— 观测面异常不拦编排
+        pass
+
 
 def active_handles() -> list["SweepHandle"]:
     """当前进程内所有存活 SweepHandle（收尸/审计面用）。"""
@@ -253,6 +271,17 @@ class SweepHandle:
         # （R30 GAP 清理：原"非作业终态异常不上抛"的守卫段在 P1 把
         #  GenieJobError 也落 errors[] 之后成为死码，删——编排语义
         #  "坏点记 failed/canceled 继续，不炸 sweep"由上方 except 面承袭。）
+        # G168/R34：点终态事件（会话面汇总播报的数据源；finally 完成后
+        # 本点状态已定格——cancel 覆盖与 abort 级联都在上面发生）。
+        # detail = 坏点原因（截断）——点级过程播报降噪后，这是失败原因
+        # 唯一的终端出口（诊断性不随降噪丢失）。
+        err = self.errors[i]
+        _emit_event({"type": "point", "sweep_id": self.id, "idx": i,
+                     "state": self.states[i],
+                     "job_id": self.job_ids[i],
+                     "detail": (str(err)[:200] if err else ""),
+                     "total": len(self.sims),
+                     "rollup": self.rollup()})
 
     def _window(self) -> int:
         """并发窗 = min(max_parallel, 配额并发上限)——少撞 429 的礼貌。
@@ -293,6 +322,12 @@ class SweepHandle:
             self.state = "failed"
         else:
             self.state = SWEEP_TERMINAL_OK
+        # G168/R34：扫描终态事件（调用方可能多次 _finalize——cancel 后
+        # 重入 wait 再终态；消费侧按 sweep_id 去重）。
+        _emit_event({"type": "sweep_done", "sweep_id": self.id,
+                     "state": self.state,
+                     "rollup": self.rollup(),
+                     "total": len(self.sims)})
 
     def _terminal(self) -> bool:
         return self.state in (SWEEP_TERMINAL_OK,) + SWEEP_TERMINAL_BAD

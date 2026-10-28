@@ -45,6 +45,7 @@ import json
 import os
 import signal
 import sys
+import threading
 import traceback
 from pathlib import Path
 
@@ -92,12 +93,19 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         real_out.reconfigure(encoding="utf-8")
     import genie                     # 真 SDK（宿主 venv editable 安装）
 
+    _emit_lock = threading.Lock()    # G168/R34：IPC 行完整性（见 emit）
+
     def emit(obj):
         if emit_fn is not None:      # 同进程形态：直接回调，不碰 stdout
             emit_fn(obj)
             return
-        real_out.write(json.dumps(obj, ensure_ascii=False, default=repr) + "\n")
-        real_out.flush()
+        # G168/R34（S5 收口）：sweep 并行点线程 / 停止收尸线程会与主线程
+        # 并发 emit——单条 write 内部虽各持锁，跨 write 的 flush 交错仍
+        # 可能拆行；IPC 是"一行一 JSON"协议，出口处加锁保行完整。
+        with _emit_lock:
+            real_out.write(json.dumps(obj, ensure_ascii=False,
+                                      default=repr) + "\n")
+            real_out.flush()
 
     ns: dict = {}
     sims: list = []          # 会话期间创建的全部 Simulation（grating 式
@@ -147,8 +155,82 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
 
     # R24c（G148 批 4 同款接管模式）：sweep 的点实例走 _new_sim 工厂——
     # 会话凭据 + visualize 注入随点免费；点实例不进 sink（非会话模型）。
+    # G168/R34（站长裁"汇总为王，点级降噪"）：sweep 点额外打标
+    # ``_sweep_point``——run 补丁据此静默单作业级播报（提交/排队/进度/
+    # job-done），终端只收每点一行终态 + 扫描级汇总（_on_sweep_event）。
+    # 只包工厂注册这一处：_new_sim 另有 6 个调用点（replay/replace/
+    # run_model 等），那些是普通会话实例，不得降噪。
     from genie.core import simulate as _sim_mod
-    _sim_mod.hooks["sweep_sim_factory"] = _new_sim
+    from genie.core import sweep as _sweep_mod
+
+    def _sweep_point_sim():
+        s = _new_sim()
+        s._sweep_point = True
+        return s
+
+    _sim_mod.hooks["sweep_sim_factory"] = _sweep_point_sim
+
+    # sweep 事件面（G168/R34）：每点一行终态（可数 = "跑完的有多少个"）
+    # + sweep-progress 事件喂 chip（X/N · 失败数）；终态一行汇总（失败
+    # 点点名 = 诊断入口——低频信息走终态行，不占常驻显示；弹窗/逐点
+    # 进度条裁决不做，等 G4a GUI 扫参半边一起设计）。
+    _sweep_final_seen: set = set()
+    _sweep_bad_pts: dict = {}   # sid → [(点号, job_id)]（汇总行点名用）
+
+    def _on_sweep_event(ev) -> None:
+        if not isinstance(ev, dict):
+            return
+        et = ev.get("type")
+        sid = ev.get("sweep_id") or ""
+        total = ev.get("total")
+        if et == "point":
+            i, st = ev.get("idx"), ev.get("state") or "?"
+            jid = ev.get("job_id") or ""
+            n = (i + 1) if isinstance(i, int) else "?"
+            if st == "succeeded":
+                emit({"ev": "out", "kind": "job",
+                      "text": f"✓ 点 {n}/{total} 完成（{jid}）\n"})
+            elif st == "canceled":
+                emit({"ev": "out", "kind": "job",
+                      "text": f"· 点 {n}/{total} 已取消（{jid}）\n"})
+            else:
+                detail = str(ev.get("detail") or "").strip()
+                emit({"ev": "out", "kind": "job",
+                      "text": f"✗ 点 {n}/{total} 失败（{jid or '未提交'}）"
+                              + (f"：{detail}\n" if detail else "\n")})
+                _sweep_bad_pts.setdefault(sid, []).append((n, jid))
+            emit({"ev": "out", "kind": "sweep-progress", "text": "",
+                  "data": {"sweep_id": sid, "state": "running",
+                           "total": total,
+                           "rollup": ev.get("rollup") or {}}})
+        elif et == "sweep_done":
+            if sid in _sweep_final_seen:
+                return          # cancel 后重入 wait 会二次 _finalize
+            _sweep_final_seen.add(sid)
+            r = ev.get("rollup") or {}
+            bad = _sweep_bad_pts.pop(sid, [])
+            named = "（" + "、".join(
+                f"点 {n}{' ' + j if j else ''}" for n, j in bad[:4]
+            ) + ("…" if len(bad) > 4 else "") + ")" if bad else ""
+            ok_n, bad_n = r.get("succeeded", 0), sum(
+                v for k, v in r.items() if k != "succeeded")
+            if ev.get("state") == "canceled":
+                emit({"ev": "out", "kind": "job",
+                      "text": f"· 扫描已取消：{ok_n} 成功 · {bad_n} 未了结"
+                              f"{named}\n"})
+            elif ev.get("state") == "failed":
+                emit({"ev": "out", "kind": "error",
+                      "text": f"✗ 扫描失败：{ok_n} 成功 · {bad_n} 失败"
+                              f"{named}\n"})
+            else:
+                emit({"ev": "out", "kind": "job",
+                      "text": f"✓ 扫描完成：{ok_n} 成功"
+                              + (f" · {bad_n} 失败{named}\n" if bad_n else "\n")})
+            emit({"ev": "out", "kind": "sweep-progress", "text": "",
+                  "data": {"sweep_id": sid, "state": ev.get("state"),
+                           "total": total, "rollup": r}})
+
+    _sweep_mod.hooks["on_event"] = _on_sweep_event
 
     def _insts_of(namespace, sims_list) -> list:
         """某命名空间里"算数的实例全集"：connect 出来的 + 直建的 ns['f']。
@@ -629,6 +711,13 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
             raise RuntimeError(
                 f"这个实例已经提交过（作业 {self._job_id}）——"
                 "要再跑当前模型：点工具栏 Run，或在终端里 run_model()")
+        if getattr(self, "_sweep_point", False):
+            # G168/R34（站长裁"汇总为王，点级降噪"）：sweep 点不做单作业级
+            # 播报——提交/排队/状态/进度/job-done 全静默（终端不刷 N 份
+            # 流水账、chip 不在 N 个作业间跳、S5 的跨作业去重串槽从根上
+            # 不再可观察）。每点一行终态 + 扫描级汇总走
+            # sweep.hooks["on_event"] → _on_sweep_event（见上）。
+            return _orig_sim_run(self, *a, **kw)
         if kw.get("progress") is None:
             kw["progress"] = _run_progress
         _last_state["phase"] = "submit"
