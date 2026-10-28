@@ -26,6 +26,8 @@ import numpy as np
 _C0_SI = 299792458.0
 # Quality-table point cap before sampling（形状史承 tools_runner，已退役）。
 QUALITY_TABLE_CAP = 1000
+# 对照图稠密模型曲线的最少点数（R38b：fit 曲线不被数据点数绑架）。
+_CURVE_MIN_POINTS = 200
 
 from ..models import LIBRARY_FIT_DEFAULTS   # 拟合默认值正典（G2 归一）
 
@@ -352,6 +354,16 @@ def _scalar_result(fit, w, n_data, k_data, default_name):
     n_fit = np.asarray(d.n)
     k_fit = np.asarray(d.k)
 
+    # 稠密模型曲线（站长走查 R38b）：拟合模型是解析的——eps(ω) 在任意
+    # 波长可求值，对照图的 fit 曲线不该被数据点数绑架（Au 窗内仅 12 行
+    # 时红线曾是 12 段折线，共振形状看不见）。数据跨度上采样
+    # max(200, 数据点数) 个点；rmse/max_abs_err 仍在**数据点**上算
+    # （拟合质量在数据处评判，稠密曲线不参与）。
+    w_curve = np.linspace(float(w.min()), float(w.max()),
+                          max(_CURVE_MIN_POINTS, int(w.size)))
+    dc = _evaluate_dispersion(fit.eps_inf, fit.poles,
+                              2.0 * np.pi * _C0_SI / w_curve)
+
     warnings: list[str] = []
     if not fit.converged:
         warnings.append(
@@ -377,12 +389,17 @@ def _scalar_result(fit, w, n_data, k_data, default_name):
             node = None
             warnings.append(f"fit result failed config-node validation: {e}")
 
+    quality = _quality_table(w, n_data, k_data, n_fit, k_fit)
+    quality["curve_wavelength_m"] = [float(v) for v in w_curve]
+    quality["n_curve"] = [float(v) for v in np.asarray(dc.n)]
+    quality["k_curve"] = [float(v) for v in np.asarray(dc.k)]
+
     return {
         "converged": bool(fit.converged),
         "eps_inf": float(fit.eps_inf),
         "n_poles": len(poles),
         "poles": poles,                      # SI 角频率 rad/s（delta_eps 无量纲）
-        "quality": _quality_table(w, n_data, k_data, n_fit, k_fit),
+        "quality": quality,
         "material_node": node,               # 可直接粘进配置 materials 数组
         "warnings": warnings,
     }

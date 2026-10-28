@@ -144,9 +144,12 @@ async function fitAndInsert(src, range, nDrude, nLorentz, maxfev) {
   return insertFit(out);
 }
 
-/* ── 拟合对照图（Q1=A）：data 点 + fit 曲线两张小图（n 上 k 下，
- * 共享波长横轴 nm）。轻量自绘，不耦合 result.js 的结果面板设施。── */
-function _fitChart(canvas, wlNm, data, fit, yLabel) {
+/* ── 拟合对照图（Q1=A + R38b）：data 点 + 稠密 fit 曲线两张小图（n 上
+ * k 下，共享波长横轴 nm）。fit 线吃 quality 的稠密模型曲线
+ * （curve_wavelength_m/n_curve/k_curve——模型是解析的，曲线密度不被
+ * 数据点数绑架：Au 窗内仅 12 行时红线仍是平滑曲线）；蓝点=数据点。
+ * 轻量自绘，不耦合 result.js 的结果面板设施。── */
+function _fitChart(canvas, wlNm, data, fitWl, fit, yLabel) {
   const W = canvas.clientWidth || 400, H = canvas.clientHeight || 110;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   canvas.width = W * dpr; canvas.height = H * dpr;
@@ -154,7 +157,8 @@ function _fitChart(canvas, wlNm, data, fit, yLabel) {
   g.scale(dpr, dpr);
   g.clearRect(0, 0, W, H);
   const pad = { l: 34, r: 6, t: 6, b: 16 };
-  const x0 = wlNm[0], x1 = wlNm[wlNm.length - 1];
+  const all = wlNm.concat(fitWl);   /* 数据可能降序（RII 导出惯用）：刻度取 min/max */
+  const x0 = Math.min.apply(null, all), x1 = Math.max.apply(null, all);
   const ys = data.concat(fit);
   let y0 = Math.min.apply(null, ys), y1 = Math.max.apply(null, ys);
   if (y1 - y0 < 1e-12) { y0 -= 0.5; y1 += 0.5; }
@@ -166,13 +170,13 @@ function _fitChart(canvas, wlNm, data, fit, yLabel) {
   g.fillStyle = "#57606a"; g.font = "10px sans-serif";
   g.fillText(y1.toPrecision(3), 2, pad.t + 8);
   g.fillText(y0.toPrecision(3), 2, H - pad.b);
-  g.fillText(x0 + "nm", pad.l, H - 3);
-  g.fillText(x1.toPrecision(3) + "nm", W - pad.r - 40, H - 3);
+  g.fillText(x0.toPrecision(4) + "nm", pad.l, H - 3);
+  g.fillText(x1.toPrecision(4) + "nm", W - pad.r - 46, H - 3);
   g.fillText(yLabel, W - pad.r - 26, pad.t + 8);
-  g.strokeStyle = "#cf222e"; g.lineWidth = 1.5;   /* fit 曲线 */
+  g.strokeStyle = "#cf222e"; g.lineWidth = 1.5;   /* fit 曲线（稠密） */
   g.beginPath();
-  fit.forEach((v, i) => (i ? g.lineTo(px(wlNm[i]), py(v))
-                           : g.moveTo(px(wlNm[i]), py(v))));
+  fit.forEach((v, i) => (i ? g.lineTo(px(fitWl[i]), py(v))
+                           : g.moveTo(px(fitWl[i]), py(v))));
   g.stroke();
   g.fillStyle = "#1f6feb";                          /* data 点 */
   data.forEach((v, i) => {
@@ -282,12 +286,17 @@ function openNkFitDialog() {
                                             5000);
       pending = out;
       const q = out.quality || {};
-      /* Q1=A：对照图 + rmse 行，用户过目后确认（不再 1.2s 自动关） */
+      /* Q1=A：对照图 + rmse 行，用户过目后确认（不再 1.2s 自动关）。
+       * R38b：fit 线吃稠密模型曲线（curve_*），数据点照旧蓝点。 */
       const wlNm = (q.wavelength_m || []).map((x) => x * 1e9);
+      const cwlNm = (q.curve_wavelength_m || q.wavelength_m || [])
+        .map((x) => x * 1e9);
       if (wlNm.length) {
         $("ml-quality").style.display = "";
-        _fitChart($("ml-chart-n"), wlNm, q.n_data || [], q.n_fit || [], "n");
-        _fitChart($("ml-chart-k"), wlNm, q.k_data || [], q.k_fit || [], "k");
+        _fitChart($("ml-chart-n"), wlNm, q.n_data || [],
+                  cwlNm, q.n_curve || q.n_fit || [], "n");
+        _fitChart($("ml-chart-k"), wlNm, q.k_data || [],
+                  cwlNm, q.k_curve || q.k_fit || [], "k");
         const extra = badRows > 0 ? `，跳过坏行 ${badRows} 行` : "";
         $("ml-qmsg").textContent =
           `${out.n_poles} poles，rmse_n=${q.rmse_n ?? "—"}，`
