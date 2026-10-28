@@ -531,11 +531,11 @@ class Materials:
                          maxfev: int = LIBRARY_FIT_DEFAULTS["maxfev"]) -> _Chain:
         """从 n-k 材质库生成色散材料（**客户端展开糖**，F1 2026-09）。
 
-        内部立即 load_library_nk（优先 SDK 自带本地库 ``genie/nkdata/``，
+        内部立即 load_library_nk（SDK 自带本地库 ``genie/core/nkdata/``，
         离线可用）→ ``genie.material.fit_nk`` → 注册成 **lorentz pole
         材料节点**（eps_inf + poles）——配置里携带的就是 pole，
-        本地/云端同构；数值与旧内核服务端拟合一致（golden 锁
-        ``test_fit_golden.py``，rel=1e-9）。
+        本地/云端同构；数值回归底座 = ``tests/sdk/test_material_fit.py``
+        （Au golden，自回归性质——内核拟合面已删，无外部对照对象）。
 
         Parameters
         ----------

@@ -36,8 +36,7 @@ function treePreviewKey(kind, i) {
   if (kind === "materials")
     return it && it.type === "const" ? "mat_const"
          : it && it.type === "lorentz" ? "mat_lorentz"
-         : it && it.type === "from_library" ? "mat_library"
-         : "materials";
+         : "materials";   /* from_library 渲染已随 Q4=B 退役（R38） */
   if (kind === "monitor") return t ? "mon_" + t : "mon_time";
   if (kind === "source") return t || "soft_source";
   return t || "box";

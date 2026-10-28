@@ -8,7 +8,7 @@ domain / mesh / materials / geometry / source / monitor / run /
 results——每函数对应一节（golden 语料按节覆盖），
 "等于默认则省略"判据的默认值正典 = 协议 pydantic Field（_DEF，G99）。
 """
-from ...models import BC_KINDS, FACES, LIBRARY_FIT_DEFAULTS
+from ...models import BC_KINDS, FACES   # LIBRARY_FIT_DEFAULTS 随 from_library 渲染分支退役（Q4=B R38）移出
 from ...models import _wire as _w
 from ._emit import (_chain, _eq3, _norm_pol, _num, _num_arr, _num_or_list,
                     _pole_line, _slot_arr, _vertex_list)
@@ -229,66 +229,16 @@ def _gen_materials(list_, W: list, env: dict) -> list[str]:
                     W.append(tag(i, mt.get("name")) + " mu_pole 参数不全，已跳过")
             out.extend(_chain("f.mat.add_lorentz()", parts))
         elif mt.get("type") == "from_library":
-            # D2/D5（ADR）定案：from_library 的渲染形态（fit 默认值的
-            # 省略判据见 models.LIBRARY_FIT_DEFAULTS）；改形态必须同步
-            # 重生成 golden 并逐条评审 diff。
-            lib = py_str(mt.get("library"))
-            nk = mt.get("nk")
-            if not (isinstance(nk, dict)
-                    and isinstance(nk.get("wavelength_m"), list)
-                    and isinstance(nk.get("n"), list)
-                    and isinstance(nk.get("k"), list)):
-                nk = None
-            if not lib and not nk:
-                W.append(tag(i) + "缺 library（或 nk 数据），已跳过整条材料")
-                continue
-            lines = []
-            lines.append("# 材料拟合（客户端 genie.material.fit_nk）")
-            if lib:
-                lines.append("_nk = genie.material.load_library_nk(" + lib + ")")
-            else:
-                wl = _num_arr(nk["wavelength_m"], len(nk["wavelength_m"]), env, W, f"materials[{i}].nk.wavelength_m")
-                nn = _num_arr(nk["n"], len(nk["n"]), env, W, f"materials[{i}].nk.n")
-                kk = _num_arr(nk["k"], len(nk["k"]), env, W, f"materials[{i}].nk.k")
-                if wl is None or nn is None or kk is None:
-                    W.append(tag(i) + "nk 数据含非法数值，已跳过整条材料")
-                    continue
-                lines.append("_nk = ([" + ", ".join(wl) + "], [" +
-                             ", ".join(nn) + "], [" + ", ".join(kk) + "])")
-            fit_kw = []
-            fr = _num_arr(mt.get("fit_range"), 2, env, W, f"materials[{i}].fit_range")
-            _fr_def = LIBRARY_FIT_DEFAULTS["fit_range"]
-            # G126（R17）：省略判据只做相等比较，不做算术——fit_range 是
-            # 合法表达式串槽，此前 `mt[...][0] - _fr_def[0]` 对 str 裸崩
-            # TypeError（全文件唯一对槽值做算术的判据）。表达式串与任何
-            # 默认值都不等 → 恒渲染，语义正确。
-            fr_default = (fr is not None and mt.get("fit_range") is not None
-                          and mt["fit_range"][0] == _fr_def[0]
-                          and mt["fit_range"][1] == _fr_def[1])
-            if fr is not None and not fr_default:
-                fit_kw.append("fit_range=(" + ", ".join(fr) + ")")
-            nd = _num(mt.get("n_drude"), env, W, f"materials[{i}].n_drude")
-            if nd is not None and mt.get("n_drude") != LIBRARY_FIT_DEFAULTS["n_drude"]:
-                fit_kw.append("n_drude=" + nd)
-            nl = _num(mt.get("n_lorentz"), env, W, f"materials[{i}].n_lorentz")
-            if nl is not None and mt.get("n_lorentz") != LIBRARY_FIT_DEFAULTS["n_lorentz"]:
-                fit_kw.append("n_lorentz=" + nl)
-            mf = _num(mt.get("maxfev"), env, W, f"materials[{i}].maxfev")
-            if mf is not None and mt.get("maxfev") != LIBRARY_FIT_DEFAULTS["maxfev"]:
-                fit_kw.append("maxfev=" + mf)
-            lines.append(
-                "_fit = genie.material.fit_nk(_nk"
-                + (", " + ", ".join(fit_kw) if fit_kw else "") + ")")
-            mat_name = py_str(mt.get("name")) or lib or "'fitted'"
-            lines.append("_mat = f.mat.add_lorentz().name(" + mat_name +
-                         ").eps_inf(_fit['eps_inf'])")
-            lines.append("for _p in _fit['poles']:")
-            lines.append("    if _p['kind'] == 'drude':")
-            lines.append("        _mat.add_eps_drude_pole(_p['omega_p'], _p['gamma'])")
-            lines.append("    else:")
-            lines.append("        _mat.add_eps_lorentz_pole("
-                         "_p['omega_0'], _p['gamma'], _p['delta_eps'])")
-            out.extend(lines)
+            # Q4=B 裁决（R38）：from_library 渲染分支整体退役。产道已全灭
+            # ——GUI 工具条走拟合对话框（G20）、表单编辑分支已删、.gensim
+            # 导入与线格式模型/会话校验全部拒收该节点——退役前只剩渲染
+            # golden 在喂它。线格式 LibraryMatSpec 的拒收+指路**仍在**
+            # （F2 定案，输入侧防御）；拟合正道 = f.mat.add_from_library
+            # 糖 / genie.material.fit_nk（渲染产物形态见手册 10 的合并示例）。
+            # 退役史与 golden 删除见 WAR_LOG R38。
+            W.append(tag(i) + "from_library 材料已退役（线格式拒收该类型）"
+                     "——用 f.mat.add_from_library 糖或 genie.material."
+                     "fit_nk 拟合入 pole 节点，已跳过")
         else:
             W.append(tag(i) + "未知材料类型 " + _js_string(mt.get("type")) + "，已跳过")
     return out

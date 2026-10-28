@@ -981,12 +981,11 @@ const FormPanel = {
       /* 卡头（统一语言）：可编辑身份名 + 类型 chip + 删除钮（四对象族同构） */
       const headChildren = [];
       headChildren.push(this._preview(
-        "mat_" + (mt.type === "from_library" ? "library" : mt.type)));  /* 分型缩略图（R6） */
+        "mat_" + mt.type));  /* 分型缩略图（R6；from_library 面已退役 R38） */
       headChildren.push(this._headName(`materials.${i}.name`, mt.name, "material name",
         (mt.name || "材料 " + (i + 1)) + " 名称"));
       const chip = this._el("span", "tag type",
-        mt.type === "from_library" ? "library"
-          : (mt.type === "lorentz" ? "dispersive" : "const"));
+        mt.type === "lorentz" ? "dispersive" : "const");
       chip.title = "材料类型（由工具栏按钮 / 代码决定）";
       headChildren.push(chip);
       headChildren.push(this._delBtn("materials", i));

@@ -30,10 +30,10 @@ function addObject(kind, type) {
     arr = cfg.materials;
     item = type === "lorentz"
       ? { type: "lorentz", eps_inf: 1.5, mu_inf: 1.0, poles: [], mu_poles: [], name: `auto_lorentz_${n}` }
-      : type === "from_library"
-      ? { type: "from_library", name: `auto_lib_${n}`, library: "au",
-          fit_range: [4e-7, 8e-7], n_drude: 0, n_lorentz: 2, maxfev: 5000, quiet: true }
       : { type: "const", eps: 2.1, mu: 1.0, name: `auto_const_${n}` };
+    /* R38：from_library 死分支删除——G20 后 library 按钮开拟合对话框，
+     * 不再 addObject（下方 libBtn 注释为证），该分支零可达且塞的是
+     * 线格式明确拒收的节点。 */
   } else if (kind === "geo") {
     arr = cfg.geometry;
     const base = { priority: 0, material: mat };

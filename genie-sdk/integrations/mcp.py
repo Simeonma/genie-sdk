@@ -223,7 +223,8 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "list_materials",
         "description": (
-            "可用 n-k 材料库名单（写 `.add_from_library('Au', 'Au')` 时用库名）。"
+            "可用 n-k 材料库名单（写 `.add_from_library('Au', name='Au')` "
+            "时用库名——name 是 keyword-only 参数）。"
             "返回 {models: [...], count}。"),
         "parameters": {"type": "object", "properties": {}},
     },

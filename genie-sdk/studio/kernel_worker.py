@@ -214,14 +214,21 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
             ) + ("…" if len(bad) > 4 else "") + ")" if bad else ""
             ok_n, bad_n = r.get("succeeded", 0), sum(
                 v for k, v in r.items() if k != "succeeded")
+            fail_n = sum(v for k, v in r.items()
+                         if k not in ("succeeded", "canceled"))
             if ev.get("state") == "canceled":
                 emit({"ev": "out", "kind": "job",
                       "text": f"· 扫描已取消：{ok_n} 成功 · {bad_n} 未了结"
                               f"{named}\n"})
             elif ev.get("state") == "failed":
+                # 中止路（环境级错误）不把"没跑的点"算成失败——它们没跑。
+                text = f"✗ 扫描失败：{ok_n} 成功"
+                if fail_n:
+                    text += f" · {fail_n} 失败"
+                if r.get("canceled"):
+                    text += f" · {r['canceled']} 未运行"
                 emit({"ev": "out", "kind": "error",
-                      "text": f"✗ 扫描失败：{ok_n} 成功 · {bad_n} 失败"
-                              f"{named}\n"})
+                      "text": text + f"{named}\n"})
             else:
                 emit({"ev": "out", "kind": "job",
                       "text": f"✓ 扫描完成：{ok_n} 成功"

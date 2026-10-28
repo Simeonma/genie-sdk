@@ -4,14 +4,16 @@
 Port of the kernel's ``fdtd/_material/nkdata/__init__.py`` (REFERENCE
 ONLY, never import the kernel): tabulated ``DATA:`` blocks and
 formula-based (Sellmeier / extended Sellmeier) refractiveindex.info
-yml files, plus the catalogue listing.  The ``.yml`` data files live
-in ``genie/nkdata/`` (byte-identical copy of the kernel library at
-migration time, 37 materials + provenance scripts) so the SDK is
-offline-capable: ``load_library_nk`` prefers this packaged copy and
-only falls back to the HTTP endpoint when the name is absent locally.
+yml files, plus the catalogue listing.  The ``.yml`` data files live in
+this package (``genie/core/nkdata/``, 37 materials; migrated byte-identical
+from the kernel library at migration time — the kernel-side copy has since
+been removed along with its fitting face) so the SDK is offline-capable.
+There is **no HTTP fallback** (G19b, 2026-10-27): a name absent locally
+simply raises.
 
-Semantics preserved from the kernel port (each carries a regression in
-``test_fit_golden.py`` / ``test_material_fit.py``):
+Semantics preserved from the kernel port (regressions live in
+``tests/sdk/test_material_fit.py`` + the tools tests in
+``test_studio_server.py``):
 - ``load_nk_data(name)`` → ``(wl_um, n, k)`` or ``None`` when no FILE
   exists; ``ValueError`` when the file exists but cannot be parsed
   ("missing" vs "broken" have different remedies and must not share

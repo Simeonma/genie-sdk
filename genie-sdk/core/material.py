@@ -1,37 +1,30 @@
 """genie.material — client-side Drude-Lorentz n-k → pole config fitting.
 
-Ports the kernel's pure-numerical fitting (REFERENCE ONLY, never import the
-kernel)::
+**三仓唯一拟合实现**（R38 定案时点）：内核只吃 pole（fdtd serve schema
+对 from_library 线格式节点显式拒收并指路本模块），内核侧拟合代码已
+随 v100 网关退役整体删除（fdtd HEAD baa59ad 亲验零 curve_fit）——
+本模块不再是"内核移植"，是拟合正典；数值回归底座 =
+``tests/sdk/test_material_fit.py``（Au golden，自回归性质）。
 
-    genie-fdtd/fdtd/_material/_fit.py                 — fit_drude_lorentz,
-                                                       _params_to_poles
-    genie-fdtd/fdtd/_material/_evaluate_dispersion.py — evaluate_dispersion
-    v100/backend/tools_runner.py:49-160            — the API wrapper shape,
-                                                       _pole_to_node, _quality_table
+``genie.material.fit_nk(nk, ...)`` = 纯函数：n-k 数据 → config pole
+数据（``materials[].poles``）。与 SDK 其余部分同样依赖轻量：
+``import genie`` 只拉 numpy；scipy 的 ``curve_fit`` 在 ``fit_nk``
+首次真正拟合时才懒加载（浏览器镜像可以不装 scipy 直到调用拟合）。
 
-The deliverable is ``genie.material.fit_nk(nk, ...)`` — a thin pure function
-that maps n-k data to *config* pole data (``materials[].poles``). Like the
-rest of the SDK it stays dependency-light: ``import genie`` pulls only numpy;
-scipy's ``curve_fit`` is imported lazily the first time ``fit_nk`` actually
-fits, so the browser mirror can ``import genie`` without scipy until the fit
-is invoked.  numpy is expected.
-
-The returned dict matches ``tools_runner.material_fit`` for the single-component
-(3-tuple) input so the UI can consume it unchanged.  For multi-component input
-(dict / 7-tuple) the per-component quantities become dicts keyed by component
-name (mirroring the kernel's ``MultiFitResult``), and ``warnings`` is folded
-into one list.
+返回 dict 的单分量（3-tuple）形态被 Studio 本地端点
+``/api/tools/material_fit``（studio/server.py）与 GUI 拟合对话框
+（matlib.js）直接消费；多分量输入（dict / 7-tuple）的逐分量量成为
+按分量名键控的 dict，``warnings`` 折叠为一张表。
 """
 from __future__ import annotations
 
-import os   # 2026-10-27 G19b 翻转后已无 os 使用——保留待下轮清理
 from dataclasses import dataclass
 
 import numpy as np
 
-# Speed of light in vacuum [m/s] — matches the kernel's C0_PHYS constant.
+# Speed of light in vacuum [m/s]（数值史承自内核 C0_PHYS；内核侧已删）。
 _C0_SI = 299792458.0
-# Quality-table point cap before sampling (mirrors tools_runner.QUALITY_TABLE_CAP).
+# Quality-table point cap before sampling（形状史承 tools_runner，已退役）。
 QUALITY_TABLE_CAP = 1000
 
 from ..models import LIBRARY_FIT_DEFAULTS   # 拟合默认值正典（G2 归一）
@@ -53,10 +46,10 @@ __all__ = ["fit_nk", "load_library_nk", "list_library_materials"]
 class _DispersionResult:
     """Result of dispersion evaluation from Drude-Lorentz pole tuples.
 
-    eps : complex permittivity eps(omega); omega : angular frequencies [rad/s];
-    n / k : refractive index real / extinction coefficient (Re/Im of sqrt(eps)).
+    omega : angular frequencies [rad/s]; n / k : refractive index real /
+    extinction coefficient (Re/Im of sqrt(eps)).  eps 本体不留（R38 存在权
+    清理：全仓零消费者）。
     """
-    eps: np.ndarray
     omega: np.ndarray
     n: np.ndarray
     k: np.ndarray
@@ -65,15 +58,15 @@ class _DispersionResult:
 def _evaluate_dispersion(eps_inf, poles, omega):
     """eps(ω) = eps_inf + Σ ωp² / (ω0² − ω² − j·γ·ω)  (pure numpy).
 
-    ``poles`` is a list of (omega_0, gamma, omega_p_sq) SI tuples — the same
-    unified convention the kernel uses.  Returns a ``_DispersionResult``.
+    ``poles`` is a list of (omega_0, gamma, omega_p_sq) SI tuples — the
+    unified pole convention.  Returns a ``_DispersionResult``.
     """
     eps = np.full_like(omega, float(eps_inf), dtype=complex)
     w2 = omega * omega
     for w0, gm, omega_p_sq in poles:
         eps += omega_p_sq / (w0**2 - w2 - 1j * gm * omega)
     sq = np.sqrt(eps)
-    return _DispersionResult(eps=eps, omega=omega, n=sq.real, k=sq.imag)
+    return _DispersionResult(omega=omega, n=sq.real, k=sq.imag)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -121,7 +114,8 @@ def _fit_drude_lorentz(wavelengths, n, k, n_drude=0, n_lorentz=2,
                        maxfev=5000):
     """Fit a single component's n-k data (already windowed) to Drude-Lorentz.
 
-    Faithful port of the kernel's ``fit_drude_lorentz``: log10-space params,
+    历史上是内核 ``fit_drude_lorentz`` 的忠实移植（内核侧已删，本实现即
+    正典）：log10-space params,
     the frequency search box, the eps_inf high-frequency guess (argsort on the
     shortest wavelengths), the Drude low-frequency guess, the Lorentz peak-scan
     (suppress found peaks), clamping of p0 into bounds, and ``curve_fit`` with
@@ -306,7 +300,7 @@ def _sanity_check_lorentz_node(node):
 def _quality_table(w, n_data, k_data, n_fit, k_fit):
     """Fit-quality summary: RMSE / max-abs-error plus per-wavelength tables.
 
-    Mirrors ``tools_runner._quality_table``; subsamples the per-wavelength
+    形状史承 tools_runner._quality_table（已退役）；逐波长表按 cap 降采样
     arrays above ``QUALITY_TABLE_CAP`` points (RMSE is still computed over the
     full set).
     """
@@ -347,7 +341,7 @@ def _fit_range_bounds(fit_range):
 
 
 def _scalar_result(fit, w, n_data, k_data, default_name):
-    """Assemble the single-component tools_runner result dict.
+    """Assemble the single-component result dict（Studio 端点/GUI 契约形态）。
 
     ``fit`` is a ``_ComponentFit``; ``w``/``n_data``/``k_data`` are the masked
     in-window arrays.  The config ``material_node`` is built only when the fit
@@ -394,6 +388,39 @@ def _scalar_result(fit, w, n_data, k_data, default_name):
     }
 
 
+# 各向异性组装（Q5=α 裁决 R38）：7 元组输入 = 晶体/液晶三主轴拟合，
+# 出口直接给**可入 cfg 的单节点**（不再留 dict-of-dicts 死角——各向异性
+# 正确并法 eps_inf 张量 + rank-1 pole 此前无任何工具做）。内核/线格式
+# 全部就绪：LorentzMatSpec.eps_inf 支持 3 元对角；PoleSpec 的 rank-1
+# （alpha=beta=轴单位向量 = 只在该轴贡献 Δε，内核 _pole.py
+# "direction-selective by construction"）。
+_ANISO_AXES = {"xx": (1.0, 0.0, 0.0), "yy": (0.0, 1.0, 0.0),
+               "zz": (0.0, 0.0, 1.0)}
+
+
+def _anisotropic_node(per_component, name):
+    """把 xx/yy/zz 三份 iso 拟合组装成一个各向异性 lorentz 节点。
+
+    eps_inf = [exx, eyy, ezz]（3 元对角）；每轴每个极点转 rank-1
+    （alpha=轴单位向量，beta 不写——线格式语义缺省 beta=alpha）。
+    任一轴 material_node 为 None（未收敛/eps_inf≤0/校验失败）→ 返回
+    None，原因在该轴已折叠进 warnings 的条目里。dict 输入（自定义
+    分量名）不走这里——保持 dict-of-nodes 形态。
+    """
+    axes = ("xx", "yy", "zz")
+    if any(per_component[c]["material_node"] is None for c in axes):
+        return None
+    poles = []
+    for c in axes:
+        for p in per_component[c]["poles"]:
+            q = dict(p)
+            q["alpha"] = list(_ANISO_AXES[c])
+            poles.append(q)
+    return {"type": "lorentz", "name": name,
+            "eps_inf": [per_component[c]["eps_inf"] for c in axes],
+            "poles": poles}
+
+
 def fit_nk(nk, fit_range=LIBRARY_FIT_DEFAULTS["fit_range"],
            n_drude=LIBRARY_FIT_DEFAULTS["n_drude"],
            n_lorentz=LIBRARY_FIT_DEFAULTS["n_lorentz"],
@@ -426,31 +453,42 @@ def fit_nk(nk, fit_range=LIBRARY_FIT_DEFAULTS["fit_range"],
     dict
         ``{converged, eps_inf, n_poles, poles, quality, material_node,
         warnings}``.  For single-component input these match
-        ``tools_runner.material_fit`` so the UI can consume them unchanged —
+        Studio 本地端点 ``/api/tools/material_fit`` 与 GUI 对话框直接消费 —
         ``poles`` is a list of config poles (``{kind, omega_p|omega_0, gamma,
         delta_eps?}``) and ``material_node`` is a config ``lorentz`` node or
-        None.  For dict / 7-tuple input, ``converged``/``eps_inf``/``n_poles``/
-        ``poles``/``quality``/``material_node`` are dicts keyed by component
-        (mirroring the kernel's ``MultiFitResult``) and ``warnings`` is one
-        aggregated list.
+        None.  For dict / 7-tuple input the fit detail
+        (``converged``/``eps_inf``/``n_poles``/``poles``/``quality``) is a
+        dict keyed by component and ``warnings`` is one aggregated list;
+        ``material_node`` differs by shape (Q5=α, R38): a **7-tuple**
+        (anisotropic xx/yy/zz) yields ONE assembled lorentz node with a
+        3-element diagonal ``eps_inf`` and per-axis rank-1 poles
+        (``alpha`` = axis unit vector; ``beta`` defaults to ``alpha``
+        per wire semantics) — ready for the config's ``materials`` array;
+        a **dict** (custom component names, not assumed to be axes) keeps
+        ``{component: node}``.
 
     Raises
     ------
     ValueError
         If ``fit_range`` is reversed (lo >= hi), ``nk`` is not a recognized
-        shape, a component is not a (wl, n, k) 3-tuple, or fewer than 3 points
-        fall inside the fit window.
+        shape, a component is not a (wl, n, k) 3-tuple, the three columns
+        have unequal lengths, fewer than 3 points fall inside the fit
+        window, or an in-window n/k value is non-finite (G86 failure
+        taxonomy: bad input data raises with a data-cleaning prescription;
+        only a genuine iteration-cap hit reports the raise-maxfev
+        prescription via ``warnings``).
     """
     lo, hi = _fit_range_bounds(fit_range)
     # Normalize every input shape to {component: (wl, n, k)}; the scalar-vs-dict
     # result shape follows the INPUT TYPE (a user dict containing '' must stay
     # dict-shaped, hence the isinstance guard).
     is_scalar = not isinstance(nk, dict) and len(nk) == 3
+    is_aniso = not isinstance(nk, dict) and len(nk) == 7   # Q5=α：出口组装
     if isinstance(nk, dict):
         comps = dict(nk)
     elif is_scalar:
         comps = {'': nk}
-    elif len(nk) == 7:
+    elif is_aniso:
         wl_m, nx, kx, ny, ky, nz, kz = nk
         comps = {'xx': (wl_m, nx, kx), 'yy': (wl_m, ny, ky), 'zz': (wl_m, nz, kz)}
     else:
@@ -469,6 +507,12 @@ def fit_nk(nk, fit_range=LIBRARY_FIT_DEFAULTS["fit_range"],
         wl = np.asarray(wl, dtype=float)
         n_arr = np.asarray(n_arr, dtype=float)
         k_arr = np.asarray(k_arr, dtype=float)
+        if not (wl.size == n_arr.size == k_arr.size):
+            raise ValueError(
+                f"nk component {comp!r} columns must have equal lengths, "
+                f"got wl={wl.size}, n={n_arr.size}, k={k_arr.size} — "
+                f"boolean masking of mismatched columns would crash with a "
+                f"bare IndexError far from the cause")
         mask = (wl >= lo) & (wl <= hi)
         n_in = int(mask.sum())
         if n_in < 3:
@@ -477,6 +521,23 @@ def fit_nk(nk, fit_range=LIBRARY_FIT_DEFAULTS["fit_range"],
                 f"{lo * 1e9:.0f}-{hi * 1e9:.0f} nm for nk component "
                 f"{comp!r} — widen fit_range or supply more data inside "
                 f"the window")
+        # G86（R38）：非有限 n/k 在窗内 = 输入数据问题，必须在拟合前以
+        # 数据清洗处方显式报错——curve_fit 对 NaN/inf 的 ValueError 与
+        # "撞迭代上限"的 RuntimeError 历史上被压成同一句 maxfev 处方，
+        # 三种完全不同的失败拿到同一份无效建议（NaN p0 甚至静默出垃圾）。
+        # 只查窗内：窗外脏行不进拟合，拦它是家长式（§5 口径——只拦会崩的）。
+        for col_label, col in (("n", n_arr), ("k", k_arr)):
+            bad = mask & ~np.isfinite(col)
+            if bad.any():
+                rows = np.flatnonzero(bad)
+                raise ValueError(
+                    f"nk component {comp!r} column {col_label!r} has "
+                    f"{len(rows)} non-finite value(s) inside fit range "
+                    f"{lo * 1e9:.0f}-{hi * 1e9:.0f} nm (first at data row "
+                    f"{int(rows[0])} of {wl.size}) — clean the data (drop "
+                    f"or fix those rows; JSON null becomes NaN here) or "
+                    f"use library data via genie.material.load_library_nk; "
+                    f"non-finite values cannot be fitted")
         fits[comp] = _fit_drude_lorentz(
             wl[mask], n_arr[mask], k_arr[mask],
             n_drude=n_drude, n_lorentz=n_lorentz, maxfev=maxfev)
@@ -488,7 +549,7 @@ def fit_nk(nk, fit_range=LIBRARY_FIT_DEFAULTS["fit_range"],
 
     out = {c: _scalar_result(fits[c], *fit_data[c], name or c)
            for c in comps}
-    return {
+    result = {
         "converged": {c: o["converged"] for c, o in out.items()},
         "eps_inf": {c: o["eps_inf"] for c, o in out.items()},
         "n_poles": {c: o["n_poles"] for c, o in out.items()},
@@ -497,6 +558,13 @@ def fit_nk(nk, fit_range=LIBRARY_FIT_DEFAULTS["fit_range"],
         "material_node": {c: o["material_node"] for c, o in out.items()},
         "warnings": [warn for o in out.values() for warn in o["warnings"]],
     }
+    # Q5=α（R38）：7 元组（xx/yy/zz 三主轴）出口组装为**单个各向异性
+    # 节点**（eps_inf 3 元对角 + 每轴极点转 rank-1）——可整份粘进 cfg 的
+    # materials 数组；拟合明细（converged/eps_inf/poles/quality）仍按
+    # 分量键控。dict 输入保持 dict-of-nodes（自定义分量名不假定是轴）。
+    if is_aniso:
+        result["material_node"] = _anisotropic_node(out, name or "fitted")
+    return result
 
 
 def load_library_nk(name):
@@ -504,7 +572,8 @@ def load_library_nk(name):
 
     2026-10-27 起**纯本地**（G19b 翻转：材质库回归 SDK，网关 tools 面
     随协议层手术撤除，HTTP 回退与 allow_remote/base_url 等参数一并
-    退役）：n-k 库随包分发（``genie/nkdata/``，与内核库逐字节一致），
+    退役）：n-k 库随包分发（``genie/core/nkdata/``，迁移时与内核库逐字节
+    一致；内核侧副本已随其拟合面删除），
     本地未命中直接报错并列出查询入口。永不 import fdtd。
 
     Parameters

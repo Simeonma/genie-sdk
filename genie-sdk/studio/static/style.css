@@ -1801,7 +1801,7 @@ body.result-mode #bar-run-slot .run-btn svg { display: none; }
   border-color: var(--border-active);
 }
 
-/* nk 数据 textarea(from_library 材料的粘贴区)——inwrap 内也要约束 */
+/* nk 数据 textarea（拟合对话框自备数据粘贴区 #ml-raw）——inwrap 内也要约束 */
 .inwrap textarea,.frow > textarea {
   width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box;
 }

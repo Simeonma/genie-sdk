@@ -13,6 +13,10 @@ sweep = 编排层：把"跑一个仿真"原语（Simulation.run）用 N 次。
   每线程独占一个实例（run 内部 K4 锁为实例级，无共享状态）；
 - **abort（G89 重写）**：首个坏终态停排新点 + 取消在途——不再有
   "首个成功点之后失效"的窗口；缺省 continue = 坏点记 failed 继续排；
+- **错误归属（R37）**：点的配置错（GenieConfigError）/作业坏终态
+  （GenieJobError）= **点的事**，按 abort/continue 策略处理；其它异常
+  （凭据失效、传输断开、网关拒绝）= **环境的事**，第一次出现就停排，
+  `wait()` 原样抛出一次——一把坏 key 不再变成 N 个失败点；
 - **gpus_per_sim（G90 构造性修复）**：每点 run(gpu=...)——旋钮真实生效；
 - **digest 聚合**：本地优先（G170：digest 随各点结果 h5 attrs 带出，
   0 次 HTTP）→ 缺键/本地不可得回退 GET → build_aggregate（NaN 语义
@@ -32,7 +36,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from .job_state import TERMINAL_BAD as _JOB_TERMINAL_BAD
-from ..models.errors import GenieHTTPError, GenieJobError
+from ..models.errors import GenieConfigError, GenieHTTPError, GenieJobError
 
 # 父终态口径（与旧服务端父状态机同名，下游消费零迁移）
 SWEEP_TERMINAL_OK = "done"
@@ -182,6 +186,9 @@ class SweepHandle:
         self.errors: list[BaseException | None] = [None] * len(self.sims)
         self.state = "pending"
         self._aborting = False
+        # 环境级错误（凭据/传输/网关拒绝——不是某一个点自己的问题）：
+        # 第一次出现就停排、由 wait() 原样抛出一次；不记在任何点的账上。
+        self._fatal: BaseException | None = None
         self._lock = threading.Lock()
         self._ex: ThreadPoolExecutor | None = None
         self._futures: list = []
@@ -232,10 +239,20 @@ class SweepHandle:
                 self.states[i] = "canceled"
             else:
                 self.states[i] = e.state or "failed"
-        except Exception as e:  # noqa: BLE001 —— 编排面坏点记 failed
+        except GenieConfigError as e:
+            # 点的配置问题 = 点自己的事（与作业终态失败同档：记 failed 继续）
             self.job_ids[i] = s.job_id or self.job_ids[i]
             self.errors[i] = e
             self.states[i] = "failed"
+        except Exception as e:  # noqa: BLE001 —— 环境级错误：停排、原样抛出
+            # 凭据失效/传输断开/网关拒绝这类错误，**每个点都会一模一样地
+            # 失败**——它是扫描的事，不是点的事。记在扫描级并立刻停排；
+            # 不写点状态、不发点事件（这个点根本没跑成）。
+            with self._lock:
+                if self._fatal is None:
+                    self._fatal = e
+                self._aborting = True
+            return
         else:
             self.job_ids[i] = s.job_id
         finally:
@@ -317,7 +334,10 @@ class SweepHandle:
                 if s == "pending" or s in self._INFLIGHT:
                     self.states[i] = "canceled"
         bad = SWEEP_TERMINAL_BAD + ("killed", "archived")
-        if any(s == "canceled" for s in self.states):
+        if self._fatal is not None:
+            # 环境级错误：不是"用户取消"，也不是全部点失败——扫描中止。
+            self.state = "failed"
+        elif any(s == "canceled" for s in self.states):
             self.state = "canceled"
         elif self.states and all(s in bad for s in self.states):
             self.state = "failed"
@@ -408,6 +428,10 @@ class SweepHandle:
             if self._ex is not None:
                 self._ex.shutdown(wait=True)
         self._finalize()
+        if self._fatal is not None:
+            # 环境级错误原样抛一次（服务端的原话，不翻译）——调用方看得见
+            # "是哪把凭据/哪条链断的"，而不是 N 行一模一样的点失败。
+            raise self._fatal
         st = self.status()
         if st["state"] in SWEEP_TERMINAL_BAD:
             raise GenieJobError(

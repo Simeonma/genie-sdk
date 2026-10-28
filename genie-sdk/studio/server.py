@@ -9,9 +9,11 @@
 1. **地址是部署细节**：会话地址由进程主入口显式注入（``create_app(session=…)``），
    不经环境变量泄漏进产品语义；本地默认由 ``genie studio`` 自己起会话、
    自己注入，不探测端口、不复用旧进程（O1）。
-2. **唯一网关出口**：``/api/auth/*``、``/api/tools/*``、``/api/jobs/*`` 全部
-   经 ``session.gateway()`` 转发（会话侧有路径白名单 + 唯一一次"上游不可达"
+2. **唯一网关出口**：``/api/auth/*``、``/api/jobs/*`` 经
+   ``session.gateway()`` 转发（会话侧有路径白名单 + 唯一一次"上游不可达"
    翻译）。Studio 不再持有后端地址、不再自己发请求（O2）。
+   ``/api/tools/*``（库清单/材料拟合）**不在转发面**——G19b 起纯本地
+   实现（genie.core.material + 本地 scipy，见下方工具面端点）。
 3. **代理面是可选的**：``mount_session=True`` 才挂"会话门面 + 网关门面"
    （本地 ``genie studio`` 与 Pyodide 网页端 ``studio/web.py`` 共用）；
    ``False`` = 纯静态壳。
@@ -263,7 +265,13 @@ def create_app(*, static_dir: str | Path | None = None,
                 if not name:
                     models = material.list_library_materials()
                     return {"models": models, "count": len(models)}
-                wl, n, k = material.load_library_nk(name)
+                # 库名未命中/非法是资源不存在：404 + load_library_nk 的
+                # 指路文案（R38 修复：此前裸 ValueError 穿透成 500 纯文本，
+                # 前端 r.json() 当场 SyntaxError）。
+                try:
+                    wl, n, k = material.load_library_nk(name)
+                except ValueError as e:
+                    raise HTTPException(404, detail=str(e))
                 return {"name": name,
                         "wavelength_m": [float(x) for x in wl],
                         "n": [float(x) for x in n],
@@ -274,6 +282,35 @@ def create_app(*, static_dir: str | Path | None = None,
         async def tools_material_fit(req: Request) -> dict:
             body = await req.json()
 
+            def _int_param(key):
+                # 整型参数契约（R38）：非整数（含 2.5 静默截断、null、
+                # 字符串）给干净 422，而不是 int() 的 ValueError/TypeError
+                # 裸穿 500。
+                v = body.get(key, LIBRARY_FIT_DEFAULTS[key])
+                if isinstance(v, bool) or not isinstance(v, (int, float)):
+                    raise HTTPException(
+                        422, detail=f"{key} must be an integer, got {v!r}")
+                if isinstance(v, float):
+                    if not v.is_integer():
+                        raise HTTPException(
+                            422, detail=f"{key} must be an integer, got {v!r}")
+                    v = int(v)
+                return int(v)
+
+            def _range_param():
+                # fit_range 契约（R38）：None = 缺省（正典）；给了就必须是
+                # 两个有限数（此前 `or 默认` + tuple() 会把非 2 元裸穿
+                # 500；0 值合法但 lo<hi 由 fit_nk 再判）。
+                v = body.get("fit_range")
+                if v is None:
+                    return LIBRARY_FIT_DEFAULTS["fit_range"]
+                if (not isinstance(v, (list, tuple)) or len(v) != 2
+                        or not all(isinstance(x, (int, float))
+                                   and not isinstance(x, bool) for x in v)):
+                    raise HTTPException(
+                        422, detail="fit_range must be [lo, hi] in meters")
+                return (float(v[0]), float(v[1]))
+
             def _fit():
                 from genie.core.material import fit_nk, load_library_nk
                 lib = body.get("library")
@@ -281,7 +318,10 @@ def create_app(*, static_dir: str | Path | None = None,
                 if (lib is None) == (nk is None):
                     raise HTTPException(422, detail="library 与 nk 恰给其一")
                 if lib is not None:
-                    data = load_library_nk(lib)
+                    try:
+                        data = load_library_nk(lib)
+                    except ValueError as e:
+                        raise HTTPException(422, detail=str(e))
                 else:
                     # nk 契约 = {wavelength_m, n, k} 等长三列；形状错给
                     # 干净 422，而不是裸 AttributeError 的 500。
@@ -292,21 +332,21 @@ def create_app(*, static_dir: str | Path | None = None,
                         raise HTTPException(
                             422, detail="nk 须 {wavelength_m, n, k} 且三列等长")
                     data = tuple(cols)
-                return fit_nk(
-                    data,
-                    # 缺省 = 正典 LIBRARY_FIT_DEFAULTS（G87 清账 2026-10-27：
-                    # 此前手抄四字面量，单一来源锁扫不到端点这层）。
-                    # `or 默认`只用在 fit_range：缺键才回退，0 是合法值
-                    # （0+0 极点拟合）不能吞。
-                    fit_range=tuple(body.get("fit_range")
-                                    or LIBRARY_FIT_DEFAULTS["fit_range"]),
-                    n_drude=int(body.get("n_drude",
-                                         LIBRARY_FIT_DEFAULTS["n_drude"])),
-                    n_lorentz=int(body.get("n_lorentz",
-                                           LIBRARY_FIT_DEFAULTS["n_lorentz"])),
-                    maxfev=int(body.get("maxfev",
-                                        LIBRARY_FIT_DEFAULTS["maxfev"])),
-                    name=body.get("name"))
+                name = body.get("name")
+                if name is not None and not isinstance(name, str):
+                    raise HTTPException(422, detail="name must be a string")
+                try:
+                    return fit_nk(
+                        data,
+                        fit_range=_range_param(),
+                        n_drude=_int_param("n_drude"),
+                        n_lorentz=_int_param("n_lorentz"),
+                        maxfev=_int_param("maxfev"),
+                        name=name)
+                except ValueError as e:
+                    # fit_nk 的全部输入契约错（含窗内非有限值，R38 G86）
+                    # 都带可操作文案——422 透传，不许 500。
+                    raise HTTPException(422, detail=str(e))
             return await run_in_threadpool(_fit)
 
         # 作业面（状态 / 取消 / 摘要 / 日志 / 结果元数据）

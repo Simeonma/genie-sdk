@@ -20,10 +20,16 @@ Fit n-k data into a Drude-Lorentz pole set (the only dispersive form the
 kernel accepts); requires scipy (ImportError → `pip install scipy`).
 Returns: dict `{converged, eps_inf, n_poles, poles, quality,
 material_node, warnings}` — `material_node` is a `lorentz` node that goes
-straight into a SimConfig (None = no usable node); for multi-component
-inputs everything except warnings is a dict keyed by component.
-An unusable fit (e.g. too few data points inside `fit_range`) raises
-`ValueError` with an actionable message.
+straight into a SimConfig (None = no usable node). Multi-component input
+keeps the fit detail (`converged`/`eps_inf`/`n_poles`/`poles`/`quality`)
+keyed by component; the `material_node` shape differs by input: a 7-tuple
+(anisotropic xx/yy/zz) yields ONE assembled node — 3-element diagonal
+`eps_inf` plus per-axis rank-1 poles — while a dict of custom component
+names keeps `{component: node}`.
+An unusable fit (e.g. too few data points inside `fit_range`, or
+non-finite n/k values inside the window) raises `ValueError` with an
+actionable message; a genuine iteration-cap hit reports via `warnings`
+with the raise-`maxfev` prescription.
 
 | Param | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -39,11 +45,16 @@ An unusable fit (e.g. too few data points inside `fit_range`) raises
 import genie
 wl, n, k = my_refractiveindex_data()          # SI: m / dimensionless
 res = genie.material.fit_nk((wl, n, k), fit_range=(500e-9, 900e-9))
-res["converged"] and res["material_node"]
-# merge via chained API: rebuild the fitted material as pole chains (see 03 · f.mat)
-m = f.mat.add_lorentz().name(res["material_node"]["name"]).eps_inf(res["material_node"]["eps_inf"])
-for p in res["material_node"]["poles"]:   # Drude and Lorentz poles alike
-    m.add_eps_lorentz_pole(**p)           # or m.add_eps_drude_pole(...) per pole type
+assert res["converged"] and res["material_node"]
+# merge via chained API — pole args are positional (see 03 · f.mat);
+# `**p` would also pass `kind`, which the pole chain does not accept
+node = res["material_node"]
+m = f.mat.add_lorentz().name(node["name"]).eps_inf(node["eps_inf"])
+for p in node["poles"]:
+    if p["kind"] == "drude":
+        m.add_eps_drude_pole(p["omega_p"], p["gamma"])
+    else:
+        m.add_eps_lorentz_pole(p["omega_0"], p["gamma"], p["delta_eps"])
 ```
 
 **Common pitfalls**
@@ -51,6 +62,32 @@ for p in res["material_node"]["poles"]:   # Drude and Lorentz poles alike
 - Passing wavelengths in nm — both `fit_range` and the data must be in
   meters.
 - Reversed `fit_range` (lo ≥ hi) — ValueError.
+
+**Anisotropic fit (7-tuple) — one node, axis-mounted poles**
+
+For crystalline/liquid-crystal data with distinct principal axes, pass
+all three (n, k) column pairs; `material_node` comes back as a **single**
+anisotropic lorentz node whose `eps_inf` is the 3-element diagonal
+`[εxx, εyy, εzz]` and whose poles are **rank-1** (`alpha` = axis unit
+vector; `beta` defaults to `alpha` per wire semantics, so a pole
+contributes Δε along its axis only). The node validates as-is against
+the wire and can be merged like any lorentz material:
+
+```python
+res = genie.material.fit_nk((wl, nx, kx, ny, ky, nz, kz))
+node = res["material_node"]        # eps_inf=[εxx, εyy, εzz]; rank-1 poles
+m = f.mat.add_lorentz().name(node["name"]).eps_inf(node["eps_inf"])
+for p in node["poles"]:
+    if p["kind"] == "drude":
+        m.add_eps_drude_pole(p["omega_p"], p["gamma"], alpha=p["alpha"])
+    else:
+        m.add_eps_lorentz_pole(p["omega_0"], p["gamma"], p["delta_eps"],
+                               alpha=p["alpha"])
+```
+
+`material_node` is None if any axis failed to converge (each axis's
+warning is folded into `warnings`). A dict input with custom component
+names is NOT assumed to be axes — it keeps `{component: node}`.
 
 ## The fit_range → eps_inf → cfl divergence chain
 
@@ -81,7 +118,8 @@ as part of the fit's price.
 
 `load_library_nk(name)` returns `(wl, n, k)` of a library material —
 **purely local** since SDK 2.0.0a9 (the library ships inside the package;
-an unknown name raises with the list of valid names — there is no HTTP
+an unknown name raises with a pointer to
+`genie.material.list_library_materials()` — there is no HTTP
 fallback anymore). Feed it to `fit_nk` or plot it yourself.
 `list_library_materials()` lists all names (37 entries, e.g. `Au`,
 `Ag`, `Si`…).

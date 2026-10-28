@@ -150,6 +150,9 @@ cli.result_series(job_id=job, mon="t1", field="Ey")
 | `run_script` | 发一段脚本（循环/扫参/程序化）；`mode=build` 是事务 | §4 |
 | `run_model` | 提交当前模型（不改模型） | §4 |
 | `get_results` | 结果清单 / 曲线 | §5 |
+| `get_starter_script` | 拿一份已验证可跑的最小样板（**别自己发明 API 写法**） | §4 |
+| `list_materials` | n-k 材料库名单（`f.mat.add_from_library('Au', name='Au')` 用；详见手册 10 · material） | §4 |
+| `login_status` | 本机登录/配置状态（401 时先调它再指引用户 `genie login`） | §1 |
 
 工具描述本身就是 prompt，先读它再调。写是异步的，但 `edit_model` /
 `run_script` 会**等到落地才返回**，所以不用自己写轮询。
