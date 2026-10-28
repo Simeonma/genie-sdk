@@ -219,6 +219,11 @@ class SessionClient:
         return self._json("POST", "/stop", params={
             "owner": self._owner(owner), "session_id": self._sid(session_id)})
 
+    def reset(self, *, owner: str = "", session_id: str = "") -> dict:
+        """清理并重启会话进程（R31：stop 治不了时的进程级兜底）。"""
+        return self._json("POST", "/reset", params={
+            "owner": self._owner(owner), "session_id": self._sid(session_id)})
+
     def attach(self, *, owner: str = "", session_id: str = "",
                key: str = "") -> dict:
         """凭据换绑（幂等）：**换 key 不换模型**。首次调用即建空模型。"""
@@ -415,6 +420,14 @@ def register_session_routes(
         worker 发 SIGINT（exec 掐断+孤儿作业清理；空闲忽略）。"""
         return await run_in_threadpool(
             cli.stop, owner=owner_of(req),
+            session_id=_sid_of(req))
+
+    @app.post("/api/exec/reset")
+    async def api_exec_reset(req: Request) -> dict:
+        """清理并重启会话进程（R31 站长裁：死循环/宿主污染停不掉时的
+        进程级兜底——杀 worker 重起，只清执行态，模型与历史保留）。"""
+        return await run_in_threadpool(
+            cli.reset, owner=owner_of(req),
             session_id=_sid_of(req))
 
 

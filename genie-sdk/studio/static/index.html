@@ -302,6 +302,11 @@
         title="Download .py" aria-label="Download script"></button>
       <button id="term-stop" class="mini" type="button" data-icon="stop"
         title="停止当前执行" aria-label="停止当前执行" hidden></button>
+      <!-- R31：清理重启（进程级兜底）——停止投不进（死循环/无控制台）
+           时杀 worker 重起：只清执行态，模型与终端历史保留 -->
+      <button id="term-reset" class="mini" type="button" data-icon="refresh"
+        title="清理重启会话（停止无效时使用；模型与历史保留）"
+        aria-label="清理重启会话" hidden></button>
     </div>
     <div id="json-panel">
       <div id="py-view">

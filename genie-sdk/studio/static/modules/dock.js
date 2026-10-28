@@ -142,7 +142,8 @@ const Dock = (function () {
   const adoptedActions = new Map(); // id → 动作钮原件（同收养纪律）
   /* load-py/download-py 归脚本面板头（语义针对 script，站长裁决不随
    * 迁）；term-dl/import-cfg/export-cfg 在 File 下拉，不进收养清单。 */
-  const ACTION_IDS = ["run-py", "load-py", "download-py", "term-stop"];
+  const ACTION_IDS = ["run-py", "load-py", "download-py", "term-stop",
+                      "term-reset"];
   const leafByUid = new Map();   // uid → 叶子对象（drop 落点 → 树节点）
 
   /* ── 持久化 ── */
@@ -282,7 +283,7 @@ const Dock = (function () {
     /* 动作钮右组：文件 I/O 已上收 File 菜单，面板头各留唯一动作钮 */
     /* 动作钮右组：仿真 open/save 在 File 菜单，脚本头留 Run+脚本两钮 */
     "json-panel": ["run-py", "load-py", "download-py"],
-    "term-dock": ["term-stop"],
+    "term-dock": ["term-stop", "term-reset"],   /* R31：清理重启随停止收养 */
   };
   function makeHead(leafObj) {
     const head = el("div", "dock-head");

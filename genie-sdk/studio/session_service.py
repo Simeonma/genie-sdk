@@ -191,6 +191,16 @@ def stop(owner: str = "user", session_id: str = DEFAULT_SESSION) -> dict:
     return {"stopped": get_kernel(owner, session_id).stop()}
 
 
+@app.post("/reset")
+def session_reset(owner: str = "user",
+                  session_id: str = DEFAULT_SESSION) -> dict:
+    """清理并重启会话进程（R31 站长裁：stop 治不了时的进程级兜底——
+    死循环卡 exec、脚本污染宿主，CTRL_BREAK 投递不进就杀进程重起）。
+    **只清执行态**：在途 op 作废、新进程宿主干净；模型状态与终端
+    输出历史保留（worker 重放 session_state.json / 环落盘）。"""
+    return get_kernel(owner, session_id).reset()
+
+
 # ── 凭据换绑（O2 核心）：换 key 不换模型 ─────────────────────────
 @app.post("/attach")
 def attach(body: AttachIn) -> dict:

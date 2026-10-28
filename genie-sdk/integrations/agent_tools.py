@@ -12,6 +12,11 @@ v2 的 ``current_script`` / ``publish_script`` 已退役：脚本不是本体，
 """
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 from typing import Any
 
 from ..core.preview import preview_script
@@ -19,14 +24,65 @@ from ..core.preview import preview_script
 __all__ = ["check_script", "starter_script"]
 
 _MAX_SCRIPT = 256 * 1024
+# R31 站长裁：check_script 执行的是 LLM 生成的**不可信代码**——死循环
+# 冻结 agent 会话、脚本污染宿主（sys.path/env/猴子补丁）都不可接受；
+# 子进程隔离让超时可杀（Windows 无 SIGALRM 也可靠——杀进程树）、
+# 宿主零污染。preview_script 公开面保持进程内（终端用户自己的进程
+# 自己负责——G161 责任边界 2026-10-28 站长定）。
+_SUBPROC_TIMEOUT_S = 30.0
 
 
-def check_script(source: str, *, label: str = "<agent脚本>") -> dict:
+def _preview_isolated(source: str, label: str,
+                      timeout_s: float) -> dict:
+    """子进程跑 preview_script（stdin=JSON / stdout=JSON）。
+
+    超时 → 信封报 ``kind="timeout"``（agent 可读、可自纠）；子进程起
+    不来/输出坏 → 降级进程内（保可用性——降级形态文档注明）。"""
+    runner = (
+        "import sys, json\n"
+        "import genie\n"
+        "req = json.loads(sys.stdin.read())\n"
+        "r = genie.preview_script(req['script'], label=req['label'])\n"
+        "sys.stdout.write(json.dumps(r, ensure_ascii=False))\n"
+    )
+    sdk_root = str(Path(__file__).resolve().parents[2])
+    env = {**os.environ,
+           "PYTHONPATH": sdk_root + os.pathsep + os.environ.get("PYTHONPATH", ""),
+           # 子进程 stdio 强制 UTF-8（Windows 缺省 GBK 会让含中文的
+           # 信封在管道两侧编解码漂移）+ 摘 BOM（utf-8-sig 容错）。
+           "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    try:
+        p = subprocess.run(
+            [sys.executable, "-c", runner],
+            input=json.dumps({"script": source, "label": label}),
+            capture_output=True, text=True, timeout=timeout_s,
+            encoding="utf-8", env=env)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "cfg": {}, "stdout": "", "stderr": "",
+                "error": {"kind": "timeout",
+                          "message": f"脚本执行超 {timeout_s:g}s 未结束——"
+                                     f"疑似死循环（执行子进程已终止）",
+                          "line": 0, "traceback": ""}}
+    except OSError:
+        return preview_script(source, label=label)   # 起不来：降级
+    if p.returncode == 0 and p.stdout:
+        try:
+            out = json.loads(p.stdout.lstrip("﻿"))
+            if isinstance(out, dict):
+                return out
+        except ValueError:
+            pass
+    return preview_script(source, label=label)       # 输出坏：降级
+
+
+def check_script(source: str, *, label: str = "<agent脚本>",
+                 timeout_s: float = _SUBPROC_TIMEOUT_S) -> dict:
     """脚本体检：语法 + 执行两关，返回 agent 可读的诊断。
 
     与 ``preview_script`` 的差别：本函数面向 **LLM 自纠回路**——把
     "能不能跑""跑出来是什么"两件事一次说清，错误带行号与原因，
-    成功带模型摘要（节点数/源/监视器/run 步数）。
+    成功带模型摘要（节点数/源/监视器/run 步数）。执行在**子进程**
+    里跑（R31：死循环超时可杀、宿主零污染；``timeout_s`` 覆盖）。
 
     返回 ``{"ok", "errors":[{kind,message,line}], "summary":{...},
     "warnings":[...]}``。ok=True 表示可以推到 GUI 了。
@@ -41,7 +97,7 @@ def check_script(source: str, *, label: str = "<agent脚本>") -> dict:
                               "message": "脚本超 256KiB 上限", "line": 0})
         return out
 
-    cap = preview_script(source, label=label)
+    cap = _preview_isolated(source, label, timeout_s)
     if not cap.get("ok"):
         e = cap.get("error") or {}
         out["errors"].append({"kind": e.get("kind") or "error",

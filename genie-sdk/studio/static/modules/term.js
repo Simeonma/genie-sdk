@@ -12,8 +12,12 @@ let termHistIdx = -1, termDraft = "";
 /* 停止钮（A2「长任务必须能掐」）：busy 期可见，点击 = POST /api/exec/stop
  * （服务端向 worker 发 SIGINT）——⏹/done 经输出环自然滚出，本地零状态。 */
 const termStopBtn = $("term-stop");
+const termResetBtn = $("term-reset");
 function setStopVisible(v) {
   if (termStopBtn) termStopBtn.hidden = !v;
+  /* R31：清理重启钮与停止钮同显同隐（busy 期可见）——死循环卡 exec
+   * 时 busy 恒 true，两钮都在场；先试 ⏹，投不进（无控制台）再 ↻。 */
+  if (termResetBtn) termResetBtn.hidden = !v;
   /* 主钮 busy 态（2026-10-14 站长裁决）：Running + 禁用（按钮不得
    * 撒谎——运行中不可点，停止走 ⏹ 钮）。非忙时**委托 runBtnRefresh**
    * 按模式定文案（此前无条件写回 "Run" 会盖掉结果态的
@@ -501,6 +505,15 @@ setInterval(async () => {
 $("term-stop").addEventListener("click", (e) => {
   e.stopPropagation();
   fetch("/api/exec/stop", { method: "POST" })
+    .catch(() => {});   /* 网络失败静默：下一轮询 tick 仍可再点 */
+});
+
+/* 清理重启会话（R31 站长裁：停止治不了时的进程级兜底）：杀 worker
+ * 重起——只清执行态（在途作废、宿主干净），模型与终端历史保留。
+ * 服务端经环滚出"会话已清理重启"提示；busy 翻 false 后两钮随轮询自隐。 */
+if (termResetBtn) termResetBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  fetch("/api/exec/reset", { method: "POST" })
     .catch(() => {});   /* 网络失败静默：下一轮询 tick 仍可再点 */
 });
 

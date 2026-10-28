@@ -278,10 +278,29 @@ class SessionKernel:
         空闲期 → 忽略（worker 永不因 SIGINT 死亡）。非忙/进程已死
         返回 False（无事可停）；信号发不出去（OSError）同样 False。
         平台差异（Windows 走 CTRL_BREAK_EVENT，G33）在
-        ``_runtime.PipeRuntime.stop`` 里。"""
+        ``_runtime.PipeRuntime.stop`` 里。
+
+        治不了的场景（死循环/宿主被脚本污染）用 ``reset()``：进程级
+        兜底——GUI 后端进程无控制台，CTRL_BREAK 对 exec 里的纯
+        Python 死循环投递不进，唯一可靠手段是杀进程重起。"""
         if not (self._alive and self.busy):
             return False
         return self._rt.stop()
+
+    def reset(self) -> dict:
+        """清理并重启会话进程（R31 站长裁：A2 的进程级兜底）。
+
+        **只清执行态**：在途 op 作废、卡死进程被杀、新进程宿主干净
+        （脚本对 sys.path/env/猴子补丁的污染不跨重生——G161 的"脏手"
+        半边随治）；**保留**模型状态（worker 重生读 session_state.json
+        重放）与终端输出历史（B2 环落盘语义）。与 ``stop()`` 分工：
+        stop 治能响应信号的长任务，reset 治 stop 治不了的。"""
+        had_inflight = bool(self._inflight)
+        self._respawn()          # 杀旧进程 + 清 inflight + 起新进程
+        self._note("会话已清理重启"
+                   + ("（在途执行已作废）" if had_inflight else ""))
+        return {"ok": True, "session_id": self._session_id,
+                "dropped_inflight": had_inflight}
 
     def output(self, since: int) -> dict:
         """读取会话快照（**纯读**，不唤起——唤起是产品策略，见 ``ensure()``）。"""

@@ -66,6 +66,11 @@ class LocalSessionHost:
     def stop(self, *, owner: str, session_id: str = DEFAULT_SESSION) -> dict:
         return {"stopped": _svc.get_kernel(owner, session_id).stop()}
 
+    def reset(self, *, owner: str, session_id: str = DEFAULT_SESSION) -> dict:
+        """清理重启（R31）：与 SessionClient.reset 同一鸭子面——本地
+        部署的 /api/exec/reset 走这里（修前 cli 无此方法 → 500）。"""
+        return _svc.get_kernel(owner, session_id).reset()
+
     def attach(self, *, owner: str, session_id: str = DEFAULT_SESSION,
                key: str = "") -> dict:
         return _svc.get_kernel(owner, session_id).attach(key)
