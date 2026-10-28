@@ -1,8 +1,8 @@
 # 00 · Connections & entry
 
-> Two module-level entries: `genie.connect()` opens a session; `genie.preview_script()`
-> executes a script with zero network. All units are SI; numeric slots also accept
-> expression strings (`"20[nm]"`, `"d/4"` via `f.parameters`), evaluated server-side.
+> One module-level entry: `genie.connect()` opens a session. All units are SI;
+> numeric slots also accept expression strings (`"20[nm]"`, `"d/4"` via
+> `f.parameters`), evaluated server-side.
 
 ## `genie.connect()`
 
@@ -51,44 +51,23 @@ f = genie.connect("https://genie.example.com", api_key="…")
 
 - A `Simulation` can only be submitted once — re-running an already-submitted instance raises `RuntimeError`; create a fresh `connect()` for a new run.
 - On a fresh machine with nothing configured, bare `connect()` raises `GenieConfigError` pointing at `genie login` (after `genie connect <address>` if the gateway isn't set) — the error is the instruction.
-- Inside a Studio session, `genie.connect` is taken over by the session (zero-network preview) and connection parameters are ignored — expected behavior.
+- Inside a Studio session, `genie.connect` is taken over by the session and connection parameters are ignored — expected behavior.
 
 **See also** [Simulation state machine & run()](#f-submit-lifecycle)
 
-## `genie.preview_script()`
+## `genie.preview_script()` — deprecated
 
-Execute a script text with zero network and return the model it builds — the
-entry point shared by Studio preview and agent tools, entirely independent of
-real submissions. Returns: a dict with `ok` (bool), `cfg` (captured SimConfig
-JSON; on failure, everything built up to the crash), `stdout` (captured
-prints), `stderr` (captured warnings and stderr output), and `error` (`None`,
-or `{kind, message, line, traceback}` with the script line number).
+**Removed engine (G174, 2026-10-28).** The zero-network preview engine — and
+the separate "verification" step it served — no longer exists. One execution
+engine remains (the session worker), one semantics: real execution, where
+errors come back with the script line number. `genie.preview_script()` and
+`genie.check_script()` keep their names importable until the next breaking
+release; calling them now raises `RuntimeError` pointing at the session.
 
-| Param | Type | Required | Description |
-|---|---|---|---|
-| `source` | str | Yes | Full script text (may contain `import genie` / `genie.connect(...)`) |
-
-`genie.connect` is replaced by a zero-network factory: `f.run()` only records
-the run section, `get_*()`/`sweep()` return permissive placeholders — the
-script doesn't crash but gets no real data. A `for` loop = N executions = N
-cfg nodes; numpy expressions are evaluated into literals at execution time.
-
-**Example**
-
-```python
-import genie
-r = genie.preview_script(open("my_sim.py").read())
-if r["ok"]:
-    print(r["cfg"]["domain"])
-else:
-    print(r["error"]["line"], r["error"]["message"])
-```
-
-**Common pitfalls**
-
-- Expecting simulation data from a preview — previews run no jobs; post-processing scripts only get placeholder objects.
-
-**See also** `genie.check_script`; for script-driven automation see the agent documentation shipped in `genie/docs/agent.md`
+To run a script and see the model it builds, execute it in the session:
+Studio's Terminal, or the agent tool `run_script(mode="build")` followed by
+`get_model`. A failing script reports the line number — that loop **is** the
+self-correction step; there is deliberately no local dry-run or check tool.
 
 ## Lifecycle of f (overview)
 

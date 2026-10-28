@@ -84,10 +84,9 @@ discriminator, surfaced as HTTP 422 at the submission boundary:
 Slot-level errors carry the in-config path (e.g.
 `source[0].freq 处表达式 'd/4' 求值失败`), so a 422 pinpoints the field.
 
-**One honest caveat**: local `genie.preview_script()` does **not**
-evaluate expression slots — it captures the config verbatim, strings
-included. Expression errors only surface at the submission boundary
-(local precheck / server 422), not in preview.
+**One honest caveat**: expression slots are **not** evaluated locally — the
+SDK captures configs verbatim, strings included. Expression errors only
+surface at the submission boundary (local precheck / server 422).
 
 **Common pitfalls**
 
@@ -96,8 +95,9 @@ included. Expression errors only surface at the submission boundary
 - Expecting units to catch a physics mix-up — a registered unit in the
   wrong dimension (`30[Hz]` in a length slot) passes through as the
   number 30; only *unregistered* names (`50[kg]`) are rejected.
-- Debugging expressions in `preview_script()` — slots are not evaluated
-  there; submit (or call the validation surface) to see the 422.
+- Debugging expressions without submitting — slots are not evaluated
+  locally; the local precheck (on `run()`) or the server 422 is where
+  they surface.
 
 At script-emission time (`f.to_script()`), unit suffixes become
 multiplication (`50[nm]` → `50*1e-9`) and each parameter line carries a
