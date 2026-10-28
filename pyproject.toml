@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "genie-sdk"
 version = "2.0.0a14"
-description = "GENIE SDK v2 — 脚本构建仿真、f.run() 提交云端 GPU；preview_script 零网络预览（模型与提交互不相干）"
+description = "GENIE SDK v2 — 脚本构建仿真、f.run() 提交云端 GPU；Studio 会话执行（一个执行引擎，G174 起无独立预览面）"
 # 许可面（2026-10-25）：Apache-2.0，LICENSE 随仓 + 随 wheel 分发。
 # PEP 639 的 SPDX 写法要求 setuptools>=77（build-system 已同步抬到这个下限）。
 license = "Apache-2.0"
@@ -25,8 +25,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# 本地 Studio 服务（genie.studio.server：静态 + /api/preview——
-# framework §四「Pyodide 删掉」后的端点，与阶段 6 云宿主同一个函数）
+# 本地 Studio 服务（genie.studio.server：静态壳 + 本地 /api/* 能力端点；
+# 脚本执行走会话面 /api/exec——framework §四「Pyodide 删掉」后无浏览器端
+# Python，G174 后亦无独立 preview 端点）
 # 2026-10-27 G19b 翻转：/api/tools/material_fit 改本地拟合，server 面需要 scipy
 server = ["fastapi>=0.104", "uvicorn>=0.24", "python-multipart>=0.0.32",
           "scipy>=1.10"]

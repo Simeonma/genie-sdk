@@ -29,11 +29,11 @@
   → {"ev":"ack","id":-1,"ok":bool,"err":…}  控制面回执（attach/bind 的结果）：
                                             **不是 op 完成**，父层不得据此清忙
 
-信任契约：与 preview 沙箱（unshare 断网/环境清洗/用完即杀）**相反**——
-这是用户 key 的真执行面；卡死由父层 kill+重生（B2：输出历史跨重生
-保留在父层环落盘里，会话 f 由本进程新生时读 session_state.json 自动
-重放，父层会在 terminal 注明）。单步执行超时用 SIGALRM（主线程执行，
-alarm 可用）。
+信任契约：这是用户 key 的**真执行面**——G174 后唯一执行引擎，无沙箱、
+无 dry 面（曾经的 preview 零网络轨已随同裁决退役）；卡死由父层 kill+重生
+（B2：输出历史跨重生保留在父层环落盘里，会话 f 由本进程新生时读
+session_state.json 自动重放，父层会在 terminal 注明）。单步执行超时用
+SIGALRM（主线程执行，alarm 可用）。
 停止（A2「长任务必须能掐」）= 父层发 SIGINT：exec 期 → StopExec 掐断
 （回滚/done 照常，后端孤儿作业就地 cancel）；空闲期 → 忽略（仅提示
 一行），worker 永不因 SIGINT 死亡。
@@ -101,8 +101,8 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
 
     ns: dict = {}
     sims: list = []          # 会话期间创建的全部 Simulation（grating 式
-                             # 脚本每次 connect 开新实例——preview 的
-                             # merge_configs 合并语义在此同等适用）
+                             # 脚本每次 connect 开新实例——多实例按
+                             # model_merge.merge_configs 合并成一份模型）
     sim = None
     sess_url = ""
     sess_key = ""
@@ -186,8 +186,10 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         # 进 emit 的 json.dumps，浏览器 JSON.parse 丢整条 cfg 事件）。
         # R28 P3：run 只从实际 run 过的实例取末位（ran 判据 = _job_id
         # 非空）——修前未 run 实例的 dense 默认值静默 clobber 前面实例
-        # 的显式 run（gpu/timeout_s）。与 preview_script 同一函数同愈。
-        from genie.core.preview import merge_configs, nan_to_none
+        # 的显式 run（gpu/timeout_s）。
+        # G174/R33：合并函数自 core/preview 搬至本层 model_merge
+        # （preview 引擎退役，绝对导入——本文件无包上下文）。
+        from genie.studio.model_merge import merge_configs, nan_to_none
         ran = [getattr(s, "_job_id", None) is not None for s in insts]
         return nan_to_none(merge_configs(cfgs, ran))
 
@@ -470,7 +472,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
             if paths:
                 ev["paths"] = list(paths)
             try:
-                # resolved 显示副本（与 /api/preview 同一手：表达式槽
+                # resolved 显示副本（表达式槽
                 # →数值，浏览器零求值——3D/表单吃 resolved，cfg 原文不动）
                 from genie.models.resolve import resolve_parameters
                 ev["resolved"] = resolve_parameters(cfg)

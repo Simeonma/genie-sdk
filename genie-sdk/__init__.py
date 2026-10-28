@@ -1,13 +1,14 @@
 """GENIE SDK v2 — 用户在脚本里构建仿真、``f.run()`` 提交云端 GPU。
 
-产品口径（2026-10 terminal 战役后）：
+产品口径（2026-10 terminal 战役后；G174 起单执行引擎）：
   · SDK 用户：写 genie 脚本，``f`` 是活配置对象，``f.run()`` 提交那一刻
     才序列化 SimConfig JSON（线格式，用完即弃，客户端不存 cfg 状态）；
   · 云 GUI（Studio）背后是常驻会话进程里的同一个 SDK——**会话 f 是
     唯一真源**，Terminal/脚本/表单三条变更通道同汇一处（详见
     genie-service AGENTS.md）；本包不感知 GUI 形态；
-  · ``genie.preview_script`` 零网络执行脚本得模型（Studio 预览与
-    agent 工具共用；与真提交互不相干）。
+  · **一个执行引擎（会话 worker）、一种语义（真执行——错了报错带
+    行号自纠）**：G174（2026-10-28 站长三连裁决）退役了 preview 零网络
+    预览引擎与 check_script 体检面，"验证"不是用户任务的步骤。
 
 快速上手（API 手感与 v1 一致，零学习成本）::
 
@@ -31,12 +32,6 @@
 
     f.run()                        # 提交 + 轮询到终态（隐含 submit，同步语义；时长 = domain.total_time）
     fr = f.get_freq('tr')          # 纯数据：.freqs / .fields（隐含 download）
-
-Studio 显示（零网络，不提交作业）::
-
-    import genie
-    r = genie.preview_script(open("my_sim.py").read())
-    r["ok"] and r["cfg"]           # 模型 = 脚本执行捕获的 SimConfig JSON
 """
 from __future__ import annotations
 
@@ -46,35 +41,15 @@ import sys as _sys
 from .models.errors import (GenieConfigError, GenieError, GenieHTTPError,
                             GenieJobError)
 from .core import material
-from .core.preview import preview_script
 from .core.results import FreqResult, IndexResult, TimeResult
 from .core.simulate import Simulation
 from .core.sweep import SweepHandle
-from .integrations.agent_tools import check_script
 
 # ``import genie.material`` 语句级可用（不只属性寻址）——注册进
 # sys.modules 后属性寻址与语句级 import 皆通（material 实体在 core/）。
 _sys.modules[__name__ + ".material"] = material
 
 __version__ = "2.0.0a14"
-
-
-def _swap_connect(fn):
-    """临时把 ``genie.connect`` 换成 ``fn``，返回 restore 回调。
-
-    只给 ``core.preview`` 用：预览要在**零网络**下执行用户脚本，而脚本会
-    ``import genie`` 调 ``genie.connect``。交换动作属于公开面，所以由这里
-    实现、经 hooks 注入——core 不反向 import 本模块（分层契约）。
-    """
-    global connect
-    original = connect
-    connect = fn
-
-    def _restore() -> None:
-        global connect
-        connect = original
-
-    return _restore
 
 
 # ── 组合根（G1 分层契约，2026-10-11 定案）───────────────────────────
@@ -103,7 +78,7 @@ def _push_visualize(sim, mon: str, field: str | None = None) -> None:
 
 
 def _wire_core_hooks() -> None:
-    from .core import preview as _preview, simulate as _simulate
+    from .core import simulate as _simulate
     from .net.expert import ExpertSession
 
     _simulate._wire(
@@ -112,7 +87,8 @@ def _wire_core_hooks() -> None:
     )
     # 2026-10-27 G19b 翻转：材质库 HTTP 回退（remote_nk_fetch）退役——
     # 材质库纯本地（genie/nkdata 随包分发），材质面不再接线。
-    _preview._wire(_swap_connect)
+    # 2026-10-28 G174：preview 的 connect 交换钩子（_swap_connect）随
+    # 零网络预览引擎一并退役——组合根现役 hooks 只剩 simulate。
 
 
 _wire_core_hooks()
@@ -135,9 +111,43 @@ def _wire_agent_surface() -> None:
 
 _wire_agent_surface()
 
-# 公共表面：connect → Simulation（构建+提交）、preview_script（脚本→模型，
-# Studio/工具消费）+ 结果对象 + 异常。Domain/Mesh/… 经 f.domain 等属性到达；
-# Client 是内部传输层。``material`` 是 client-side 纯函数子模块。
+
+# ── 退役面 deprecated 桩（G174，2026-10-28 站长三连裁决）────────────
+# preview 零网络执行引擎与 check_script 体检面已整体删除："验证"不是
+# 用户任务的步骤，执行本身就是验证（会话 worker 一个引擎、真执行语义）。
+# 两个公开名**保留到下一次 breaking 发版**（与 G106 fetch_npz 一并摘除，
+# 手册同轮标注 deprecated）——期间调用即报错指路，不做任何静默降级。
+
+def preview_script(source: str, *, label: str = "<genie脚本>") -> dict:
+    """Deprecated（G174 已退役）：零网络预览引擎已删除，不再执行脚本。
+
+    替代：把脚本送进会话执行面——``genie studio`` 的 Terminal / MCP 工具
+    ``run_script(mode="build")``（错误带行号，成功即得模型，配合
+    ``get_model`` 看"跑出来的模型"）。
+    """
+    raise RuntimeError(
+        "genie.preview_script 已退役（G174）：零网络预览引擎已删除。"
+        "脚本请送会话执行（genie studio 的 Terminal，或 MCP 工具 "
+        "run_script(mode=\"build\") + get_model）——错误会带行号返回。")
+
+
+def check_script(source: str, *, label: str = "<agent脚本>",
+                 timeout_s: float = 30.0) -> dict:
+    """Deprecated（G174 已退役）：本地脚本体检面已删除。
+
+    替代：agent 自纠回路 = 会话执行原生能力——``run_script(mode=\"build\")``
+    报带行号的错误、"看模型不跑" = build 成功后 ``get_model``。
+    """
+    raise RuntimeError(
+        "genie.check_script 已退役（G174）：本地体检面已删除。自纠请走"
+        "会话执行（MCP 工具 run_script(mode=\"build\")，错误带行号；"
+        "模型用 get_model 读）。")
+
+
+# 公共表面：connect → Simulation（构建+提交）+ 结果对象 + 异常；
+# preview_script/check_script 为退役 deprecated 桩（见上，breaking 发版
+# 摘除）。Domain/Mesh/… 经 f.domain 等属性到达；Client 是内部传输层。
+# ``material`` 是 client-side 纯函数子模块。
 __all__ = [
     "connect", "Simulation", "preview_script",
     "check_script", "SweepHandle",

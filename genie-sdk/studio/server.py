@@ -16,8 +16,9 @@
    （本地 ``genie studio`` 与 Pyodide 网页端 ``studio/web.py`` 共用）；
    ``False`` = 纯静态壳。
 
-脚本预览经会话执行面（/api/exec）驱动，Studio 不再有独立的 preview 端点
-（G50 已删；``genie.preview_script`` 由 MCP/agent 工具面直接调用）。
+脚本一律经会话执行面（/api/exec）驱动——G174 后**唯一执行引擎**
+（无独立 preview 端点：G50 删路由，2026-10-28 R33 连本地零网络
+引擎一并退役）。
 """
 from __future__ import annotations
 
@@ -103,7 +104,7 @@ def create_app(*, static_dir: str | Path | None = None,
     （读 env，跨进程形态用）；本地入口显式注入——地址不进产品语义。
 
     ``require_auth=True``（站长裁决 2026-10-21）＝**未登录什么都不给做**：
-    preview / validate / drafts / scripts / workspace / sim / exec 这些本地
+    validate / model / scripts / workspace / sim / exec 这些本地
     能力一律要求 `X-API-Key`（GUI 登录 token）。env ``GENIE_STUDIO_OPEN=1``
     可显式退回"本机免登录"形态（调试/纯本地离线场景）。
     """

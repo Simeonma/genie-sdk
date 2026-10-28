@@ -38,7 +38,7 @@ class GenieConfigError(GenieError):
     """提交边界的本地配置预检失败（framework §四，阶段 ④）。
 
     校验用 ``genie.models``（resolve + validate）——与服务端 parse 同一
-    双手，错误路径/文案一致；区别只是提前到本地 fail-fast（preview 半
+    双手，错误路径/文案一致；区别只是提前到本地 fail-fast（构造期半
     成品不受影响——预检只在 ``run()``/``sweep()`` 的提交路径上）。"""
 
 

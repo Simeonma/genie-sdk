@@ -308,7 +308,7 @@ class _Chain:
     未识别的方法名一律视为「设一个字段、返回自身」——与 fdtd builder 的
     鸭子类型行为一致；**字段必须存在于线格式模型**（extra=forbid：拼错
     名字即刻 ValueError，不再静默记录等服务端 422——framework §三 强类型
-    纪律，preview 带脚本行号直接暴露）。构造期不校验（validate_assignment
+    纪律，脚本执行面带行号直接暴露）。构造期不校验（validate_assignment
     关），完整性在提交边界一次性过 ``_validate_for_submit``。
     """
 

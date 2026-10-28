@@ -201,7 +201,7 @@ class Client:
     #      test_ui_domain_endpoints_are_consciously_excluded 守卫）----
     # （G17/G3 2026-10-16：v1 车道孤儿方法 get_config/validate_config/
     #   mesh_preview 摘除——零消费者；SimConfig 直操作与网格估算不属
-    #   公开 SDK 面，网格估算归本地 preview 通道）
+    #   公开 SDK 面，估算真源 = genie.models.estimate，内核守卫同尺）
 
     # （2026-10-27 G19b 翻转：material_fit / nk_library 两方法随网关
     #   tools 面撤除而摘除——材质库/拟合回归 SDK 本地 genie.core.material；

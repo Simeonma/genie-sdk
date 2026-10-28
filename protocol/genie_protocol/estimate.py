@@ -3,8 +3,8 @@
 网格总量 / dt / 步数的估算手，原生于内核 serve（fdtd/serve/schema.py
 的 estimate_cells 家族 + G18 的 _estimate_steps）；G3 方向 2 裁决把它
 移植 models 层成为单一真源——内核 serve 反向 import 本模块（共享模型
-薄壳先例，genie 仍不 import fdtd），Studio preview 与内核守卫从此
-同一把尺子。
+薄壳先例，genie 仍不 import fdtd），估算从此单一尺子（SDK 侧的
+preview 消费面已于 2026-10-28 随 G174 退役；现役消费方 = 内核守卫）。
 
 全部纯数学（无 cupy/fdtd 依赖）。估算是守卫面不是预言：渐变过渡带
 可比名义 factor 更细（内核 Mesh.refine docstring），真实步数以 build
@@ -29,7 +29,7 @@ def estimate_cells_domain_mesh(domain, mesh) -> int:
     （fdtd/serve/schema.py，2026-08-30 Phase A 拆出形态）。
 
     ``domain``/``mesh`` = 共享线格式模型（DomainSpec/MeshSpec，属性
-    访问），kernel serve 与 Studio preview 双端同参。
+    访问），kernel serve 守卫同参。
     """
     dx = mesh.dx
     dy = mesh.dy or mesh.dx
@@ -84,10 +84,11 @@ def estimate_steps_domain_mesh(domain, mesh) -> int:
 
 
 def mesh_preview_stats(domain, mesh) -> dict:
-    """设计态估算摘要（/api/preview ``estimate`` 节形状）：格数/dt 估/
-    步数估/各轴格距。dt 与步数同一把尺（_dt_estimate，R21 复审 S3：
-    此前 dt 用裸格距、步数用 refine 折算，带 refine 的 preview 给出
-    两个互相矛盾的数）。"""
+    """设计态估算摘要：格数/dt 估/步数估/各轴格距（历史形状名沿
+    ``/api/preview`` 的 ``estimate`` 节——端点已随 G50 删，SDK preview
+    消费面随 G174 退役，形状保留）。dt 与步数同一把尺（_dt_estimate，
+    R21 复审 S3：此前 dt 用裸格距、步数用 refine 折算，带 refine 的
+    估算会给出两个互相矛盾的数）。"""
     dx = mesh.dx
     return {
         "cells": estimate_cells_domain_mesh(domain, mesh),

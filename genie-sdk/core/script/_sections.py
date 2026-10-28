@@ -197,7 +197,7 @@ def _gen_materials(list_, W: list, env: dict) -> list[str]:
                 parts.append(".eps(" + eps_s + ")")
             else:
                 # G130（R17）：eps 是必填槽——缺 name 有 W，必填槽反而
-                # 哑；保留骨架渲染（preview 半成品语义）但必须出声。
+                # 哑；保留骨架渲染（半成品容错语义）但必须出声。
                 W.append(tag(i) + "缺 eps（必填槽——表单补齐后自动消失）")
             mu_s = _num_or_list(mt.get("mu"), env, W, f"materials[{i}].mu")
             if mu_s is not None and mt.get("mu") != _DEF["mu"]:

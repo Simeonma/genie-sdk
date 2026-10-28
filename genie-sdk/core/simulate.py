@@ -139,10 +139,11 @@ def _validate_for_submit(cfg: dict) -> None:
 def _apply_run_kwargs(sim: "Simulation", gpu: int | None,
                       timeout_s: int | None) -> None:
     """run() kwargs 的共享提交纪律（G102，R24 收敛）：已提交改参拒 +
-    R23 S1 整数槽（float/bool/str 全拒）。``Simulation.run`` 与
-    ``_PreviewSim.run``（core/preview）同一双手——修前三处纪律
-    （改参拒极性/整数收编/异常文案）各漂移一份，parity 锁 =
-    tests/sdk/test_preview_submit_parity.py。"""
+    R23 S1 整数槽（float/bool/str 全拒）。G174 前是 ``Simulation.run``
+    与已退役的 ``_PreviewSim.run`` 同一双手（修前三处纪律各漂移一份）；
+    现役唯一消费方 = ``Simulation.run``，真面锁 =
+    test_public_surface_contract.py（kwargs 拒）与 test_run_lifecycle.py
+    （G136 极性）。"""
     if sim._job_id is not None and any(v is not None for v in (gpu, timeout_s)):
         raise RuntimeError(
             "cannot change gpu/timeout_s after submission (the "
@@ -171,8 +172,8 @@ class Simulation:
     状态机（同本地包）：``defined → built → running → done``；
     failed/killed 在 run() 里抛 GenieJobError（本地是异常/终态）。
     ``_cfg`` 是 SimConfig 模型实例（framework §四）：构造期 construct
-    容忍半成品（必填未设就缺着——preview 对脚本中途崩的语义），
-    完整性在提交边界一次性校验（``_validate_for_submit``）。
+    容忍半成品（必填未设就缺着），完整性在提交边界一次性校验
+    （``_validate_for_submit``）。
     """
 
     def __init__(self, client):
@@ -446,12 +447,11 @@ class Simulation:
                       mode: str | None) -> tuple[list[dict], list[str]]:
         """sweep 规格校验 + 本地展开（**纯本地零网络**）→ (points, 轴名)。
 
-        R28 S1 提取（站长裁）：真面 sweep 与 preview 的惰性化前校验
-        **共享同一双手**——修前 preview 把 sweep 整个换成 _Inert，连这层
-        纯本地校验（轴形态/轴名在基底 parameters 键集/逐点展开）也吞
-        了，check_script 对坏轴报 ok=True，LLM 推到会话执行才炸
-        SweepExpandError。preview 只该宽容网络/作业，不该宽容本地
-        形状校验。"""
+        R28 S1 提取（站长裁）：轴形态/轴名在基底 parameters 键集/逐点
+        展开，这层纯本地校验**在 sweep() 调用点即做**——坏规格当场
+        SweepExpandError，不留到提交边界之后（历史：修前已退役的
+        preview 面曾把 sweep 整个换成宽容占位，连本地校验也吞掉，
+        坏轴名要到会话执行才炸）。"""
         from ..models import SweepSpec
         from ..models.sweep_expand import (SweepExpandError,
                                            validate_sweep_config)

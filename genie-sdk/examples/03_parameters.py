@@ -15,7 +15,7 @@ f.domain.boundary_condition('z_min', 'pml')
 f.domain.boundary_condition('z_max', 'pml')
 f.mesh.dx = 'd/4'          # 表达式槽引用参数表
 
-# ── Python 变量 = 编译期展开（preview 执行即定）；参数表 = 服务端求值 ──
+# ── Python 变量 = 编译期展开（脚本执行即定）；参数表 = 服务端求值 ──
 # 两个世界各得其所：结构规律用 Python 算，物理量用参数表扫。
 N = 8
 f.mat.add_const().name('sio2').eps(2.1)

@@ -2,7 +2,7 @@
 
 参数化构件：改 ``f``、返回 None（``from genie.lib import grating`` 直接
 调用；普通 Python，无特殊概念）。节点的生成语义与手写 for 循环逐条
-``add_box`` 完全一致——preview 捕获即展开。
+``add_box`` 完全一致——脚本执行（会话/SDK 同一双手）即展开。
 """
 from __future__ import annotations
 

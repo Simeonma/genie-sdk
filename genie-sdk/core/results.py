@@ -464,8 +464,8 @@ class FreqResult(_DataBase):
 
     点监视器的场保持 (n_freqs, 1) 尾轴（与内部包约定一致）；
     多位置为 (n_freqs, n_pos)。派生分析（透过率/通量）不在 SDK 层——
-    用裸分量自算；要看图走 UI/前端的作业预览面板（preview 是 UI 域
-    方法，SDK 无此方法——见手册 07-run/09-results 页）。
+    用裸分量自算；要看图走 UI/前端的作业预览面板（画图是 UI 域方法，
+    SDK 无此方法——见手册 07-run/09-results 页）。
     """
 
     def __init__(self, name: str, freqs: np.ndarray, fields: dict,

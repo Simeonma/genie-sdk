@@ -10,12 +10,14 @@
   · ``run_script``   发一段脚本（循环/扫参/程序化建模；mode=run|build）
   · ``run_model``    提交当前模型（**不改模型**）
   · ``get_results``  结果清单 / 曲线
-  · ``check_script`` 脚本体检（本地执行，零网络）——自纠回路
   · ``get_starter_script`` / ``list_materials``  样板与材料库
 
 v2 的两个工具（``current_script`` / ``publish_script``）已退役：脚本不是本体，
 "读脚本文本"改成读模型，"推脚本文本"改成把脚本**跑进**会话（``run_script``）。
 （本地 SDK 的 drafts 镜像通道也已整体退役——G53 裁决，2026-10-23。）
+``check_script``（本地零网络体检）于 2026-10-28 随 G174 退役：自纠 =
+``run_script(mode="build")`` 读带行号的错误，"看模型不跑" = build +
+``get_model``——会话执行原生覆盖，无需第二个执行引擎。
 
 设计纪律
 --------
@@ -38,7 +40,7 @@ import json
 import time
 from typing import Any, Callable
 
-from .agent_tools import check_script, starter_script
+from .agent_tools import starter_script
 
 __all__ = ["TOOLS", "TOOL_NAMES", "execute_tool", "build_server", "main",
            "set_session_factory", "SessionUnavailable"]
@@ -208,21 +210,6 @@ TOOLS: list[dict[str, Any]] = [
                 "field": {"type": "string", "description": "如 Ey / Ex"},
                 "maxpoints": {"type": "integer", "description": "抽稀到多少点（缺省 1200）"},
             },
-        },
-    },
-    {
-        "name": "check_script",
-        "description": (
-            "检查一份完整的 genie 仿真脚本（**本地执行，零网络、不提交作业**）："
-            "返回语法/执行错误（带行号）、模型摘要（材料/结构/源/监视器/"
-            "步数）、常见遗漏告警。写完脚本先自纠到 ok=true，再 run_script。"
-            "**不要拿它当 Python 解释器**跑 dir()/inspect/print 去探测 API"
-            "（浪费轮次，且它跑的是本地空环境）。"),
-        "parameters": {
-            "type": "object",
-            "properties": {"script": {"type": "string",
-                                      "description": "完整 genie 脚本"}},
-            "required": ["script"],
         },
     },
     {
@@ -403,8 +390,6 @@ def execute_tool(name: str, args: dict, *, session: Any = None) -> dict:
                 "error": f"未知工具 {name}（可用: {sorted(TOOL_NAMES)}）"}
     if name == "get_starter_script":
         return starter_script()
-    if name == "check_script":
-        return check_script(args.get("script") or "")
     if name == "list_materials":
         return _list_materials()
     if name == "login_status":
