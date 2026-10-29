@@ -28,6 +28,8 @@ sweep = 编排层：把"跑一个仿真"原语（Simulation.run）用 N 次。
 from __future__ import annotations
 
 import json
+import os
+import re
 import secrets
 import threading
 import time as _time
@@ -43,7 +45,35 @@ SWEEP_TERMINAL_OK = "done"
 SWEEP_TERMINAL_BAD = ("failed", "canceled")
 
 AGGREGATE_NAME = "aggregate.npz"
+MANIFEST_NAME = "sweep.json"
 _AXES_KEYS = ("values", "linspace", "logspace")
+
+
+def _slug(text: str) -> str:
+    """扫描名 → 文件名安全 slug（字母/数字/_/-；空 → "sweep"）。"""
+    s = re.sub(r"[^0-9A-Za-z_\-]+", "_", str(text or "").strip()).strip("_-")
+    return (s or "sweep")[:48]
+
+
+def new_sweep_dir(name, axis_names) -> tuple[Path, str]:
+    """建一个扫描文件夹：``<workspace>[/owner]/sweeps/<slug>-<时间戳>/``。
+
+    返回 ``(目录, slug)``；同名同秒冲突加 ``-2/-3…``。文件夹在**开始前**
+    就建好（``sweep.json`` 先登记全部 pending 点——文档本身点在终态才写，
+    不预建，站长 2026-10-30 裁）。
+    """
+    from . import paths
+    base = paths.sweeps_dir()
+    slug = _slug(name or (axis_names[0] if len(axis_names or []) == 1
+                          else "sweep"))
+    stamp = _time.strftime("%Y%m%d-%H%M%S")
+    d = base / f"{slug}-{stamp}"
+    k = 2
+    while d.exists():
+        d = base / f"{slug}-{stamp}-{k}"
+        k += 1
+    d.mkdir(parents=True, exist_ok=True)
+    return d, slug
 
 # ── 活跃句柄登记表（R29 C2，站长裁"模块级登记"）──────────────────────
 # 会话停止/超时的收尸面用：sweep 点实例**不进会话 sink**（不污染模型
@@ -172,7 +202,9 @@ class SweepHandle:
 
     def __init__(self, sims, axis_names: list[str], *, client,
                  points: list[dict], gpus_per_sim: int = 1,
-                 max_parallel: int = 1, on_failure: str = "continue"):
+                 max_parallel: int = 1, on_failure: str = "continue",
+                 dir: str | Path | None = None, name: str = "",
+                 axes=None):
         self.sims = list(sims)
         self.points = list(points)      # 逐点已解析配置（聚合的 param 列源）
         self.axis_names = list(axis_names)
@@ -186,6 +218,16 @@ class SweepHandle:
         self.errors: list[BaseException | None] = [None] * len(self.sims)
         self.state = "pending"
         self._aborting = False
+        # G182 P4：扫描 = 一个文件夹（sweep.json 索引 + 每点一份文档）。
+        # dir 只在经 f.sweep 构造时给；直接构造（阈值测试）不写盘。
+        self.dir: Path | None = Path(dir) if dir is not None else None
+        self.name = str(name or "")
+        self.axes = axes
+        self.created = _time.strftime("%Y-%m-%dT%H:%M:%S")
+        self.doc_paths: list[Path | None] = [
+            (self.dir / f"{self.name}-{i + 1:04d}.gensim")
+            if self.dir is not None and self.name else None
+            for i in range(len(self.sims))]
         # 环境级错误（凭据/传输/网关拒绝——不是某一个点自己的问题）：
         # 第一次出现就停排、由 wait() 原样抛出一次；不记在任何点的账上。
         self._fatal: BaseException | None = None
@@ -194,6 +236,7 @@ class SweepHandle:
         self._futures: list = []
         with _ACTIVE_LOCK:               # R29 C2：收尸登记表
             _ACTIVE_SWEEPS.add(self)
+        self._write_manifest()           # 全部点先登记 pending（可见性）
 
     # ---- 编排 ----
 
@@ -207,10 +250,84 @@ class SweepHandle:
 
     def status(self) -> dict:
         return {"sweep_id": self.id, "state": self.state,
+                "dir": str(self.dir) if self.dir is not None else "",
                 "rollup": self.rollup(),
                 "points": [{"idx": i, "state": s, "job_id": j}
                            for i, (s, j) in enumerate(zip(self.states,
                                                           self.job_ids))]}
+
+    # ---- 文档化（G182 P4：扫描 = 一个文件夹）------------------------
+
+    def _manifest_dict(self) -> dict:
+        pts = []
+        for i in range(len(self.sims)):
+            params = {}
+            for n in self.axis_names:
+                try:
+                    params[n] = _read_param(self.points[i], n)
+                except Exception:   # noqa: BLE001 —— 参数缺省记 None
+                    params[n] = None
+            err = self.errors[i]
+            p = {"idx": i, "params": params,
+                 "doc": self.doc_paths[i].name if self.doc_paths[i] else "",
+                 "job_id": self.job_ids[i], "state": self.states[i]}
+            if err is not None:
+                p["error"] = str(err)[:300]
+            pts.append(p)
+        return {"version": 1, "sweep_id": self.id, "name": self.name,
+                "created": self.created, "state": self.state,
+                "axes": self.axes,
+                "settings": {"gpus_per_sim": self.gpus_per_sim,
+                             "max_parallel": self.max_parallel,
+                             "on_failure": self.on_failure},
+                "points": pts}
+
+    def _write_manifest(self) -> None:
+        """``sweep.json`` 原子更新（索引不是真源：文档才是；点状态镜像）。
+
+        pending 时先写一次（全部点可见）；每点终态与扫描终态各更新一次。
+        """
+        if self.dir is None:
+            return
+        try:
+            with self._lock:
+                p = self.dir / MANIFEST_NAME
+                tmp = p.with_name(p.name + ".part")
+                tmp.write_text(json.dumps(self._manifest_dict(),
+                                          ensure_ascii=False, indent=2),
+                               encoding="utf-8")
+                os.replace(tmp, p)
+        except OSError:
+            pass
+
+    def _write_point_doc(self, i: int) -> None:
+        """点终态 → 它自己的 ``.gensim``（G182 P4）。
+
+        成功点：``Simulation.run`` 已写（``_doc_path`` 在 f.sweep 里钉好）；
+        失败/取消点：这里写——**没有结果也要有文档**（state/error 可审计）。
+        文档写失败不拦扫描编排（点状态已经定格、事件已经发出）。
+        """
+        doc = self.doc_paths[i]
+        if doc is None:
+            return
+        from . import simfile
+        s = self.sims[i]
+        st = self.states[i]
+        try:
+            if st == self._GOOD:
+                if doc.is_file():
+                    return
+                s.save(doc)          # 兜底：run 内保存失败的极小概率
+                return
+            if st == "pending":
+                return
+            cfg = s.to_config() if hasattr(s, "to_config") else self.points[i]
+            state: dict = {"job_id": str(self.job_ids[i] or ""), "state": st}
+            if self.errors[i] is not None:
+                state["error"] = str(self.errors[i])[:2000]
+            simfile.write(doc, cfg, state=state)
+        except Exception:   # noqa: BLE001 —— 文档写失败不炸扫描
+            pass
 
     def _run_point(self, i: int) -> None:
         with self._lock:
@@ -300,6 +417,9 @@ class SweepHandle:
                      "detail": (str(err)[:200] if err else ""),
                      "total": len(self.sims),
                      "rollup": self.rollup()})
+        # G182 P4：点终态 → 点文档 + sweep.json 增量更新
+        self._write_point_doc(i)
+        self._write_manifest()
 
     def _window(self) -> int:
         """并发窗 = min(max_parallel, 配额并发上限)——少撞 429 的礼貌。
@@ -358,6 +478,8 @@ class SweepHandle:
                      "rollup": self.rollup(),
                      "last_job_id": last_job,
                      "total": len(self.sims)})
+        # G182 P4：扫描终态 → sweep.json 最终态
+        self._write_manifest()
 
     def _terminal(self) -> bool:
         return self.state in (SWEEP_TERMINAL_OK,) + SWEEP_TERMINAL_BAD
@@ -487,31 +609,8 @@ class SweepHandle:
         return arrays
 
     def results(self, i: int):
-        """第 i 点的 SimData（run() 原语 auto-save 的本地 h5）。"""
+        """第 i 点的 SimData（读该点结果文档内嵌 h5；未跑/失败点报错）。"""
         return self.sims[i].results()
 
-    def download(self, dir: str | Path) -> Path:
-        """manifest + aggregate.npz 落地本地目录。**格式以本实现为正典**
-        （G172/R35 核对定案：旧服务端 sweep.json 随内核 G29b 退役，无
-        已知消费者；manifest 与旧格式的字段差异清单存档 WAR_LOG R35——
-        aggregate.npz 同源零漂移）。逐点完整结果已由各点实例 auto-save
-        （run() 原语）。
-
-        R29 S4：``_meta``（ok/file/n_result_columns/axes——旧服务端
-        manifest 的聚合摘要字段）修前算出即丢，现并入 manifest 的
-        ``aggregate`` 键。"""
-        import numpy as np
-        root = Path(dir)
-        root.mkdir(parents=True, exist_ok=True)
-        arrays, meta = build_aggregate(self.points, self.axis_names,
-                                       self.digests())
-        manifest = self.status()
-        manifest["aggregate"] = meta
-        (root / "manifest.json").write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2),
-            encoding="utf-8")
-        np.savez_compressed(root / "aggregate.npz", **arrays)
-        return root
-
     def __repr__(self) -> str:  # pragma: no cover —— 调试便利
-        return f"<SweepHandle {self.id} {self.state}>"
+        return f"<SweepHandle {self.id} {self.state} dir={self.dir}>"

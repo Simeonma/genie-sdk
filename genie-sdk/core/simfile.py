@@ -91,9 +91,8 @@ def validate_structure(zf: zipfile.ZipFile) -> list[str]:
     if any(n.startswith("results/") for n in names) and STATE not in names:
         raise SimfileFormatError(
             "容器含 results/ 但缺 state.json（job_id）——无法还原结果态")
-    if STATE in names and not any(n.startswith("results/") for n in names):
-        raise SimfileFormatError(
-            "容器含 state.json 但无 results/——结果与元信息必须成对")
+    # state.json 可以单独存在（G182 P4：失败点的文档 = cfg+state+error，
+    # 没有结果；"有结果必须有 state"仍成立，反向不成立）。
     return names
 
 
@@ -252,6 +251,11 @@ def write(target, cfg: dict, *, result_path=None, result_data: bytes | None = No
                 zf.write(rp, arcname="results/" + rp.name)
                 st = dict(state or result_state(rp))
                 zf.writestr(STATE, json.dumps(st, ensure_ascii=False, indent=2))
+            elif state is not None:
+                # G182 P4：失败/取消点 = cfg + state + error，没有结果。
+                zf.writestr(STATE,
+                            json.dumps(dict(state), ensure_ascii=False,
+                                       indent=2))
         os.replace(tmp, target)
     except BaseException:
         try:

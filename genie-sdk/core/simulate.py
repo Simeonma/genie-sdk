@@ -439,7 +439,7 @@ class Simulation:
 
     def sweep(self, parameters=None, *, gpus_per_sim: int = 1,
               max_parallel: int = 1, on_failure: str = "continue",
-              mode: str | None = None) -> "SweepHandle":
+              mode: str | None = None, name: str | None = None) -> "SweepHandle":
         """参数扫描（G29b 客户端编排；R24c run() 化重写）→ SweepHandle。
 
         - ``parameters``：轴列表，每项 ``{"name": 参数名, "values" |
@@ -447,30 +447,43 @@ class Simulation:
           键集内（本地展开期裁决，SweepExpandError 调用点即抛——G92：
           规格形状/展开/校验错误统一此类型）。
         - 每点 = 一个独立 Simulation 实例走 **run() 全原语**：本地校验、
-          auto-save（逐点 h5 落会话结果目录）、visualize/结果面随原语。
+          visualize/结果面随原语；**结果写进点文档**（G182 P4）。
         - ``gpus_per_sim``：每点作业的 gpu 上限（run(gpu=…)——旋钮真实
           生效，G90 构造性修复）。
         - ``max_parallel``：并发窗（缺省 1 = 顺序；受配额上限约束）。
         - ``on_failure``：``continue``（缺省，坏点记 failed 继续）/
           ``abort``（首坏点停排新点 + 取消在途——G89 重写语义）。
-        聚合/下载/逐点句柄见 SweepHandle。基底配置 = 当前实例收集的配置；
-        与 run() 不同，sweep 不占用本实例的 job_id（每点自带 job）。
+        - ``name``：扫描名（缺省 = 单轴名或 "sweep"）；文件夹 =
+          ``<workspace>[/owner]/sweeps/<name>-<时间戳>/``，内含
+          ``sweep.json`` 索引 + 每点 ``<name>-0001.gensim``（失败点也写）。
+        聚合/逐点句柄见 SweepHandle（``download()`` 已退役——文件夹即产物）。
+        基底配置 = 当前实例收集的配置；与 run() 不同，sweep 不占用本实例
+        的 job_id（每点自带 job）。
         """
-        points, _axis_names = self._sweep_points(
+        points, axis_names = self._sweep_points(
             parameters, gpus_per_sim=gpus_per_sim,
             max_parallel=max_parallel, on_failure=on_failure, mode=mode)
 
+        from . import sweep as _sweep_mod
+        sweep_dir, slug = _sweep_mod.new_sweep_dir(name, axis_names)
         hooks_factory = hooks.get("sweep_sim_factory")
-        sims = []
-        for pt in points:
+        sims: list = []
+        docs: list = []
+        for i, pt in enumerate(points):
             s = (hooks_factory() if hooks_factory
                  else Simulation(client=self._client))
             s.load_config(pt)
+            doc = sweep_dir / f"{slug}-{i + 1:04d}.gensim"
+            s._doc_path = str(doc)     # 点文档：run 成功即写这里
+            docs.append(doc)
             sims.append(s)
-        return SweepHandle(sims, _axis_names,
+        # 索引先登记全部点（pending），点终态再增量更新；文档本身不预建
+        # （站长 2026-10-30 裁：预建会双写 + 重写 zip）。
+        return SweepHandle(sims, axis_names,
                            points=points, client=self._client,
                            gpus_per_sim=gpus_per_sim,
-                           max_parallel=max_parallel, on_failure=on_failure)
+                           max_parallel=max_parallel, on_failure=on_failure,
+                           dir=sweep_dir, name=slug, axes=parameters)
 
     def _sweep_points(self, parameters, *, gpus_per_sim: int,
                       max_parallel: int, on_failure: str,

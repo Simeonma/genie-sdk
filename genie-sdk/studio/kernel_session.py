@@ -543,6 +543,8 @@ class SessionKernel:
                # 否则本会话默认 <session>.gensim；换工作区/换文档都靠重挂
                # 让这个 env 生效。
                "GENIE_DOC_PATH": str(doc_path(self._owner, self._session_id)),
+               # G182 P4：扫描文件夹根（会话显式注入，避免把结果目录当基）
+               "GENIE_SWEEPS_DIR": str(_owner_dir(self._owner) / "sweeps"),
                # 后端是部署属性：worker 从环境读，不从请求读
                "GENIE_BACKEND": backend()}
         # cwd = 本 owner 的脚本工作区（workspace 根/<owner>/，spawn 时落

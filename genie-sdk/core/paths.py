@@ -90,3 +90,21 @@ def runs_dir(owner: str | None = None) -> Path:
         return (d / owner / "runs") if owner else d
     root = workspace_root()
     return (root / owner / "runs") if owner else (root / "runs")
+
+
+def sweeps_dir(owner: str | None = None) -> Path:
+    """参数扫描目录（G182 P4）：``<workspace>/[<owner>/]sweeps``。
+
+    每个扫描一个子文件夹（``<name>-<时间戳>/``），里面 ``sweep.json``
+    索引 + 每点一份 ``<name>-0001.gensim``。解析：
+    ``GENIE_SWEEPS_DIR``（会话显式注入）→ ``GENIE_RESULT_DIR``/sweeps
+    （部署/CI 基）→ 工作区根。
+    """
+    env = os.environ.get("GENIE_SWEEPS_DIR")
+    if env:
+        return Path(env)
+    res = os.environ.get("GENIE_RESULT_DIR")
+    if res:
+        return Path(res) / ("sweeps" if not owner else f"{owner}/sweeps")
+    root = workspace_root()
+    return (root / owner / "sweeps") if owner else (root / "sweeps")
