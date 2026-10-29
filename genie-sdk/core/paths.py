@@ -21,7 +21,7 @@ import os
 from pathlib import Path
 
 __all__ = ["settings_path", "default_root", "env_root", "workspace_root",
-           "source", "result_dir"]
+           "source", "result_dir", "runs_dir"]
 
 
 def settings_path() -> Path:
@@ -70,7 +70,23 @@ def source() -> str:
 def result_dir(owner: str | None = None) -> Path:
     """结果目录：``<root>/[<owner>/]genie_results``。
 
-    Studio 会话传 owner（按人隔离）；SDK 直跑不传（根下一层）。
+    **G182 起仅作历史 h5 的只读位置**（新产物是文档）；保留此函数供
+    旧路径回退与测试。
     """
     root = workspace_root()
     return (root / owner / "genie_results") if owner else (root / "genie_results")
+
+
+def runs_dir(owner: str | None = None) -> Path:
+    """单跑文档目录（G182 P2）：
+
+    - 显式 ``GENIE_RESULT_DIR`` **优先**（部署/CI 的目录覆盖；修前它决定
+      h5 落点，现在决定文档落点，语义延续）；
+    - 否则 ``<workspace>/[<owner>/]runs``（一次执行一份文档）。
+    """
+    env = os.environ.get("GENIE_RESULT_DIR")
+    if env:
+        d = Path(env)
+        return (d / owner / "runs") if owner else d
+    root = workspace_root()
+    return (root / owner / "runs") if owner else (root / "runs")

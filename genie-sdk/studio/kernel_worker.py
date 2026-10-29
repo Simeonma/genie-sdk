@@ -121,23 +121,6 @@ def _jobdone_text(exc: BaseException, jid: str) -> str:
     return f"✗ 作业失败（{who}）\n"
 
 
-def _autosave_doc(sim):
-    """跑完自动存档（G4a 2026-10-30）：把当前仿真存成 ``.gensim``。
-
-    文档路径 = env ``GENIE_DOC_PATH``（会话管理器按会话钉绝对路径）；
-    未设 → 不存（SDK 直跑 / 测试形态）。成功返回 Path；失败返回一句
-    人话（调用方发 note）——**不拦作业成功语义**：作业已经跑完，存盘
-    失败不是作业失败。
-    """
-    path = os.environ.get("GENIE_DOC_PATH") or ""
-    if not path:
-        return None
-    try:
-        return sim.save(path)
-    except Exception as e:   # noqa: BLE001 —— 存档失败不能吞作业成功
-        return f"自动存档失败：{e}（作业已完成，结果仍在结果目录）"
-
-
 def main(readline=None, emit_fn=None, expose=None) -> None:
     global _exec_busy, _stop_requested
     # 运行时缝（LEDGER G80）：readline / emit_fn 可注入——本机缺省 =
@@ -199,6 +182,10 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         """
         s = (real_connect(sess_url, sess_key) if sess_url
              else genie.Simulation(client=None))
+        # G182 P2：会话内 run 成功 → 写 .gensim 文档（不再落散落 h5）。
+        # 文档路径来自会话会话器（GENIE_DOC_PATH：打开过的文档或默认
+        # <session>.gensim）；重挂后生效。sweep 点由下面的工厂显式清空。
+        s._doc_path = os.environ.get("GENIE_DOC_PATH") or None
         # G148 腿 A（R24c 批 4）：会话内 f.visualize → ev:plot 事件 →
         # GUI Plot 面板自动开卡。实例属性遮蔽 Simulation.visualize 的
         # class 面（组合根未接线时的报错指路版本）——同 session_connect
@@ -223,6 +210,10 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
     def _sweep_point_sim():
         s = _new_sim()
         s._sweep_point = True
+        # G182 P2：点不得写会话文档（否则 N 个点互相覆盖同一个文件）。
+        # P4 会给每点设置 <sweeps>/<name>-NNNN.gensim——在那之前点落
+        # runs/<job>.gensim（run 级默认）。
+        s._doc_path = None
         return s
 
     _sim_mod.hooks["sweep_sim_factory"] = _sweep_point_sim
@@ -247,12 +238,17 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
             persist_state()
         return one
 
-    def _open_sim(cfg):
+    def _open_sim(cfg, path=None):
         if _open_ctx["build"]:
             s = _new_sim()
             s.load_config(cfg)
+            if path:
+                s._doc_path = str(path)
             return s
-        return _replace_model(cfg, origin="open")
+        one = _replace_model(cfg, origin="open")
+        if path:
+            one._doc_path = str(path)   # 之后跑完原地更新这个文档
+        return one
 
     _sim_mod.hooks["open_sim"] = _open_sim
 
@@ -839,13 +835,9 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         emit({"ev": "out", "kind": "job-done",
               "text": f"✓ 作业 {jid} 完成——结果已就绪\n",
               "data": {"job_id": jid or "", "ok": True}})
-        # G4a（2026-10-30 站长裁）：跑完**自动存档**——用户不用点保存，
-        # 当前仿真（配置 + 刚下载的结果）原子写回会话文档（GENIE_DOC_PATH）。
-        # 失败只发一条 note，作业成功语义不变；sweep 点实例不进这里
-        # （上方 _sweep_point 早退），扫描文档在扫参轮单独做。
-        _doc = _autosave_doc(self)
-        if isinstance(_doc, str):
-            emit({"ev": "out", "kind": "note", "text": f"⚠ {_doc}\n"})
+        # G182 P2：自动存档已下沉到 Simulation.run（_auto_save_document）
+        # ——会话实例的 `_doc_path`（GENIE_DOC_PATH / 打开的文档）在
+        # _new_sim 里设好，run 成功即写文档，不再由 worker 二次写。
         return out
     genie.core.simulate.Simulation.run = _sim_run_with_progress
     from genie.net.client import Client as _Client   # import genie 不预载 net 子包

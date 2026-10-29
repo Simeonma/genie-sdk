@@ -20,6 +20,7 @@ SDK 公开面 = ``Simulation.save(path)`` / ``genie.open(path)``；Studio 的
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import zipfile
@@ -153,13 +154,25 @@ def inspect(path) -> dict:
             "has_results": any(n.startswith("results/") for n in names)}
 
 
-def result_state(h5path, *, job_id: str = "") -> dict:
-    """读结果 h5 根 attrs → ``state.json`` 形态（读不到就给最小 dict）。"""
-    st: dict = {"job_id": job_id or Path(h5path).name.removesuffix("_results.h5"),
+def result_state(source, *, job_id: str = "") -> dict:
+    """读结果 h5 根 attrs → ``state.json`` 形态（读不到就给最小 dict）。
+
+    ``source`` 可以是路径，也可以是**结果 h5 字节**（G182 P2：run 成功时
+    结果在内存里，零临时文件直接写文档）。
+    """
+    name = ""
+    if isinstance(source, (bytes, bytearray)):
+        source = io.BytesIO(source)
+    else:
+        try:
+            name = Path(source).name
+        except TypeError:
+            name = ""
+    st: dict = {"job_id": job_id or name.removesuffix("_results.h5"),
                 "state": "done"}
     try:
         import h5py
-        with h5py.File(h5path, "r") as h5:
+        with h5py.File(source, "r") as h5:
             a = h5.attrs
             for k, cast in (("executed_steps", int), ("dt", float)):
                 if k in a:
@@ -171,8 +184,8 @@ def result_state(h5path, *, job_id: str = "") -> dict:
     return st
 
 
-def write(target, cfg: dict, *, result_path=None, state: dict | None = None,
-          files=None) -> Path:
+def write(target, cfg: dict, *, result_path=None, result_data: bytes | None = None,
+          state: dict | None = None, files=None) -> Path:
     """写一个 .gensim（原子替换）。返回最终路径。
 
     Parameters
@@ -182,16 +195,21 @@ def write(target, cfg: dict, *, result_path=None, state: dict | None = None,
     cfg : dict
         非空 SimConfig JSON（调用方负责先 validate——本函数只管容器）。
     result_path : str | Path | None
-        结果 h5（通常在 ``$GENIE_RESULT_DIR``）；给了就写 ``results/`` +
-        ``state.json``。
+        结果 h5 文件；给了就写 ``results/`` + ``state.json``。
+    result_data : bytes | None
+        结果 h5 **字节**（G182 P2：run 成功时在内存里，避免先落临时文件）；
+        与 ``result_path`` 二选一。成员名用 ``state["job_id"]``。
     state : dict | None
-        ``state.json`` 内容；缺省从 h5 根 attrs 反推（``result_state``）。
+        ``state.json`` 内容；缺省从结果（路径或字节）的 h5 根 attrs 反推
+        （``result_state``）。
     files : iterable[str | Path] | None
         工作区文件快照（只取基名，平铺进 ``workspace/``；点文件与
         ``.part`` 跳过）。
     """
     if not isinstance(cfg, dict) or not cfg:
         raise SimfileError("cfg 须非空 SimConfig dict")
+    if result_path is not None and result_data is not None:
+        raise SimfileError("result_path 与 result_data 二选一")
     target = _ensure_suffix(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(target.name + ".part")
@@ -205,7 +223,15 @@ def write(target, cfg: dict, *, result_path=None, state: dict | None = None,
                         or p.name.endswith(".part")):
                     continue
                 zf.write(p, arcname="workspace/" + p.name)
-            if result_path is not None:
+            if result_data is not None:
+                st = dict(state or result_state(result_data))
+                jid = str(st.get("job_id") or "").strip()
+                if not jid:
+                    raise SimfileError(
+                        "结果字节缺 job_id——state 里必须有 job_id 才能命名成员")
+                zf.writestr("results/" + f"{jid}_results.h5", result_data)
+                zf.writestr(STATE, json.dumps(st, ensure_ascii=False, indent=2))
+            elif result_path is not None:
                 rp = Path(result_path)
                 if not rp.is_file():
                     raise SimfileError(f"结果文件不存在：{rp}")

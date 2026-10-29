@@ -191,7 +191,12 @@ class Simulation:
         self._arrays: dict | None = None   # npz 解包缓存（get_* 惰性共享）
         self._results: dict[tuple, Any] = {}   # (类型, 名) → Result 对象缓存
         self._monitors_meta: dict = {}         # G95：manifest {名: meta}
-        self._result_local_path: str | None = None
+        self._result_local_path: str | None = None   # 旧 h5 落盘（只读兼容）
+        self._result_doc: str | None = None          # G182：结果文档路径
+        # G182 P2：run 成功写文档的位置——打开过的文档 → 原地更新；
+        # 未设 → <workspace>/runs/<job>.gensim。会话 worker 用 env
+        # GENIE_DOC_PATH 注入；genie.open 打开文档时设置。
+        self._doc_path: str | None = None
         # K4（R18，站长裁 A）：提交路径锁——并发 run() 的"双查 _job_id
         # 都是 None → 双提交"窗口是网络 I/O 级（GIL 会释放），后果 =
         # 双计费 + 孤儿作业。锁内完成 参数落 cfg + submit。
@@ -331,7 +336,7 @@ class Simulation:
             raise RuntimeError(
                 f"job {self._job_id} already finished with state "
                 f"{self.state!r} — results stay available via results()"
-                + (" (local file saved)" if self._result_local_path else "")
+                + (" (result document saved)" if self._result_doc else "")
                 + "; to re-run, create a new connect() instance")
         # K4：锁内完成"改参检查 + 参数落 cfg + 提交"（并发 run() 防双提交）
         with self._run_lock:
@@ -349,7 +354,7 @@ class Simulation:
             self.state = e.state            # "failed" / "killed"
             raise
         self.state = "done"
-        self._auto_save_result()
+        self._auto_save_document()
         return self
 
     def cancel(self) -> dict | None:
@@ -387,45 +392,49 @@ class Simulation:
         from pathlib import Path
 
         from . import simfile
-        result_p = None
+        result_data = None
         state = None
+        doc = getattr(self, "_result_doc", None)
+        if doc:
+            p = Path(doc)
+            if p.is_file():
+                result_data = simfile.result_bytes(p)
+                if result_data is not None:
+                    state = simfile.result_state(
+                        result_data, job_id=str(getattr(self, "_job_id", "") or ""))
         pth = getattr(self, "_result_local_path", None)
-        if pth:
+        if pth and result_data is None:
             p = Path(pth)
             if p.is_file():
-                result_p = p
+                result_data = p.read_bytes()
                 state = simfile.result_state(
-                    p, job_id=str(getattr(self, "_job_id", "") or ""))
+                    result_data, job_id=str(getattr(self, "_job_id", "") or ""))
         return simfile.write(path, self.to_config(),
-                             result_path=result_p, state=state)
+                             result_data=result_data, state=state)
 
-    def _auto_save_result(self) -> None:
-        """run() 成功后自动下载结果到本机（genie-results-h5/1，
-        2026-10-09 站长裁决：SDK 用户的仿真结果应当机落盘）。
+    def _auto_save_document(self) -> None:
+        """run 成功后把仿真写成 ``.gensim`` 文档（G182 P2：**h5 退役**）。
 
-        落点：``$GENIE_RESULT_DIR``（显式）→ 工作区设置
-        ``<workspace>/genie_results/``（G4a 2026-10-30：SDK 直跑也认
-        ``genie workspace`` 选的根）→ 缺省 ``./genie_results/``。
-        失败仅告警不抛——不吞 run 的成功语义，results() 需要时会现场重取。
+        落点：``self._doc_path``（打开过的文档 → 原地更新）→ 否则
+        ``<workspace>/runs/<job_id>.gensim``（一次执行一份，历史可追溯）。
+        结果字节直接在内存里进容器（零临时文件）。失败仅告警不抛——
+        不吞 run 的成功语义，results() 需要时会现场重取。
         """
         try:
-            import os
             from pathlib import Path
+
+            from . import paths, simfile
             raw = self._client.fetch_result(self._job_id)
-            env_dir = os.environ.get("GENIE_RESULT_DIR") or ""
-            if env_dir:
-                d = Path(env_dir)
-            else:
-                from . import paths
-                d = paths.result_dir()
-            d.mkdir(parents=True, exist_ok=True)
-            pth = d / f"{self._job_id}_results.h5"
-            pth.write_bytes(raw)
-            os.chmod(pth, 0o600)     # K7：双 import os 已并一
-            self._result_local_path = str(pth)
-            print(f"[genie] 结果已自动下载: {pth}（{len(raw)} 字节）", flush=True)
+            state = simfile.result_state(raw, job_id=str(self._job_id or ""))
+            doc = Path(self._doc_path) if self._doc_path else \
+                (paths.runs_dir() / f"{self._job_id}.gensim")
+            p = simfile.write(doc, self.to_config(),
+                              result_data=raw, state=state)
+            self._result_doc = str(p)
+            self._result_local_path = None      # 不再有散落 h5
+            print(f"[genie] 结果已保存: {p}（{len(raw)} 字节）", flush=True)
         except Exception as e:  # noqa: BLE001
-            print(f"[genie] 结果自动下载失败（results() 会现场重取）: {e!r}",
+            print(f"[genie] 结果保存失败（results() 会现场重取）: {e!r}",
                   flush=True)
 
     def sweep(self, parameters=None, *, gpus_per_sim: int = 1,
@@ -529,6 +538,12 @@ class Simulation:
         fetch（后端已归档时两条路在同一处统一抛 410，不再一生一死）。
         显式取他人/历史作业不走这里（results(job_id=…) 直连）。"""
         from pathlib import Path as _P
+        from . import simfile
+        doc = getattr(self, "_result_doc", None)
+        if doc and _P(doc).is_file():
+            data = simfile.result_bytes(doc)
+            if data is not None:
+                return data
         local = getattr(self, "_result_local_path", None)
         if local and _P(local).is_file():
             return _P(local).read_bytes()
@@ -693,16 +708,29 @@ class Simulation:
         return d
 
     def _digest_from_local(self, jid) -> dict | None:
-        """本地 auto-save 的 h5 里读 digest attrs（G170：fdtd 随结果带出，
-        0 次 HTTP）。文件不在/缺键/坏 JSON → None（调用方回退 GET）。"""
-        p = getattr(self, "_result_local_path", None)
+        """从本地**结果文档**里读 digest attrs（G170：fdtd 随结果带出，
+        0 次 HTTP；G182 P2：改从 ``.gensim`` 内嵌 h5 读）。读不到 → None。"""
+        import io
+
+        from . import simfile
+        doc = getattr(self, "_result_doc", None)
+        p = doc if doc else getattr(self, "_result_local_path", None)
         if not p:
             return None
         try:
             import h5py
             from .results import SimData
-            with h5py.File(p, "r") as h5:
+            if doc:
+                data = simfile.result_bytes(p)
+                if data is None:
+                    return None
+                h5 = h5py.File(io.BytesIO(data), "r")
+            else:
+                h5 = h5py.File(p, "r")
+            try:
                 return SimData(h5, job_id=jid).digest
+            finally:
+                h5.close()
         except Exception:  # noqa: BLE001 —— 本地读不到就走 HTTP，不拦
             return None
 

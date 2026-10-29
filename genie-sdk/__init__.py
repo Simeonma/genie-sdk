@@ -193,8 +193,10 @@ def open(path) -> Simulation:
     """打开一个 ``.gensim`` 仿真文件 → 载入其配置的 Simulation。
 
     **会话内**（Studio 终端 / agent）：整份替换当前会话模型并返回活实例
-    ——与图形界面「打开仿真」同一语义（2026-10-30 站长定案）。
-    **会话外**：新建实例载入配置（配好凭据即可直接 ``f.run()``）。
+    ——与图形界面「打开仿真」同一语义（2026-10-30 站长定案）。会话外：
+    新建实例载入配置（配好凭据即可直接 ``f.run()``）。两条轨都会把
+    ``_doc_path`` 钉到这个文件：之后 ``run()`` 成功**原地更新它**
+    （G182：文档是结果产物）。
 
     容器格式由 ``genie.core.simfile`` 维护（与 ``f.save`` / Studio
     的存储/打开同一份实现）。
@@ -205,9 +207,10 @@ def open(path) -> Simulation:
     cfg = simfile.read_cfg(path)
     hook = _simulate.hooks.get("open_sim")
     if hook is not None:
-        return hook(cfg)
+        return hook(cfg, str(path))
     f = connect()
     f.load_config(cfg)
+    f._doc_path = str(path)
     return f
 
 
