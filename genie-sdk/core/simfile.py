@@ -29,7 +29,7 @@ __all__ = [
     "SimfileError", "SimfileFormatError",
     "SIMCONFIG", "STATE",
     "member_kind", "validate_structure", "read_cfg", "inspect",
-    "write", "result_state",
+    "write", "result_state", "result_bytes",
 ]
 
 SIMCONFIG = "simconfig.json"
@@ -117,6 +117,24 @@ def read_cfg(source) -> dict:
     if not isinstance(cfg, dict):
         raise SimfileFormatError(f"{SIMCONFIG} 须是 SimConfig JSON 对象")
     return cfg
+
+
+def result_bytes(source) -> bytes | None:
+    """容器里随仿真带的结果 h5 字节（**P1 读取原语**，G182）。
+
+    没有 ``results/`` → None（未跑过/失败点的文档）；多个结果成员 =
+    格式错（一个仿真一份结果，不猜）。
+    """
+    with _open_zip(source) as zf:
+        names = validate_structure(zf)
+        hits = [n for n in names if n.startswith("results/")]
+        if not hits:
+            return None
+        if len(hits) > 1:
+            raise SimfileFormatError(
+                f"仿真文件含 {len(hits)} 个结果成员——一个仿真只认一份结果")
+        data = zf.read(hits[0])
+        return data
 
 
 def inspect(path) -> dict:
