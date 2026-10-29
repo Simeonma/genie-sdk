@@ -485,12 +485,21 @@ async def gw(path: str, request: Request):
     from fastapi.responses import Response
 
     body = await request.body()
+    # R41/S3：畸形 X-Upstream-Timeout 是**请求形状错**（4xx），不是
+    # 服务器故障（5xx）——修前裸 float() 直接 500。
+    raw_to = request.headers.get("X-Upstream-Timeout", "120")
+    try:
+        up_to = float(raw_to)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=422,
+            detail=f"X-Upstream-Timeout 必须是数字（收到 {raw_to!r}）")
     kwargs = dict(
         key=request.headers.get("X-Upstream-Key", ""),
         data=body,
         content_type=request.headers.get("content-type", "application/json"),
         params=dict(request.query_params),
-        timeout=float(request.headers.get("X-Upstream-Timeout", "120")))
+        timeout=up_to)
     status, content, ct = await run_in_threadpool(
         lambda: gateway_forward(request.method, path, **kwargs))
     return Response(content=content, status_code=status,

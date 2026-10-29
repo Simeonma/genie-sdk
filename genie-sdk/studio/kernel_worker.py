@@ -32,8 +32,10 @@
 信任契约：这是用户 key 的**真执行面**——G174 后唯一执行引擎，无沙箱、
 无 dry 面（曾经的 preview 零网络轨已随同裁决退役）；卡死由父层 kill+重生
 （B2：输出历史跨重生保留在父层环落盘里，会话 f 由本进程新生时读
-session_state.json 自动重放，父层会在 terminal 注明）。单步执行超时用
-SIGALRM（主线程执行，alarm 可用）。
+session_state.json 自动重放，父层会在 terminal 注明）。**没有本地墙钟**
+（R41 定案 A+，2026-10-29）：等待时长只由两个真实机制管——用户停止
+（A2）与服务端作业超时；本地 `signal.alarm` 整块机制退役（它曾误杀
+"跑一个 30 分钟仿真"这类正常任务，且造成 Windows/Linux 行为分叉）。
 停止（A2「长任务必须能掐」）= 父层发 SIGINT：exec 期 → StopExec 掐断
 （回滚/done 照常，后端孤儿作业就地 cancel）；空闲期 → 忽略（仅提示
 一行），worker 永不因 SIGINT 死亡。
@@ -49,8 +51,6 @@ import threading
 import traceback
 from pathlib import Path
 
-DEFAULT_EXEC_TIMEOUT_S = 900   # 单段 exec 墙钟（f.run 轮询几分钟是常态）
-
 _exec_busy = False   # exec 进行中标志（SIGINT handler 的状态感知依据；
                      # 进入 exec 置 True、finally 复位——模块级：handler
                      # 在 main() 里定义也要摸得到）
@@ -63,6 +63,29 @@ class StopExec(BaseException):
 
     派生自 BaseException 而非 Exception：与 KeyboardInterrupt 同理，
     用户代码的 ``except Exception`` 不得吞掉停止信号。"""
+
+
+def _request_stop() -> str:
+    """停止请求状态机（R41 补锁：从信号 handler 提出，跨平台可直测）。
+
+    三态返回：
+    - ``"stop"`` 语义 = **抛 StopExec**（exec 期首次请求）——由调用方
+      （信号 handler）让异常冲出用户代码，被 exec 壳捕获后走收尾；
+    - ``"silent"`` = 收尾中二次请求：静默吞掉（再无异常，否则从
+      except 块内冲出收尾链会炸掉 worker）；
+    - ``"idle"`` = 空闲期请求：不打断任何东西（SIGINT 默认处置 =
+      KeyboardInterrupt 冲出 main() = worker 死亡，是必须拆掉的地雷）。
+
+    由 ``signal.SIGINT``（POSIX）与 ``signal.SIGBREAK``（Windows
+    CTRL_BREAK_EVENT）共用（G33）。
+    """
+    global _stop_requested
+    if _exec_busy:
+        if not _stop_requested:
+            _stop_requested = True       # 本段 exec 只认第一次停止
+            raise StopExec("用户停止")
+        return "silent"
+    return "idle"
 
 
 class _Out:
@@ -578,15 +601,6 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
             emit({"ev": "out", "kind": "error",
                   "text": f"(cfg 快照失败: {e})\n"})
 
-    def on_alarm(signum, frame):
-        raise TimeoutError(f"执行超时（>{DEFAULT_EXEC_TIMEOUT_S}s）")
-
-    # SIGALRM/alarm 是 POSIX-only；Windows 上没有——超时守卫降级为
-    # 不可用（exec 无墙钟上限，其余语义不变），绝不让 worker 启动即崩。
-    _HAVE_SIGALRM = hasattr(signal, "SIGALRM") and hasattr(signal, "alarm")
-    if _HAVE_SIGALRM:
-        signal.signal(signal.SIGALRM, on_alarm)
-
     def _cancel_orphan_jobs():
         """停止后的孤儿作业清理（best-effort，仅 StopExec 路径调）：
         f.run() 的等待是客户端轮询，被同步掐断后**后端作业还在**——它在
@@ -639,22 +653,21 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
             pass
 
     def on_int(signum, frame):
-        # 状态感知 SIGINT（A2）：exec 期 → StopExec 掐断（冲出用户代码
-        # 但被 exec 链捕获，worker 存活）；空闲期 → 绝不 raise——SIGINT
-        # 默认处置 = KeyboardInterrupt 冲出 main() = worker 死亡（会话
-        # 态全丢）的地雷，在此拆除：尽力提示一行后吞掉。
-        global _stop_requested
-        if _exec_busy:
-            if not _stop_requested:
-                _stop_requested = True   # 本段 exec 只认第一次停止
-                raise StopExec("用户停止")
-            return   # 收尾（孤儿 cancel 等）进行中：二次 SIGINT 静默吞掉
-                     # ——此刻再 raise 会从 except 块内冲出收尾链炸 worker
+        # 状态感知 SIGINT/SIGBREAK（A2）：状态机本体 = _request_stop
+        # （模块级、跨平台可直测——R41 补锁把"Windows 停止"从不可测
+        # 变可测）；这里只做"空闲期提示"的 emit 包装。
         try:
-            emit({"ev": "out", "kind": "note",
-                  "text": "（无正在执行的命令——忽略停止）\n"})
-        except Exception:   # noqa: BLE001 — handler 内零异常外泄
-            pass
+            state = _request_stop()
+        except StopExec:
+            raise        # exec 期首次停止：冲出用户代码，被 exec 壳捕获
+        if state == "idle":
+            try:
+                emit({"ev": "out", "kind": "note",
+                      "text": "（无正在执行的命令——忽略停止）\n"})
+            except Exception:   # noqa: BLE001 — handler 内零异常外泄
+                pass
+        # state == "silent"（收尾中二次停止）：静默吞掉——此刻再 raise
+        # 会从 except 块内冲出收尾链炸 worker
 
     signal.signal(signal.SIGINT, on_int)
     # Windows 没有 SIGINT（Popen.send_signal(SIGINT) 直接 ValueError），停止
@@ -817,32 +830,26 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
     # 2026-10-23；drafts 环保留，属云宿主 agent 面板的管道。）
 
     # ── 统一的执行壳（exec 与 run 共用）──────────────────────────────
-    # 两件事只有一条路：捕获 stdout、装/拆 SIGALRM、状态相位、错误裁剪、
-    # 停止语义。**模型变不变由 fn 自己决定**，壳不管。
-    def _guarded(fn, timeout_s=None):
+    # 三件事只有一条路：捕获 stdout、状态相位、错误裁剪、停止语义。
+    # **模型变不变由 fn 自己决定**，壳不管。
+    # （R41/A+ 2026-10-29：本地墙钟整块退役——无 alarm、无 TimeoutError
+    # 分支。等待由用户停止与服务端作业超时管。顺带修掉的暗病：用户代码
+    # 自己抛的 TimeoutError（如 requests 超时）以前会被误认成"执行超时"
+    # 并触发收尸，现在走普通异常路径。）
+    def _guarded(fn):
         global _exec_busy, _stop_requested
         cap = _Out(emit)
         ok, err = True, ""
         _stop_requested = False   # 新一段执行：停止计数清零
-        _exec_busy = True         # 先置标志再武装 alarm：此后到达的 SIGINT
-                                  # 才必然走 StopExec 路径
+        _exec_busy = True         # 先置标志：此后到达的 SIGINT 才必然走
+                                  # StopExec 路径（空闲期只提示不打断）
         _emit_state("exec")
-        if _HAVE_SIGALRM:
-            signal.alarm(int(timeout_s or DEFAULT_EXEC_TIMEOUT_S))
         try:
             with contextlib_redirect(cap):
                 fn()
-        except TimeoutError as e:
-            ok, err = False, str(e)
-            emit({"ev": "out", "kind": "error",
-                  "text": f"⏱ {e}——会话仍在，可继续敲命令\n"})
-            # R30 C-A：超时路径同样收尸——R29 C2 的承诺面是"停止/超时"，
-            # 修前只有 StopExec 分支调收尸，SIGALRM 掐断 sweep 轮询后
-            # 在途点作业继续烧卡（承诺只兑现了一半）。
-            _cancel_orphan_jobs()
         except StopExec:
-            # 用户停止（A2）：置于 TimeoutError 与 BaseException 之间——
-            # 后者会吞掉一切 BaseException，顺序即语义。
+            # 用户停止（A2）：置于 BaseException 之前——后者会吞掉一切
+            # BaseException，顺序即语义。
             ok, err = False, "用户停止"
             emit({"ev": "out", "kind": "note",
                   "text": "⏹ 已停止——会话仍在，可继续敲命令\n"})
@@ -860,8 +867,6 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
                   "Traceback (most recent call last):\n" + "".join(tb[cut:])
                   if cut is not None else "".join(tb)})
         finally:
-            if _HAVE_SIGALRM:
-                signal.alarm(0)
             _exec_busy = False   # 空闲期 SIGINT 不得再冲进用户语义
             _stop_requested = False
             _last_state["phase"] = None
@@ -885,7 +890,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         except json.JSONDecodeError:
             return
         op = msg.get("op")
-        if op in ("attach", "bind"):      # bind = 旧名（前端/旧宿主兼容）
+        if op == "attach":                # （R41/S2：旧名 bind 已删——零发送方）
             try:
                 attach(msg)
                 emit({"ev": "ack", "id": -1, "ok": True, "err": ""})
@@ -977,17 +982,20 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
 
             if op == "run":
                 # 提交当前模型：**不改模型**（f 一个字节不动）。
+                # timeout_s 只作为**作业超时**上行（服务端语义），
+                # 不再兼任本地等待墙钟（R41/A+）。
                 ok, err = _guarded(
                     lambda: _session_run(gpu=msg.get("gpu"),
-                                         timeout_s=msg.get("timeout_s")),
-                    msg.get("timeout_s"))
+                                         timeout_s=msg.get("timeout_s")))
                 emit({"ev": "done", "id": eid, "ok": ok, "err": err})
                 return
 
             code = msg.get("code") or ""
-            # 兼容一版：旧前端发 reset:true（脚本 Run 的旧名）→ build。
-            mode = "build" if (msg.get("mode") == "build"
-                               or msg.get("reset")) else "run"
+            # mode 是**消费**不是归一（R41/S2）：管理器 k.s.submit 已按
+            # 正典归一（session_service.exec_action"只认 build"），这里只
+            # 读值分叉——旧前端 reset:true 别名由 /api/exec 转发层接住
+            # （session_client），worker 不再抄第二套归一。
+            mode = msg.get("mode")
             target_ns = ns
             build_ns = None
             build_sims: list = []
@@ -1008,7 +1016,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
                 exec(compile(code, "<terminal>", "exec"), target_ns)  # noqa: S102
 
             try:
-                ok, err = _guarded(_body, msg.get("timeout_s"))
+                ok, err = _guarded(_body)
             finally:
                 if mode == "build":
                     sink["sims"] = sims         # 无论成败都把落点归位

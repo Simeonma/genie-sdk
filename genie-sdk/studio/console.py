@@ -116,5 +116,13 @@ def run_console(client: SessionClient | None = None, *,
         buf = []
         if block.strip() in ("exit", "quit", "exit()", "quit()"):
             return 0
-        cursor = _run_block(cli, block, cursor, owner=owner,
-                            session_id=session_id)
+        try:
+            cursor = _run_block(cli, block, cursor, owner=owner,
+                                session_id=session_id)
+        except Exception as e:      # noqa: BLE001 —— R41/S4：4xx/链路错误
+            # 不得冲出 REPL：修前一次 422（如 --session "bad id!"）就让
+            # 整个终端带裸栈退出，用户连改的机会都没有。报一句人话，
+            # 继续留在循环里——console 的契约是"会话仍在，可继续敲"。
+            status = getattr(e, "status_code", None)
+            detail = getattr(e, "detail", None) or str(e)
+            print(f"✗ {'HTTP ' + str(status) + ' ' if status else ''}{detail}")

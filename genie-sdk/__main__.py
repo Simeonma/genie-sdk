@@ -65,7 +65,10 @@ def _start_local_session() -> tuple[object, str, str]:
     try:
         from genie.studio.session_service import serve
     except ImportError:  # pragma: no cover —— 指路不裸栈
-        raise SystemExit('缺 server extra：pip install "genie-sdk[server]"')
+        # R41/N3：装法合一（R40）后没有 server extra 可装——缺件=环境损坏。
+        raise SystemExit(
+            "✗ 本地服务组件缺失（fastapi/uvicorn 已随 genie-sdk 基础依赖"
+            "分发）——环境损坏，请重装：pip install --force-reinstall genie-sdk")
     token = secrets.token_urlsafe(24)
     try:
         server, port = serve(0, token=token)
@@ -78,7 +81,10 @@ def cmd_studio(args: argparse.Namespace) -> int:
     try:
         import uvicorn
     except ImportError:  # pragma: no cover —— 指路不裸栈（同下方 session_service）
-        raise SystemExit('缺 server extra：pip install "genie-sdk[server]"')
+        # R41/N3：同 _start_local_session——装法合一后无 extra 可装。
+        raise SystemExit(
+            "✗ 本地服务组件缺失（fastapi/uvicorn 已随 genie-sdk 基础依赖"
+            "分发）——环境损坏，请重装：pip install --force-reinstall genie-sdk")
 
     from genie.studio import rendezvous as rv
     from genie.studio import session_service as ss
@@ -229,8 +235,8 @@ def cmd_logout(args: argparse.Namespace) -> int:
     if not key:
         print("· 本机没有已存的 token，无需登出")
         return 0
-    url = resolve_gateway(getattr(args, "gateway", None) or None)
     try:
+        url = resolve_gateway(getattr(args, "gateway", None) or None)
         r = Client(url, key)._s.delete(f"{url}/api/auth/tokens/self",
                                        timeout=10)
         if r.status_code < 300:
@@ -239,9 +245,15 @@ def cmd_logout(args: argparse.Namespace) -> int:
             print(f"⚠ 远端吊销失败（HTTP {r.status_code}）——本地仍会清除，"
                   "该 token 到期前在远端仍有效")
     except Exception as e:  # noqa: BLE001 —— 本地清理不因网络失败而跳过
+        # R41：无网关可解析（env-key 形态常见）也走这里——不再裸栈。
         print(f"⚠ 远端吊销失败（{e}）——本地仍会清除")
     clear_config("api_key", "username")
     print("✓ 已清除本机凭据")
+    if os.environ.get("GENIE_API_KEY"):
+        # R41：logout 只能清凭据仓——env 预置的 key 不归它管，必须说破，
+        # 否则用户"登出了却还能跑"。
+        print("⚠ 环境变量 GENIE_API_KEY 仍在生效（登出只清本机凭据仓）——"
+              "要彻底登出，请在启动脚本的环境里移除它")
     return 0
 
 
@@ -284,7 +296,6 @@ def main(argv: list[str] | None = None) -> int:
         ns.fn = cmd_studio
         ns.no_browser = False
         ns.port = None
-        ns.attach = ""
         ns.open = False
     return ns.fn(ns)
 
