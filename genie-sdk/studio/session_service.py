@@ -129,7 +129,7 @@ class AttachIn(BaseModel):
 
 
 def _kernel(body) -> object:
-    """写端点前置正典（G112 收敛 2026-10-27）：取/建 kernel + 可选 attach。
+    """写端点前置（G112 收敛 2026-10-27）：取/建 kernel + 可选 attach。
 
     「带 key 才换绑」是写路径（exec/run/patch/replace）的口径；``/attach``
     是换绑的正名端点，**无条件** attach（含空 key）、要回执，不走本
@@ -142,20 +142,61 @@ def _kernel(body) -> object:
     return k
 
 
+# ── 写路径接待正典（G115 收拢 2026-10-29）─────────────────────────
+# 「attach-then-<动作> + mode 归一」的唯一真源 = 下面四个 *_action：
+# HTTP 路由（/exec /run /model/patch /model/replace）与同进程适配器
+# （session_local.LocalSessionHost）都调它们——接待规则不许在调用方
+# 再抄第二份（含 session_client 的 /api/exec 转发层；锁 =
+# tests/sdk/test_session_reception.py）。归一口径：mode 只认 "build"，
+# 其余一律 "run"。
+def exec_action(*, owner: str, session_id: str, code: str,
+                mode: str = "run", label: str = "", key: str = "") -> str:
+    mode = "build" if mode == "build" else "run"
+    k = get_kernel(owner, session_id)
+    if key:
+        k.attach(key)          # 幂等：换 key 不换模型
+    return k.submit(code, mode=mode, label=label)
+
+
+def run_action(*, owner: str, session_id: str, gpu=None,
+               timeout_s=None, key: str = "") -> str:
+    k = get_kernel(owner, session_id)
+    if key:
+        k.attach(key)
+    return k.run(gpu=gpu, timeout_s=timeout_s)
+
+
+def patch_action(*, owner: str, session_id: str, ops: list,
+                 key: str = "") -> str:
+    k = get_kernel(owner, session_id)
+    if key:
+        k.attach(key)
+    return k.patch(ops)
+
+
+def replace_action(*, owner: str, session_id: str, model: dict,
+                   key: str = "") -> str:
+    k = get_kernel(owner, session_id)
+    if key:
+        k.attach(key)
+    return k.replace(model)
+
+
 @app.post("/exec")
 def exec_(body: ExecIn) -> dict:
     if not body.code.strip():
         raise HTTPException(status_code=422, detail="code 必填")
-    mode = "build" if body.mode == "build" else "run"
-    eid = _kernel(body).submit(body.code, mode=mode, label=body.label)
-    return {"id": eid}
+    return {"id": exec_action(owner=body.owner, session_id=body.session_id,
+                              code=body.code, mode=body.mode,
+                              label=body.label, key=body.key)}
 
 
 @app.post("/run")
 def run_(body: RunIn) -> dict:
     """提交当前模型（**不改模型**）。GUI 的 Run 按钮走这里。"""
-    eid = _kernel(body).run(gpu=body.gpu, timeout_s=body.timeout_s)
-    return {"id": eid}
+    return {"id": run_action(owner=body.owner, session_id=body.session_id,
+                             gpu=body.gpu, timeout_s=body.timeout_s,
+                             key=body.key)}
 
 
 @app.post("/model/patch")
@@ -163,7 +204,8 @@ def model_patch(body: PatchIn) -> dict:
     """模型路径级增量——表单/树/工具条的一次改动（M3b）。"""
     if not body.ops:
         raise HTTPException(status_code=422, detail="ops 不能为空")
-    return {"id": _kernel(body).patch(body.ops)}
+    return {"id": patch_action(owner=body.owner, session_id=body.session_id,
+                               ops=body.ops, key=body.key)}
 
 
 @app.post("/model/replace")
@@ -171,7 +213,8 @@ def model_replace(body: ReplaceIn) -> dict:
     """整份模型替换（导入 .gensim / 搬运）。"""
     if not isinstance(body.model, dict) or not body.model:
         raise HTTPException(status_code=422, detail="model 须为非空 dict")
-    return {"id": _kernel(body).replace(body.model)}
+    return {"id": replace_action(owner=body.owner, session_id=body.session_id,
+                                 model=body.model, key=body.key)}
 
 
 @app.get("/output")

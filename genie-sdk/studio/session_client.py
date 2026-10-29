@@ -330,8 +330,10 @@ def register_session_routes(
         if not code.strip():
             raise HTTPException(status_code=422, detail="code 必填")
         label = str(body.get("label") or "")   # 执行来源标注（环 input.mark）
-        mode = "build" if (body.get("mode") == "build"
-                           or body.get("reset")) else "run"
+        # mode 只解析旧名别名（reset → build），**归一在正典**
+        # （session_service.*_action，G115 收拢 2026-10-29）——本转发层
+        # 不再抄第二份 "build if ... else run"。
+        mode = "build" if body.get("reset") else str(body.get("mode") or "run")
         key = _key_of(exec_credentials_of, req)
         out = await run_in_threadpool(
             cli.exec, code, owner=owner_of(req),

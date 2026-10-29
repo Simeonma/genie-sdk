@@ -26,36 +26,33 @@ class LocalSessionHost:
     token = ""
 
     # ---- 会话面 ----
+    # （G115 收拢 2026-10-29：接待规则——attach-then-<动作> + mode 归一——
+    # 唯一真源 = session_service 的 *_action 函数；本适配器只做参数搬运，
+    # 带凭据换绑/归一的判断一律不住这里。锁 = test_session_reception。）
 
     def exec(self, code: str, *, owner: str,
              session_id: str = DEFAULT_SESSION, mode: str = "run",
              label: str = "", key: str = "") -> dict:
-        k = _svc.get_kernel(owner, session_id)
-        if key:
-            k.attach(key)          # 幂等：换 key 不换模型
-        return {"id": k.submit(code, mode=mode, label=label)}
+        return {"id": _svc.exec_action(
+            owner=owner, session_id=session_id, code=code,
+            mode=mode, label=label, key=key)}
 
     def run(self, *, owner: str, session_id: str = DEFAULT_SESSION,
             gpu: int | None = None, timeout_s: int | None = None,
             key: str = "") -> dict:
-        k = _svc.get_kernel(owner, session_id)
-        if key:
-            k.attach(key)
-        return {"id": k.run(gpu=gpu, timeout_s=timeout_s)}
+        return {"id": _svc.run_action(
+            owner=owner, session_id=session_id,
+            gpu=gpu, timeout_s=timeout_s, key=key)}
 
     def patch(self, ops: list, *, owner: str,
               session_id: str = DEFAULT_SESSION, key: str = "") -> dict:
-        k = _svc.get_kernel(owner, session_id)
-        if key:
-            k.attach(key)
-        return {"id": k.patch(ops)}
+        return {"id": _svc.patch_action(
+            owner=owner, session_id=session_id, ops=ops, key=key)}
 
     def replace(self, model: dict, *, owner: str,
                 session_id: str = DEFAULT_SESSION, key: str = "") -> dict:
-        k = _svc.get_kernel(owner, session_id)
-        if key:
-            k.attach(key)
-        return {"id": k.replace(model)}
+        return {"id": _svc.replace_action(
+            owner=owner, session_id=session_id, model=model, key=key)}
 
     def output(self, *, owner: str, session_id: str = DEFAULT_SESSION,
                since: int = 0) -> dict:

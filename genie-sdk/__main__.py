@@ -14,8 +14,10 @@
          口令写在门牌 ~/.genie/studio.json；指纹之外一律不认
       ④ 全局唯一网络出口 = 会话（``/gw`` 白名单）
 
-于是：关掉再开 = 一个干净的会话（模型靠快照恢复，不靠进程常驻）；
-``--attach URL`` 显式连外部会话（跨机/云端调试，此时 Studio 退化成纯客户端）。
+于是：关掉再开 = 一个干净的会话（模型靠快照恢复，不靠进程常驻）。
+（R40/G107 2026-10-29：``studio --attach`` 形态随云宿主退役整体删除——
+零测试/零手册/零实证使用；本机形态的 on_attach 写牌回调保留，
+console 据此接上同一模型。）
 """
 from __future__ import annotations
 
@@ -81,12 +83,9 @@ def cmd_studio(args: argparse.Namespace) -> int:
     from genie.studio import rendezvous as rv
     from genie.studio import session_service as ss
     from genie.studio.server import create_app
-    from genie.studio.session_client import SessionClient
     from genie.studio.session_local import LocalSessionHost
 
-    attach = (args.attach or "").rstrip("/")
-    if not attach:
-        ss.enable_cred_broker()     # 本机单用户形态：登录截获/凭据代拨开启
+    ss.enable_cred_broker()     # 本机单用户形态：登录截获/凭据代拨开启
     gui_port = args.port if args.port else _next_free_port("127.0.0.1", 8777)
     gui_url = f"http://127.0.0.1:{gui_port}"
     require_auth = not (args.open
@@ -96,19 +95,13 @@ def cmd_studio(args: argparse.Namespace) -> int:
         """把"当前活跃会话"记进门牌（console 据此接上同一个模型）。"""
         rv.update(session_id=session_id, owner=owner)
 
-    if attach:
-        # 外部会话（跨机/云端调试）：Studio 只是个客户端，不持有会话
-        token = os.environ.get("GENIE_SESSION_TOKEN", "")
-        host, share = SessionClient(attach, token=token), False
-        print(f"· 使用外部会话（{attach}）")
-    else:
-        # 同进程：会话对象与 GUI 在同一个进程里，**没有 HTTP 跳、没有第二个
-        # 端口**（O3）。给跨进程客户端（console）留的门 = /session，带口令。
-        token = secrets.token_urlsafe(24)
-        ss.set_token(token)
-        host, share = LocalSessionHost(), True
-        rv.write(url=gui_url + "/session", token=token)
-        print(f"· 会话与 GUI 同进程（跨进程客户端见 {gui_url}/session）")
+    # 同进程：会话对象与 GUI 在同一个进程里，**没有 HTTP 跳、没有第二个
+    # 端口**（O3）。给跨进程客户端（console）留的门 = /session，带口令。
+    token = secrets.token_urlsafe(24)
+    ss.set_token(token)
+    host, share = LocalSessionHost(), True
+    rv.write(url=gui_url + "/session", token=token)
+    print(f"· 会话与 GUI 同进程（跨进程客户端见 {gui_url}/session）")
 
     print(f"· GENIE 启动中 → {gui_url}   （Ctrl-C 退出）")
     if not args.no_browser:
@@ -262,8 +255,6 @@ def main(argv: list[str] | None = None) -> int:
                     help="不自动打开浏览器")
     st.add_argument("--port", type=int, default=None,
                     help="GUI 端口（缺省 8777，被占自动顺延）")
-    st.add_argument("--attach", default="",
-                    help="连一个已在跑的会话（http://host:port），不自己起")
     st.add_argument("--open", action="store_true",
                     help="本机免登录形态（调试用；等价 GENIE_STUDIO_OPEN=1）")
     st.set_defaults(fn=cmd_studio)
