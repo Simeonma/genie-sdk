@@ -333,9 +333,9 @@ SDK Docs</a></div></div>
 <div class="intro">Quick answers to the most common questions, each linking to the authoritative page. Everything here is drawn from the reference pages and tutorials — no behavior beyond them.</div>
 <h2 id="setup-basics"><a class="anchor" href="#setup-basics" aria-label="Link to this section">#</a>Setup &amp; basics</h2>
 <h3 id="how-do-i-connect-to-the-service">How do I connect to the service?</h3>
-<p>Two rails: a bare <code>genie.connect()</code> rides the local session (zero credentials held by the script), while explicit arguments or <code>GENIE_URL</code>/<code>GENIE_API_KEY</code> in the environment open a direct connection for self-contained scripts. On an unconfigured machine the bare call raises <code>GenieConfigError</code> pointing at <code>genie login</code> — see <a href="00-connect.html">00 · Connections</a>.</p>
+<p>One form: zero-argument <code>genie.connect()</code> (2026-10-29). It rides a live local Studio if one is found, otherwise dials the gateway directly using env / <code>genie login</code> credentials. Passing connection parameters raises <code>GenieConfigError</code> pointing at <code>genie login</code>; on an unconfigured machine the bare call raises the same actionable error — see <a href="00-connect.html">00 · Connections</a>.</p>
 <pre class="code"><code><span class="kw">import</span> genie
-f = genie.<span class="fn">connect</span>()   <span class="cm"># or genie.connect(&quot;https://genie.example.com&quot;, api_key=&quot;…&quot;)</span></code></pre>
+f = genie.<span class="fn">connect</span>()   <span class="cm"># the only form</span></code></pre>
 <h3 id="why-did-tweaking-f-and-rerunning-resend-the-old-configuration">Why did tweaking <span class="mathi"><i>f</i></span> and rerunning resend the old configuration?</h3>
 <p>A <code>Simulation</code> can only be submitted <strong>once</strong> — after <code>f.run()</code> the configuration is locked, and parameters passed to <code>run()</code> then raise RuntimeError. Create a fresh <code>genie.connect()</code> and rebuild via <code>f.to_script()</code> (export the script, run it on the new instance) for the next run — see <a href="07-run.html">07 · Submit &amp; lifecycle</a>.</p>
 <h3 id="why-are-my-lengths-wrong-by-orders-of-magnitude">Why are my lengths wrong by orders of magnitude?</h3>

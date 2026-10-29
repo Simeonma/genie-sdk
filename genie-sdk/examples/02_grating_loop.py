@@ -4,7 +4,7 @@
 import numpy as np
 import genie
 
-f = genie.connect("https://genie.example.com", api_key="YOUR_API_KEY", username="YOUR_USERNAME")
+f = genie.connect()   # 凭据经 genie login 注入本机（一次即可）
 
 PITCH = 180e-9          # 光栅周期
 WIDTH = 90e-9           # 占空一半

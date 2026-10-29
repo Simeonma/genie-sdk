@@ -1,7 +1,7 @@
 # 示例 01 —— 单盒波导谐振腔（方言最小面）
 import genie
 
-f = genie.connect("https://genie.example.com", api_key="YOUR_API_KEY", username="YOUR_USERNAME")
+f = genie.connect()   # 凭据经 genie login 注入本机（一次即可）
 
 # ── Domain 域 ──
 f.domain.x_range = (-1e-6, 1e-6)

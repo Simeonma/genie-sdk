@@ -34,25 +34,23 @@ from ._sections import (_gen_domain, _gen_geometry, _gen_materials,
                         _gen_mesh, _gen_monitor, _gen_results, _gen_run,
                         _gen_source)
 
-_DEFAULT_ORIGIN = "https://genie.example.com"
-
 __all__ = ["render"]
 
 
-def render(cfg: dict, origin: str | None = None) -> str:
+def render(cfg: dict) -> str:
     """SimConfig JSON → genie 脚本文本（输出字节被 golden 冻结；字节锁
-    测试见 tests/sdk/test_render_golden.py）。"""
-    origin = origin if isinstance(origin, str) and origin else _DEFAULT_ORIGIN
+    测试见 tests/sdk/test_render_golden.py）。R40（2026-10-29）起头行 =
+    零参 ``genie.connect()``，``origin`` 参数随之退役（凭据经
+    ``genie login`` 注入，脚本自包含不再需要地址占位符）。"""
     W: list[str] = []
     cfg = cfg if isinstance(cfg, dict) else {}
-    esc_origin = py_str(origin) or ("'" + _DEFAULT_ORIGIN + "'")
 
     head = [
         "# ── GENIE Cloud SDK 脚本 · 由 GENIE Studio 表单自动生成 ──",
         "# 本地运行: pip install genie-sdk  # from <YOUR_GENIE_RELEASE_CHANNEL>",
         "import genie",
         "",
-        'f = genie.connect(' + esc_origin + ', api_key="YOUR_API_KEY", username="YOUR_USERNAME")',
+        "f = genie.connect()   # 凭据经 genie login 注入本机（一次即可）",
     ]
 
     params_lines, env = _gen_params(cfg, W)

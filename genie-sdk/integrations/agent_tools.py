@@ -21,8 +21,7 @@ __all__ = ["starter_script"]
 # "该长什么样"从说明变成事实。
 _STARTER = '''import genie
 
-f = genie.connect("http://127.0.0.1:8777",
-                  api_key="YOUR_API_KEY", username="YOUR_USERNAME")
+f = genie.connect()   # 凭据经 genie login 注入本机（一次即可）
 
 # ── Domain 域 ──
 f.domain.x_range = (-1e-6, 1e-6)

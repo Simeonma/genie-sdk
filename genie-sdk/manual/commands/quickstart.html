@@ -339,7 +339,7 @@ pip install https://cdn.jsdelivr.net/gh/Simeonma/genie-sdk@dist/dist/genie_sdk-<
 <p>The URLs above carry the current release filename; check the Releases page for the latest filename before installing a newer version.</p>
 <p>Distribution name <code>genie-sdk</code>; import name <code>genie</code> (<code>import genie</code>).</p>
 <p>Version list: <a href="https://github.com/Simeonma/genie-sdk/releases">Releases</a> (wheels also on the <code>dist</code> branch). Python ≥ 3.10; <code>requests / numpy / pydantic / h5py</code> install automatically.</p>
-<p>Optional extras: <code>genie-sdk[server]</code> local GUI (<code>genie studio</code>) · <code>genie-sdk[agent]</code> MCP tool surface · <code>genie-sdk[fit]</code> material fitting (scipy) · <code>genie-sdk[plot]</code> <code>SimData.plot</code> (matplotlib) · <code>genie-sdk[dev]</code> pytest.</p>
+<p>One install has everything (2026-10-29): Studio GUI, material fitting, uploads — all included. Real optional extras: <code>genie-sdk[agent]</code> MCP tool surface · <code>genie-sdk[dev]</code> pytest.</p>
 <p>Where do the URL and credentials come from? The service address and the account come from whoever operates the GENIE deployment being used — there is no public signup.</p>
 <p>Post-install sanity check:</p>
 <pre class="code"><code>python -c <span class="str">&quot;import genie; print(genie.__version__)&quot;</span></code></pre>
@@ -347,7 +347,7 @@ pip install https://cdn.jsdelivr.net/gh/Simeonma/genie-sdk@dist/dist/genie_sdk-<
 <p>This is a real, runnable simulation — a 10-period dielectric grating with a plane-wave source and a frequency-domain transmission monitor:</p>
 <pre class="code"><code><span class="kw">import</span> genie
 
-f = genie.<span class="fn">connect</span>(<span class="str">&quot;https://genie.example.com&quot;</span>, api_key=<span class="str">&quot;…&quot;</span>)   <span class="cm"># or env vars</span>
+f = genie.<span class="fn">connect</span>()   <span class="cm"># credentials come from `genie login` (once per machine)</span>
 
 <span class="cm"># 1 · physical domain (SI units throughout)</span>
 f.domain.x_range = (-<span class="num">2e-6</span>, <span class="num">2e-6</span>)

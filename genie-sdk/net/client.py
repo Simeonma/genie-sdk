@@ -63,8 +63,11 @@ class Client:
                 "connect() 需要 base_url（或设置环境变量 GENIE_URL）")
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
-        # 结果下载独立超时（audit 批 α）：fetch_result 拉大结果文件
-        # 不该被 30s 常规请求超时掐断——None=不限，显式数值可覆写。
+        # 结果下载独立超时（audit 批 α；G178 修复 2026-10-29：None = 真不限时）：
+        # fetch_result 拉大结果文件不该被常规超时掐断。_req 用哨兵区分
+        # "未传"（回落常规超时）与"不限"（None 直达 requests）——注释与
+        # 实现此前不一致（注释说不限、实现回落 30s），双审独立发现后裁
+        # 定改代码兑现承诺；锁 = tests/sdk/test_client_timeouts.py。
         self._timeout_download = timeout_download
         self._s = make_transport()
         # audit 批 β 账 3：key 缺省（None/空）时**不发** X-API-Key 头。
@@ -84,8 +87,11 @@ class Client:
 
     def _req(self, method: str, path: str, *, ok: tuple[int, ...] = (200,),
              json_body: Any = None,
-             timeout: float | None = None) -> Any:
-        eff = self.timeout if timeout is None else timeout
+             timeout: float | None = None,
+             _unlimited: bool = False) -> Any:
+        # _unlimited（G178）：下载面传 timeout=None 意为"不限"——与缺省
+        # "未传"（回落常规超时）用显式哨兵区分，requests 收到 None 即不限。
+        eff = self.timeout if (timeout is None and not _unlimited) else timeout
         # 会话轨的代理按 X-Upstream-Timeout 控制上游超时（直连时网关
         # 忽略未知头，无害）——否则 /gw 的 120s 缺省会盖掉本地设置。
         self._s.headers["X-Upstream-Timeout"] = str(eff)
@@ -189,10 +195,13 @@ class Client:
 
     def fetch_result(self, job_id: str) -> bytes:
         """GET /api/jobs/{id}/result → 结果文件字节（genie-results-h5/1，
-        h5py.File(io.BytesIO(...)) 直接可开。npz 时代的旧别名 fetch_npz
-        已随 G106 硬摘轮删除——2026-10-28 前零调用实证在案）。"""
+        h5py.File(io.BytesIO(...)) 直接可开。timeout_download 缺省 None =
+        **不限时**（G178 裁定 2026-10-29：兑现 audit 批 α 初衷——大结果
+        不被常规超时掐断；显式传数值才设上限）。npz 时代的旧别名 fetch_npz
+        已随 G106 硬摘轮删除——2026-10-28 前零调用实证在案。"""
         return self._req("GET", f"/api/jobs/{job_id}/result",
-                         timeout=self._timeout_download).content
+                         timeout=self._timeout_download,
+                         _unlimited=self._timeout_download is None).content
 
     # ---- agent 车道端点（P1/P2：MCP 服务器与 agent 运行时消费；
     #      有意不进 Simulation 人类表面——极简定案由

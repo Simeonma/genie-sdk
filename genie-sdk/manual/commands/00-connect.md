@@ -13,24 +13,18 @@ sub-objects: `f.domain` ([Domain](#f-domain-physical-domain-boundaries)), `f.mes
 
 | Param | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `base_url` | str | No | see priority below | Service address (`https://genie.example.com`) for remote SDK, `http://127.0.0.1:8777` for Studio debugging |
-| `api_key` | str | No | see priority below | Auth key (sent as `X-API-Key` header) |
-| `username` | str | No | see priority below | Username (metering attribution) |
 | `timeout` | float | No | 30.0 | HTTP timeout (s, keyword-only) |
 
-**Two connection modes (picked by how it is called):**
+**Zero-argument is the only form** (2026-10-29): connection parameters
+are gone. Credentials are injected once per machine by a human (login) or by
+an operator (environment variables) — scripts never carry addresses or keys.
 
-```text
-bare genie.connect()          → reuses the local session's credentials
-                                (Studio's, or an in-process headless one).
-                                The script never holds a credential — the
-                                session does.
-explicit args / GENIE_URL env → goes direct: self-contained scripts, tests,
-                                machines provisioned with GENIE_USERNAME /
-                                GENIE_PASSWORD.
-```
+**Two rails (picked automatically, same call):** a live local Studio is
+found → ride it through the session's `/gw` proxy (the script holds no
+credential); otherwise → dial the gateway directly, address and token
+resolved from env / the machine's credential store.
 
-Login once per machine (either surface writes the same session-held token):
+Login once per machine (either surface writes the same token store):
 
 ```bash
 genie login                     # terminal: username + password, once
@@ -43,15 +37,20 @@ Tokens are idle-expiring (7 days unused; actively used tokens never expire) — 
 ```python
 import genie
 
-f = genie.connect()                    # reuses the local session's credentials
-f = genie.connect("https://genie.example.com", api_key="…")
+f = genie.connect()             # the only form — credentials come from
+                                # the machine (genie login), not the script
 ```
 
 **Common pitfalls**
 
+- Passing `base_url` / `api_key` / `username` / `password` raises
+  `GenieConfigError` pointing at `genie login` — the error is the
+  instruction. Operator-provisioned machines use the `GENIE_URL` /
+  `GENIE_API_KEY` / `GENIE_USERNAME` / `GENIE_PASSWORD` environment
+  variables instead.
 - A `Simulation` can only be submitted once — re-running an already-submitted instance raises `RuntimeError`; create a fresh `connect()` for a new run.
 - On a fresh machine with nothing configured, bare `connect()` raises `GenieConfigError` pointing at `genie login` (after `genie connect <address>` if the gateway isn't set) — the error is the instruction.
-- Inside a Studio session, `genie.connect` is taken over by the session and connection parameters are ignored — expected behavior.
+- Inside a Studio session, `genie.connect` is taken over by the session — same zero-argument call, session credentials.
 
 **See also** [Simulation state machine & run()](#f-submit-lifecycle)
 

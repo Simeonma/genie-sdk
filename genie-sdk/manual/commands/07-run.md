@@ -121,7 +121,7 @@ read this instead of downloading result files. Unsubmitted instance and no
 | Command | Returns | Description |
 |---|---|---|
 | `to_config()` | dict | Current configuration → SimConfig JSON (dense: defaults spelled out explicitly) |
-| `to_script(origin=None)` | str | Current configuration → genie script text (byte-identical to the Studio code generator); for provenance/sharing/papers |
+| `to_script()` | str | Current configuration → genie script text (byte-identical to the Studio code generator); for provenance/sharing/papers |
 
 ```python
 cfg = f.to_config()

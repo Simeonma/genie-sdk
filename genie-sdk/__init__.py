@@ -14,7 +14,7 @@
 
     import genie
 
-    f = genie.connect("https://genie.example.com", api_key="…")
+    f = genie.connect()           # 凭据经 genie login 注入本机（一次即可）
 
     f.domain.x_range = (-1e-6, 1e-6)
     f.domain.z_range = (-2e-6, 2e-6)
@@ -132,30 +132,47 @@ def connect(base_url: str | None = None, api_key: str | None = None,
             timeout: float = 30.0) -> Simulation:
     """连接 GENIE 服务 → Simulation（≈ 本地包的 ``FDTD()``）。
 
-    两条轨（G72 终稿）：
+    正道 = **零参**（R40 定案 2026-10-29）：凭据经 ``genie login``（终端）
+    或 Studio 登录闸注入本机凭据仓，一次即可；脚本永远 ``genie.connect()``。
+    显式参数已退役——传任何连接参数都会被拒并指路；机器预置走 env
+    （``GENIE_URL`` / ``GENIE_API_KEY`` / ``GENIE_USERNAME`` / ``GENIE_PASSWORD``）。
 
-    - **裸 ``connect()``** → 会话代持轨：经门牌找到本机会话（没有就在
-      进程内起一个无头会话），凭据由会话持有——**脚本零凭据**，token
-      不进脚本的世界。登录由人在 Studio 登录闸或 ``genie login`` 完成。
-    - **显式参数 / env（``GENIE_URL`` 等）** → 直连轨（脚本自包含、测试、
-      机器预置 ``GENIE_USERNAME/PASSWORD``）：``api_key`` 或
-      ``username``+``password``（POST /api/auth/login 换 token）二选一。
+    两条轨：
 
-    返回对象的 ``domain/mesh/mat/geom/src/mon`` 六个子对象与本地包同名
-    同手感。
+    - **本机有活 Studio**（门牌探活通过）→ 搭车轨：经会话 ``/gw`` 代理，
+      凭据由会话代持（token 不进脚本世界——这条纪律的真值场在 GUI）。
+    - **其余一切情况** → 直拨轨：网关与 token 从 env/凭据仓解析
+      （``resolve_gateway`` / ``resolve_credential``）；解析不出网关 →
+      报错并给"下一步动作"。
+
+    （R40/G109 定案：原"无门牌时进程内自起无头会话"引擎整体退役——
+    三仓 grep 零消费者实证，同族 G176/G177 随之销账；存在权审查：
+    自起服务的两条卖点——"token 不进脚本"在同机同用户下是安全戏、
+    "console 可接上"从未生效——均答不出服务的真实用户任务。）
     """
+    if base_url or api_key or username or password:
+        from .models.errors import GenieConfigError
+        raise GenieConfigError(
+            "connect() 不接受连接参数（2026-10-29 起零参唯一形态）。\n"
+            "  凭据注入：genie login（终端，一次即可）或 genie studio 登录闸\n"
+            "  机器预置：set GENIE_URL / GENIE_API_KEY / GENIE_USERNAME"
+            " / GENIE_PASSWORD")
     from .net import client as _client_mod
     from .net.config import resolve_credential, resolve_gateway
 
-    if base_url is None and api_key is None and password is None \
-            and not os.environ.get("GENIE_URL"):
-        via = _connect_via_session(_client_mod, timeout=timeout)
-        if via is not None:
-            return via
-    url = resolve_gateway(base_url)
-    key = resolve_credential(api_key, "GENIE_API_KEY", "api_key")
-    user = resolve_credential(username, "GENIE_USERNAME", "username")
-    pwd = password or os.environ.get("GENIE_PASSWORD")
+    if not os.environ.get("GENIE_URL"):
+        # 搭车轨：机器没显式指网关（env）且本机有活 Studio 门牌
+        card = _alive_card()
+        if card is not None:
+            return Simulation(_client_mod.Client(
+                card["url"].rstrip("/") + "/gw", None, timeout=timeout,
+                extra_headers={"X-Session-Token": card.get("token", "")}
+                if card.get("token") else None))
+    # 直拨轨（默认；env GENIE_URL 预置时直接走这）
+    url = resolve_gateway(None)
+    key = resolve_credential(None, "GENIE_API_KEY", "api_key")
+    user = resolve_credential(None, "GENIE_USERNAME", "username")
+    pwd = os.environ.get("GENIE_PASSWORD")
     client = _client_mod.Client(url, key, username=user,
                                 timeout=timeout)  # 模块属性寻址——测试可注入假传输
     if pwd and not key:
@@ -165,57 +182,31 @@ def connect(base_url: str | None = None, api_key: str | None = None,
     return Simulation(client)
 
 
-def _connect_via_session(client_mod, *, timeout: float):
-    """会话代持轨（G72）：返回 Simulation 或 None（None = 落回直连轨）。
+def _connect_direct(base_url: str, api_key: str | None = None, *,
+                    timeout: float = 30.0) -> Simulation:
+    """内部直连（会话 worker / 测试用）：不经门牌、不走公开参数面。"""
+    from .net import client as _client_mod
+    return Simulation(_client_mod.Client(base_url, api_key, timeout=timeout))
 
-    顺序：① 门牌上有活会话 → 经它的 /gw；② 没有且允许自起 → 进程内起
-    无头会话（凭据仓载入；无凭据 → 指路错误，不起空会话）；③ studio
-    未装（无 server extra）或 GENIE_SESSION_AUTOSTART=0 → None 落直连。
+
+def _alive_card() -> dict | None:
+    """读门牌并探活；无牌/死牌/读不了 → None（调用方落直拨轨）。
+
+    门牌纪律"不做存活探测"防的是**复用旧会话的模型态**；这里只用
+    它的 /gw 代理（无状态），探测死门牌是为了不把用户引向死路。
     """
-    from .models.errors import GenieConfigError
-    from .net.config import load_config
-
     try:
         from .studio import rendezvous as rv
-    except ImportError:      # 无 server extra：会话形态不存在
+    except ImportError:      # 异形安装（studio 缺件）：会话形态不存在
         return None
-
-    def _alive(url: str) -> bool:
-        # 门牌纪律"不做存活探测"防的是**复用旧会话的模型态**；这里只用
-        # 它的 /gw 代理（无状态），探测死门牌是为了不把用户引向死路。
-        try:
-            import requests as _rq
-            return _rq.get(url.rstrip("/") + "/health",
-                           timeout=1.5).status_code == 200
-        except Exception:    # noqa: BLE001 —— 死门牌 = 没有会话
-            return False
-
     card = rv.read()
-    if card and card.get("url") and _alive(card["url"]):
-        return Simulation(client_mod.Client(
-            card["url"].rstrip("/") + "/gw", None, timeout=timeout,
-            extra_headers={"X-Session-Token": card.get("token", "")}
-            if card.get("token") else None))
-
-    if os.environ.get("GENIE_SESSION_AUTOSTART", "1") == "0":
+    if not (card and card.get("url")):
         return None
-    if not (load_config().get("api_key")
-            or os.environ.get("GENIE_API_KEY")):
-        raise GenieConfigError(
-            "尚未登录——会话没有可代持的凭据。两个入口任选其一：\n"
-            "  ① genie login            （终端，输一次账号密码）\n"
-            "  ② genie studio           （GUI 登录闸，输一次账号密码）")
-    import secrets as _secrets
-
-    from .studio import session_service as ss
-    token = _secrets.token_urlsafe(24)
-    ss.set_token(token)
-    _server, port = ss.serve(0, token=token)
-    base = f"http://127.0.0.1:{port}"
-    rv.write(url=base, token=token)
     try:
-        return Simulation(client_mod.Client(
-            base + "/gw", None, timeout=timeout,
-            extra_headers={"X-Session-Token": token}))
-    except Exception:        # noqa: BLE001 —— 起失败不拦脚本，落直连
+        import requests as _rq
+        if _rq.get(card["url"].rstrip("/") + "/health",
+                   timeout=1.5).status_code != 200:
+            return None
+    except Exception:        # noqa: BLE001 —— 死门牌 = 没有会话
         return None
+    return card

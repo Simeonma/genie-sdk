@@ -330,30 +330,21 @@ SDK Docs</a></div></div>
 <p>Connect to the GENIE service and return a <code>Simulation</code> instance (conventionally named <span class="mathi"><i>f</i></span>) — a live configuration object that is serialized and sent to the cloud only when <code>f.run()</code> submits. Returns: a <code>Simulation</code> with six sub-objects: <code>f.domain</code> (<a href="#f-domain-physical-domain-boundaries">Domain</a>), <code>f.mesh</code> (<a href="#f-mesh-grid-local-refinement">Grid</a>), <code>f.mat</code> (<a href="#f-mat-materials-registry">Materials</a>), <code>f.geom</code> (<a href="#f-geom-geometry">Geometry</a>), <code>f.src</code> (<a href="#f-src-sources">Sources</a>), <code>f.mon</code> (<a href="#f-mon-monitors">Monitors</a>).</p>
 <div class="tblwrap"><table>
 <thead><tr><th>Param</th><th>Type</th><th>Required</th><th>Default</th><th>Description</th></tr></thead><tbody>
-<tr><td><code>base_url</code></td><td>str</td><td>No</td><td>see priority below</td><td>Service address (<code>https://genie.example.com</code>) for remote SDK, <code>http://127.0.0.1:8777</code> for Studio debugging</td></tr>
-<tr><td><code>api_key</code></td><td>str</td><td>No</td><td>see priority below</td><td>Auth key (sent as <code>X-API-Key</code> header)</td></tr>
-<tr><td><code>username</code></td><td>str</td><td>No</td><td>see priority below</td><td>Username (metering attribution)</td></tr>
 <tr><td><code>timeout</code></td><td>float</td><td>No</td><td>30.0</td><td>HTTP timeout (s, keyword-only)</td></tr>
 </tbody></table></div>
-<p><strong>Two connection modes (picked by how it is called):</strong></p>
-<pre class="code"><code>bare genie.<span class="fn">connect</span>()          → reuses the local session&#x27;s <span class="fn">credentials</span>
-                                (Studio&#x27;s, <span class="kw">or</span> an <span class="kw">in</span>-process headless one).
-                                The script never holds a credential — the
-                                session does.
-explicit args / GENIE_URL env → goes direct: self-contained scripts, tests,
-                                machines provisioned <span class="kw">with</span> GENIE_USERNAME /
-                                GENIE_PASSWORD.</code></pre>
-<p>Login once per machine (either surface writes the same session-held token):</p>
+<p><strong>Zero-argument is the only form</strong> (2026-10-29): connection parameters are gone. Credentials are injected once per machine by a human (login) or by an operator (environment variables) — scripts never carry addresses or keys.</p>
+<p><strong>Two rails (picked automatically, same call):</strong> a live local Studio is found → ride it through the session's <code>/gw</code> proxy (the script holds no credential); otherwise → dial the gateway directly, address and token resolved from env / the machine's credential store.</p>
+<p>Login once per machine (either surface writes the same token store):</p>
 <pre class="code"><code>genie login                     <span class="cm"># terminal: username + password, once</span>
 genie studio                    <span class="cm"># or log in once in the Studio login gate</span>
 genie connect https://genie.example.com   <span class="cm"># set the machine&#x27;s gateway, once</span></code></pre>
 <p>Tokens are idle-expiring (7 days unused; actively used tokens never expire) — on expiry, log in again in the same surface as before.</p>
 <pre class="code"><code><span class="kw">import</span> genie
 
-f = genie.<span class="fn">connect</span>()                    <span class="cm"># reuses the local session&#x27;s credentials</span>
-f = genie.<span class="fn">connect</span>(<span class="str">&quot;https://genie.example.com&quot;</span>, api_key=<span class="str">&quot;…&quot;</span>)</code></pre>
+f = genie.<span class="fn">connect</span>()             <span class="cm"># the only form — credentials come from</span>
+                                <span class="cm"># the machine (genie login), not the script</span></code></pre>
 <div class="kv"><span class="kv-k">Common pitfalls</span><span class="kv-v"></span></div>
-<ul><li>A <code>Simulation</code> can only be submitted once — re-running an already-submitted instance raises <code>RuntimeError</code>; create a fresh <code>connect()</code> for a new run.</li><li>On a fresh machine with nothing configured, bare <code>connect()</code> raises <code>GenieConfigError</code> pointing at <code>genie login</code> (after <code>genie connect &lt;address&gt;</code> if the gateway isn't set) — the error is the instruction.</li><li>Inside a Studio session, <code>genie.connect</code> is taken over by the session and connection parameters are ignored — expected behavior.</li></ul>
+<ul><li>Passing <code>base_url</code> / <code>api_key</code> / <code>username</code> / <code>password</code> raises <code>GenieConfigError</code> pointing at <code>genie login</code> — the error is the instruction. Operator-provisioned machines use the <code>GENIE_URL</code> / <code>GENIE_API_KEY</code> / <code>GENIE_USERNAME</code> / <code>GENIE_PASSWORD</code> environment variables instead.</li><li>A <code>Simulation</code> can only be submitted once — re-running an already-submitted instance raises <code>RuntimeError</code>; create a fresh <code>connect()</code> for a new run.</li><li>On a fresh machine with nothing configured, bare <code>connect()</code> raises <code>GenieConfigError</code> pointing at <code>genie login</code> (after <code>genie connect &lt;address&gt;</code> if the gateway isn't set) — the error is the instruction.</li><li>Inside a Studio session, <code>genie.connect</code> is taken over by the session — same zero-argument call, session credentials.</li></ul>
 <div class="kv"><span class="kv-k">See also</span><span class="kv-v"><a href="#f-submit-lifecycle">Simulation state machine &amp; run()</a></span></div>
 <h2 id="lifecycle-of-f-overview"><a class="anchor" href="#lifecycle-of-f-overview" aria-label="Link to this section">#</a>Lifecycle of f (overview)</h2>
 <pre class="code"><code>defined → built → running → done

@@ -30,7 +30,7 @@ raises `RuntimeError`, so call
 ```python
 import genie
 
-f = genie.connect("https://genie.example.com", api_key="…")   # or env vars
+f = genie.connect()   # credentials come from `genie login` (once per machine)
 ```
 
 ## Step 2 · Domain and boundary conditions

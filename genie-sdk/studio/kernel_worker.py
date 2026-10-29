@@ -116,7 +116,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
     sess_key = ""
     first_connect_note = True
     restored: list = []      # B2：本次新生由落盘重放出来的实例（bind 判据）
-    real_connect = genie.connect   # 补丁前先存真连接（防自指递归）
+    real_connect = genie._connect_direct   # 内部直连（公开 connect 已零参化）
     # B2 会话态落盘路径：管理器经 GENIE_STATE_FILE 显式传递（系统文件
     # 住系统空间，2026-10-13 搬家定案）；缺省回退 cwd 仅为独立调试形态
     # （_spawn_and_exec 等直驱 harness）。启动即解析为绝对路径——用户

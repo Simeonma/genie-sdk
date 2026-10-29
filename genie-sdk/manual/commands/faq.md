@@ -8,11 +8,11 @@
 
 ### How do I connect to the service?
 
-Two rails: a bare `genie.connect()` rides the local session (zero credentials held by the script), while explicit arguments or `GENIE_URL`/`GENIE_API_KEY` in the environment open a direct connection for self-contained scripts. On an unconfigured machine the bare call raises `GenieConfigError` pointing at `genie login` — see [00 · Connections](00-connect.html).
+One form: zero-argument `genie.connect()` (2026-10-29). It rides a live local Studio if one is found, otherwise dials the gateway directly using env / `genie login` credentials. Passing connection parameters raises `GenieConfigError` pointing at `genie login`; on an unconfigured machine the bare call raises the same actionable error — see [00 · Connections](00-connect.html).
 
 ```python
 import genie
-f = genie.connect()   # or genie.connect("https://genie.example.com", api_key="…")
+f = genie.connect()   # the only form
 ```
 
 ### Why did tweaking `f` and rerunning resend the old configuration?

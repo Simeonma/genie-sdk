@@ -23,9 +23,9 @@ Version list: [Releases](https://github.com/Simeonma/genie-sdk/releases)
 (wheels also on the `dist` branch). Python ≥ 3.10;
 `requests / numpy / pydantic / h5py` install automatically.
 
-Optional extras: `genie-sdk[server]` local GUI (`genie studio`) ·
-`genie-sdk[agent]` MCP tool surface · `genie-sdk[fit]` material fitting (scipy) ·
-`genie-sdk[plot]` `SimData.plot` (matplotlib) · `genie-sdk[dev]` pytest.
+One install has everything (2026-10-29): Studio GUI, material
+fitting, uploads — all included. Real optional extras: `genie-sdk[agent]`
+MCP tool surface · `genie-sdk[dev]` pytest.
 
 Where do the URL and credentials come from? The service address and the
 account come from whoever operates the GENIE deployment being used — there
@@ -45,7 +45,7 @@ plane-wave source and a frequency-domain transmission monitor:
 ```python
 import genie
 
-f = genie.connect("https://genie.example.com", api_key="…")   # or env vars
+f = genie.connect()   # credentials come from `genie login` (once per machine)
 
 # 1 · physical domain (SI units throughout)
 f.domain.x_range = (-2e-6, 2e-6)

@@ -22,20 +22,26 @@ dependencies = [
     "pydantic>=2,<3",
     # 结果读取（genie-results-h5/1：f.results(job_id) 的 SimData 结构体）
     "h5py>=3.0",
+    # R40 装法合一（2026-10-29 站长定案）：原 [server]/[fit] extras 并入
+    # 基础依赖——pip install genie-sdk 唯一装法装齐一切（Studio/拟合/
+    # 上传面）。懒 import 纪律不变：import genie 仍不拉 fastapi
+    # （锁 = tests/sdk/test_connect_tracks.py::test_import_genie_pulls_no_web_stack，
+    # 护住 G80 Pyodide 网页版）。
+    "fastapi>=0.104",
+    "uvicorn>=0.24",
+    "python-multipart>=0.0.32",
+    # scipy：材料拟合（fit_nk/add_from_library 的 curve_fit）+ Studio
+    # 本地拟合端点（G19b 后 /api/tools/material_fit 纯本地）
+    "scipy>=1.10",
 ]
 
 [project.optional-dependencies]
-# 本地 Studio 服务（genie.studio.server：静态壳 + 本地 /api/* 能力端点；
-# 脚本执行走会话面 /api/exec——framework §四「Pyodide 删掉」后无浏览器端
-# Python，G174 后亦无独立 preview 端点）
-# 2026-10-27 G19b 翻转：/api/tools/material_fit 改本地拟合，server 面需要 scipy
-server = ["fastapi>=0.104", "uvicorn>=0.24", "python-multipart>=0.0.32",
-          "scipy>=1.10"]
-#                  ^ python-multipart：/api/workspace/upload 的 multipart 必需（B3/B4）
+# R40 装法合一：server/fit 留空壳别名（老命令不炸，装了等于已并入基础）。
+# agent/dev 维持原样（MCP 工具面/pytest 是真实的可选面）。
+server = []
+fit = []
 # MCP 工具面（genie-mcp 命令）：让任意 LLM agent 写脚本推 GUI
 agent = ["mcp>=2.0,<3"]
-# 材料拟合（fit_nk/add_from_library 需要 scipy.curve_fit）
-fit = ["scipy>=1.10"]
 dev = ["pytest>=7"]
 
 [project.scripts]

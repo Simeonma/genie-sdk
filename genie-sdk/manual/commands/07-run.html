@@ -373,7 +373,7 @@ f.<span class="fn">run</span>(gpu=<span class="num">2</span>, progress=print)   
 <div class="tblwrap"><table>
 <thead><tr><th>Command</th><th>Returns</th><th>Description</th></tr></thead><tbody>
 <tr><td><code>to_config()</code></td><td>dict</td><td>Current configuration → SimConfig JSON (dense: defaults spelled out explicitly)</td></tr>
-<tr><td><code>to_script(origin=None)</code></td><td>str</td><td>Current configuration → genie script text (byte-identical to the Studio code generator); for provenance/sharing/papers</td></tr>
+<tr><td><code>to_script()</code></td><td>str</td><td>Current configuration → genie script text (byte-identical to the Studio code generator); for provenance/sharing/papers</td></tr>
 </tbody></table></div>
 <pre class="code"><code>cfg = f.<span class="fn">to_config</span>()
 <span class="fn">open</span>(<span class="str">&quot;share.py&quot;</span>, <span class="str">&quot;w&quot;</span>).<span class="fn">write</span>(f.<span class="fn">to_script</span>())</code></pre>

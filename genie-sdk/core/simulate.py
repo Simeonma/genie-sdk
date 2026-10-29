@@ -244,11 +244,12 @@ class Simulation:
         self.src = Source(c.source)
         self.mon = Monitor(c.monitor)
 
-    def to_script(self, origin: str | None = None) -> str:
+    def to_script(self) -> str:
         """当前配置 → genie 脚本文本（与 Studio 代码生成器逐字节一致，
-        字节锁测试见 tests/test_script.py）。溯源/分享/论文用。"""
+        字节锁测试见 tests/test_script.py）。溯源/分享/论文用。
+        （R40 起头行 = 零参 ``genie.connect()``，``origin`` 参数退役。）"""
         from .script import render
-        return render(self.to_config(), origin)
+        return render(self.to_config())
 
     @property
     def job_id(self) -> str | None:

@@ -1,8 +1,7 @@
 import genie
 from genie.lib.grating import grating
 
-f = genie.connect("http://127.0.0.1:8777",
-                  api_key="YOUR_API_KEY", username="YOUR_USERNAME")
+f = genie.connect()   # 凭据经 genie login 注入本机（一次即可）
 
 # ── 参数表 + 表达式槽（原文上行，服务端求值；GUI 3D 显示用解析副本）──
 # G17：配置一律走 API 函数链式构造——load_config 是内部承重面，不是用户入口。

@@ -20,7 +20,7 @@ instead of a hand-written loop.
 import genie
 from genie.lib import grating
 
-f = genie.connect("https://genie.example.com", api_key="…")   # or env vars
+f = genie.connect()   # credentials come from `genie login` (once per machine)
 
 # 1 · domain: light travels along x; PML on both entrance/exit faces
 f.domain.x_range = (-2.5e-6, 2.5e-6)
@@ -92,7 +92,7 @@ would be the efficient route).
 import genie
 from genie.lib import ring
 
-f = genie.connect("https://genie.example.com", api_key="…")
+f = genie.connect()
 
 # 1 · domain: ring plane = x–y, PML on x and y faces, periodic in z
 f.domain.x_range = (-3e-6, 3e-6)
@@ -166,7 +166,7 @@ frequency monitor on the reflection side exposes the stopband directly.
 ```python
 import genie
 
-f = genie.connect("https://genie.example.com", api_key="…")
+f = genie.connect()
 
 # 1 · domain: stack along x, PML both ends
 f.domain.x_range = (-4e-6, 4e-6)
@@ -243,7 +243,7 @@ THETA_DEG = 20.0
 LAMBDA0 = 1.55e-6
 FREQ0 = 3e8 / LAMBDA0
 
-f = genie.connect("https://genie.example.com", api_key="…")
+f = genie.connect()
 
 # 1 · domain: propagation along z; bloch in x (in-plane sweep), periodic in y
 f.domain.x_range = (-4e-7, 4e-7)          # one unit cell, pitch = 800 nm
@@ -310,7 +310,7 @@ cross-section proxy.
 ```python
 import genie
 
-f = genie.connect("https://genie.example.com", api_key="…")
+f = genie.connect()
 
 # 1 · domain: compact box, PML everywhere the sphere can radiate into
 f.domain.x_range = (-6e-7, 6e-7)

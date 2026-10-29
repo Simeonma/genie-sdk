@@ -299,11 +299,12 @@ def _backend() -> str:
 
     （G63 收敛 2026-10-23：旧同义 env `GENIE_INTERNAL_BACKEND` 已删——
     三仓 grep 零消费者；同名 env 在服务仓指内核后端 :8001，语义不同。）
+    （G179 收敛 2026-10-29：链身唯一真源 = kernel_session.backend()，
+    本函数原为第二份手抄——改缺省地址要改两处、漂移无锁；相等锁 =
+    tests/sdk/test_net_config.py::test_backend_chain_single_source。）
     """
-    from .kernel_session import _config_gateway
-    return (os.environ.get("GENIE_BACKEND")
-            or _config_gateway()
-            or "http://127.0.0.1:9100").rstrip("/")
+    from .kernel_session import backend
+    return backend()
 
 
 # 白名单：会话只代拨这几族。别的路径一律 403（不做通用代理）。
@@ -323,7 +324,7 @@ _CRED_BROKER = False
 
 
 def enable_cred_broker(on: bool = True) -> None:
-    """启用凭据代持（``genie studio`` / console / 无头自起等**本机**入口调）。
+    """启用凭据代持（``genie studio`` / console 等**本机**入口调）。
 
     网关直连登录（gateway_forward 的截获与空凭据代拨）只在开着时工作；
     云宿主（多用户共享一个进程）**永不启用**。
@@ -479,7 +480,7 @@ def serve(port: int = 0, *, host: str = "127.0.0.1",
     global _TOKEN
     if token:
         _TOKEN = token
-    enable_cred_broker()        # serve() 只被本机入口调用（console/无头自起）
+    enable_cred_broker()        # serve() 只被本机入口调用（console/studio）
     workspace_root().mkdir(parents=True, exist_ok=True)
     server = uvicorn.Server(uvicorn.Config(
         app, host=host, port=port, log_level="warning"))

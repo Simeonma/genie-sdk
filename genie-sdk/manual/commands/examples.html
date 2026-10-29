@@ -333,7 +333,7 @@ SDK Docs</a></div></div>
 <pre class="code"><code><span class="kw">import</span> genie
 <span class="kw">from</span> genie.lib <span class="kw">import</span> grating
 
-f = genie.<span class="fn">connect</span>(<span class="str">&quot;https://genie.example.com&quot;</span>, api_key=<span class="str">&quot;…&quot;</span>)   <span class="cm"># or env vars</span>
+f = genie.<span class="fn">connect</span>()   <span class="cm"># credentials come from `genie login` (once per machine)</span>
 
 <span class="cm"># 1 · domain: light travels along x; PML on both entrance/exit faces</span>
 f.domain.x_range = (-<span class="num">2.5e-6</span>, <span class="num">2.5e-6</span>)
@@ -380,7 +380,7 @@ T = <span class="fn">abs</span>(fr.fields[<span class="str">&#x27;Ez&#x27;</span
 <pre class="code"><code><span class="kw">import</span> genie
 <span class="kw">from</span> genie.lib <span class="kw">import</span> ring
 
-f = genie.<span class="fn">connect</span>(<span class="str">&quot;https://genie.example.com&quot;</span>, api_key=<span class="str">&quot;…&quot;</span>)
+f = genie.<span class="fn">connect</span>()
 
 <span class="cm"># 1 · domain: ring plane = x–y, PML on x and y faces, periodic in z</span>
 f.domain.x_range = (-<span class="num">3e-6</span>, <span class="num">3e-6</span>)
@@ -433,7 +433,7 @@ T_drop = <span class="fn">abs</span>(dr.fields[<span class="str">&#x27;Ez&#x27;<
 <p><img src="figs/ex-bragg.svg" alt="Bragg stopband" loading="lazy"></p>
 <pre class="code"><code><span class="kw">import</span> genie
 
-f = genie.<span class="fn">connect</span>(<span class="str">&quot;https://genie.example.com&quot;</span>, api_key=<span class="str">&quot;…&quot;</span>)
+f = genie.<span class="fn">connect</span>()
 
 <span class="cm"># 1 · domain: stack along x, PML both ends</span>
 f.domain.x_range = (-<span class="num">4e-6</span>, <span class="num">4e-6</span>)
@@ -489,7 +489,7 @@ THETA_DEG = <span class="num">20.0</span>
 LAMBDA0 = <span class="num">1.55e-6</span>
 FREQ0 = <span class="num">3e8</span> / LAMBDA0
 
-f = genie.<span class="fn">connect</span>(<span class="str">&quot;https://genie.example.com&quot;</span>, api_key=<span class="str">&quot;…&quot;</span>)
+f = genie.<span class="fn">connect</span>()
 
 <span class="cm"># 1 · domain: propagation along z; bloch in x (in-plane sweep), periodic in y</span>
 f.domain.x_range = (-<span class="num">4e-7</span>, <span class="num">4e-7</span>)          <span class="cm"># one unit cell, pitch = 800 nm</span>
@@ -535,7 +535,7 @@ T = <span class="fn">abs</span>(fr.fields[<span class="str">&#x27;Ex&#x27;</span
 <p>A sub-wavelength gold sphere in water supports a localized surface plasmon: the Drude-like ε(ω) of Au (fitted from the bundled n-k library) makes the polarizability <span class="mathi"><i>α</i> = 4πR³(<i>ε</i><sub><i>m</i></sub> − <i>ε</i><sub><i>d</i></sub>)/(<i>ε</i><sub><i>m</i></sub> + 2ε<sub><i>d</i></sub>)</span> resonate where <span class="mathi">Re <i>ε</i><sub><i>m</i></sub> ≈ − 2ε<sub><i>d</i></sub></span>, giving a strong dipole-like extinction peak near 530 nm in water (ε_d ≈ 1.77). The example uses <code>add_from_library('Au')</code> — the library fit runs client-side and registers a pole material — plus the TFSF plane wave and how <code>digest()</code>/<code>get_freq</code> serve as a cross-section proxy.</p>
 <pre class="code"><code><span class="kw">import</span> genie
 
-f = genie.<span class="fn">connect</span>(<span class="str">&quot;https://genie.example.com&quot;</span>, api_key=<span class="str">&quot;…&quot;</span>)
+f = genie.<span class="fn">connect</span>()
 
 <span class="cm"># 1 · domain: compact box, PML everywhere the sphere can radiate into</span>
 f.domain.x_range = (-<span class="num">6e-7</span>, <span class="num">6e-7</span>)
