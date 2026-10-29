@@ -38,6 +38,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 
 import genie
+from genie.core.simfile import MAX_RESULT_BYTES, MAX_TEXT_BYTES
 from genie.models import LIBRARY_FIT_DEFAULTS
 
 # 工作区根**唯一解析点**（M2）：此前 studio 侧另有一份 GENIE_SCRIPTS_DIR
@@ -54,14 +55,14 @@ _TITLE = "genie-studio"
 _PKG = Path(__file__).resolve().parents[1]
 _MANUAL = _PKG / "manual"
 _EXAMPLES = _PKG / "examples"
-_MAX_SCRIPT = 256 * 1024
+_MAX_SCRIPT = MAX_TEXT_BYTES   # 文本类上限（正典 = genie.core.simfile，G87）
 # B3/B4 安全两洞先钉（调研裁决）：① /api/scripts/save 原本无大小上限
 # （_MAX_SCRIPT 只管 drafts）——save/上传文本类统一钉 256KiB（超限 413）；
 # ② \w 裸用连非 ASCII 名都放行（re 无 re.ASCII，实测 "中文脚本.py" 通过）
 # ——所有名字白名单统一 flags=re.ASCII。二进制/数据（multipart 流式）上
 # 限 512MiB：工作区文件是用户仿真产物（savefig 图 / npz/h5 场数据），
-# 够放一次真作业的输出，又不至于打满盘。
-_MAX_BINARY = 512 * 1024 * 1024
+# 够放一次真作业的输出，又不至于打满盘。（数值正典 = simfile，G4a）
+_MAX_BINARY = MAX_RESULT_BYTES
 
 
 class DraftRing:
@@ -539,17 +540,14 @@ def create_app(*, static_dir: str | Path | None = None,
                          "dt": st["dt"], "grid_shape": st["grid_shape"]}
 
         def _pack(tmp_path: str) -> None:
-            with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_STORED) as zf:
-                zf.writestr("simconfig.json",
-                            json.dumps(cfg, ensure_ascii=False, indent=2))
-                for p in sorted(ws.iterdir(), key=lambda x: x.name):
-                    if p.is_file() and not p.name.startswith(".") \
-                            and not p.name.endswith(".part"):
-                        zf.write(p, arcname="workspace/" + p.name)
-                if result_p is not None:
-                    zf.write(result_p, arcname="results/" + result_p.name)
-                    zf.writestr("state.json", json.dumps(
-                        state, ensure_ascii=False, indent=2))
+            # 容器格式 = genie.core.simfile（正典，G4a 2026-10-30）——
+            # 本端点只负责"取当前工作区文件 + 结果路径"，打包/守卫零手抄。
+            from genie.core import simfile
+            files = [p for p in sorted(ws.iterdir(), key=lambda x: x.name)
+                     if p.is_file() and not p.name.startswith(".")
+                     and not p.name.endswith(".part")]
+            simfile.write(tmp_path, cfg, result_path=result_p, state=state,
+                          files=files)
 
         tmp = tempfile.NamedTemporaryFile(suffix=".gensim", delete=False)
         tmp.close()
@@ -582,24 +580,27 @@ def create_app(*, static_dir: str | Path | None = None,
         finally:
             await file.close()
         try:
+            from genie.core import simfile
             try:
                 zf = zipfile.ZipFile(tmp.name)
             except zipfile.BadZipFile:
-                raise HTTPException(status_code=422,
-                                    detail="不是合法的仿真文件（.gensim 应为 zip 容器）")
+                raise HTTPException(
+                    status_code=422,
+                    detail="不是合法的仿真文件（.gensim 应为 zip 容器）")
             with zf:
-                names = zf.namelist()
-                if "simconfig.json" not in names:
-                    raise HTTPException(status_code=422,
-                                        detail="仿真文件缺 simconfig.json（不是 .gensim 容器？）")
+                # 结构校验 = simfile 正典（成员白名单/成对规则零手抄）
                 try:
-                    cfg = json.loads(zf.read("simconfig.json").decode("utf-8"))
-                except (UnicodeDecodeError, json.JSONDecodeError) as e:
-                    raise HTTPException(status_code=422,
-                                        detail="simconfig.json 不是合法 JSON（%s）" % e)
-                if not isinstance(cfg, dict):
-                    raise HTTPException(status_code=422,
-                                        detail="simconfig.json 须是 SimConfig JSON 对象")
+                    names = simfile.validate_structure(zf)
+                except simfile.SimfileTooLarge as e:
+                    raise HTTPException(status_code=413, detail=str(e))
+                except simfile.SimfileError as e:
+                    raise HTTPException(status_code=422, detail=str(e))
+                try:
+                    cfg = simfile.read_cfg(tmp.name)
+                except simfile.SimfileTooLarge as e:
+                    raise HTTPException(status_code=413, detail=str(e))
+                except simfile.SimfileError as e:
+                    raise HTTPException(status_code=422, detail=str(e))
 
                 # 先验 cfg（genie.models 同一双手——与 /api/validate 同源）
                 from genie.models.resolve import validate_for_ui
@@ -654,11 +655,11 @@ def create_app(*, static_dir: str | Path | None = None,
                         except ValueError as e:
                             raise HTTPException(status_code=422, detail=str(e))
                         info = zf.getinfo(n)
-                        if info.file_size > _MAX_BINARY:
+                        if info.file_size > simfile.cap_for(n):
                             raise HTTPException(
                                 status_code=413,
                                 detail="%s 超 %dMiB 上限"
-                                       % (base, _MAX_BINARY >> 20))
+                                       % (base, simfile.cap_for(n) >> 20))
                         rp.parent.mkdir(parents=True, exist_ok=True)
                         with zf.open(n) as src, \
                                 rp.with_name(rp.name + ".part") \
@@ -676,8 +677,7 @@ def create_app(*, static_dir: str | Path | None = None,
                                             detail="仿真文件含容器外成员（%s）——拒绝" % n)
                     base = n[len("workspace/"):]
                     p = _workspace_file(ws, base)   # 名守卫：基名白名单，违者 422
-                    cap_f = _MAX_SCRIPT \
-                        if p.suffix.lower().lstrip(".") in _TEXT_EXTS else _MAX_BINARY
+                    cap_f = simfile.cap_for(n)
                     info = zf.getinfo(n)
                     if info.file_size > cap_f:
                         raise HTTPException(status_code=413,

@@ -121,6 +121,23 @@ def _jobdone_text(exc: BaseException, jid: str) -> str:
     return f"✗ 作业失败（{who}）\n"
 
 
+def _autosave_doc(sim):
+    """跑完自动存档（G4a 2026-10-30）：把当前仿真存成 ``.gensim``。
+
+    文档路径 = env ``GENIE_DOC_PATH``（会话管理器按会话钉绝对路径）；
+    未设 → 不存（SDK 直跑 / 测试形态）。成功返回 Path；失败返回一句
+    人话（调用方发 note）——**不拦作业成功语义**：作业已经跑完，存盘
+    失败不是作业失败。
+    """
+    path = os.environ.get("GENIE_DOC_PATH") or ""
+    if not path:
+        return None
+    try:
+        return sim.save(path)
+    except Exception as e:   # noqa: BLE001 —— 存档失败不能吞作业成功
+        return f"自动存档失败：{e}（作业已完成，结果仍在结果目录）"
+
+
 def main(readline=None, emit_fn=None, expose=None) -> None:
     global _exec_busy, _stop_requested
     # 运行时缝（LEDGER G80）：readline / emit_fn 可注入——本机缺省 =
@@ -209,6 +226,35 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         return s
 
     _sim_mod.hooks["sweep_sim_factory"] = _sweep_point_sim
+
+    # 会话内 ``genie.open(path)``（2026-10-30 站长定案）：**整份替换**当前
+    # 会话模型——与 GUI「打开仿真」同一语义（用户心智：打开一个仿真 =
+    # 换成它）。build（脚本运行）期间例外：返回载入配置的新实例参与合并，
+    # 否则会把正在构造的模型踢掉。模型写入原语收成一处：op=replace 与
+    # open 钩子共用本函数（提交成**一个实例**——与 build 同一条规则）。
+    _open_ctx = {"build": False}
+
+    def _replace_model(cfg_new, *, origin=None):
+        nonlocal ns, sims, sim
+        one = _new_sim()
+        one.load_config(cfg_new)
+        ns["f"] = one
+        sims = [one]
+        sim = one
+        sink["sims"] = sims
+        if origin is not None:
+            snapshot(origin, ["*"])
+            persist_state()
+        return one
+
+    def _open_sim(cfg):
+        if _open_ctx["build"]:
+            s = _new_sim()
+            s.load_config(cfg)
+            return s
+        return _replace_model(cfg, origin="open")
+
+    _sim_mod.hooks["open_sim"] = _open_sim
 
     # sweep 事件面（G168/R34）：每点一行终态（可数 = "跑完的有多少个"）
     # + sweep-progress 事件喂 chip（X/N · 失败数）；终态一行汇总（失败
@@ -793,6 +839,13 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         emit({"ev": "out", "kind": "job-done",
               "text": f"✓ 作业 {jid} 完成——结果已就绪\n",
               "data": {"job_id": jid or "", "ok": True}})
+        # G4a（2026-10-30 站长裁）：跑完**自动存档**——用户不用点保存，
+        # 当前仿真（配置 + 刚下载的结果）原子写回会话文档（GENIE_DOC_PATH）。
+        # 失败只发一条 note，作业成功语义不变；sweep 点实例不进这里
+        # （上方 _sweep_point 早退），扫描文档在扫参轮单独做。
+        _doc = _autosave_doc(self)
+        if isinstance(_doc, str):
+            emit({"ev": "out", "kind": "note", "text": f"⚠ {_doc}\n"})
         return out
     genie.core.simulate.Simulation.run = _sim_run_with_progress
     from genie.net.client import Client as _Client   # import genie 不预载 net 子包
@@ -948,12 +1001,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
                 # 提交：模型收成**一个实例**（与 build 提交同一条规则）。
                 # 这一步是必要的：显示走 merge、写入走单实例，若只改其中
                 # 一个，另一个会把它盖掉（多实例互遮的老坑）。
-                one = _new_sim()
-                one.load_config(cfg_new)
-                ns["f"] = one
-                sims = [one]
-                sim = one
-                sink["sims"] = sims
+                _replace_model(cfg_new)
 
                 snapshot("patch" if op == "patch" else "replace", applied)
                 persist_state()
@@ -1017,9 +1065,11 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
             def _body():
                 exec(compile(code, "<terminal>", "exec"), target_ns)  # noqa: S102
 
+            _open_ctx["build"] = (mode == "build")
             try:
                 ok, err = _guarded(_body)
             finally:
+                _open_ctx["build"] = False
                 if mode == "build":
                     sink["sims"] = sims         # 无论成败都把落点归位
 

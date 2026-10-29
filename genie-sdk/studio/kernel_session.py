@@ -482,6 +482,11 @@ class SessionKernel:
                "GENIE_STATE_FILE": str(self._state_path),
                # O2：结果按会话分层（两个模型的结果不互相污染 latest）
                "GENIE_RESULT_DIR": str(results_dir(self._owner, self._session_id)),
+               # G4a（2026-10-30）：跑完自动存档的文档路径（绝对）。
+               # 目标先钉 = 本 owner 工作区的 <session>.gensim；"工作区跟随
+               # 文档"（打开/另存为时换根）落地后由会话设置改这里。
+               "GENIE_DOC_PATH": str(_owner_dir(self._owner)
+                                     / f"{self._session_id or DEFAULT_SESSION}.gensim"),
                # 后端是部署属性：worker 从环境读，不从请求读
                "GENIE_BACKEND": backend()}
         # cwd = 本 owner 的脚本工作区（workspace 根/<owner>/，spawn 时落

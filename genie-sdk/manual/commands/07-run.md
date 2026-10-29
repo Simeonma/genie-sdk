@@ -41,6 +41,31 @@ required) — `run()` takes **no step argument**; the job advances until the
 grid's time capacity is reached, and the step count is a read-only derived
 value (`dt`/`n_steps` in `summary`/`results`).
 
+## `f.save(path)` / `genie.open(path)`
+
+One `.gensim` file = one simulation. `f.save('lab.gensim')` writes the
+current configuration plus the instance's already-downloaded result (when
+the instance has run) into a single zip container: `simconfig.json`,
+optional `results/<job>_results.h5` + `state.json` (job id, steps, dt,
+grid shape), and optional `workspace/` files. The write is atomic (a `.part`
+file is replaced into place), so a crash never leaves a half-written
+document.
+
+`genie.open('lab.gensim')` reads the container back: **inside a Studio
+session it replaces the current session model** (same semantics as the
+GUI's “Open simulation”); outside a session it returns a new instance with
+the configuration loaded (ready to `run()` once credentials are set).
+
+```python
+f.run()
+f.save('lab.gensim')       # config + result in one file
+f2 = genie.open('lab.gensim')
+```
+
+The container format (member names, size caps, guards) lives in
+`genie.core.simfile` — the same implementation serves the SDK and the
+Studio endpoints; do not hand-build the zip.
+
 ### GPU scheduling semantics
 
 You do not choose cards or how many. Three parties split the decision:

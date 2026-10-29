@@ -119,7 +119,7 @@ _wire_agent_surface()
 # （G174/R33：preview_script/check_script 公开名已随硬摘轮删除——
 #  锁 = test_public_surface_contract「名字不在公开面」。）
 __all__ = [
-    "connect", "Simulation", "SweepHandle",
+    "connect", "open", "Simulation", "SweepHandle",
     "TimeResult", "FreqResult", "IndexResult",
     "GenieError", "GenieHTTPError", "GenieJobError", "GenieConfigError",
     "material",
@@ -187,6 +187,28 @@ def _connect_direct(base_url: str, api_key: str | None = None, *,
     """内部直连（会话 worker / 测试用）：不经门牌、不走公开参数面。"""
     from .net import client as _client_mod
     return Simulation(_client_mod.Client(base_url, api_key, timeout=timeout))
+
+
+def open(path) -> Simulation:
+    """打开一个 ``.gensim`` 仿真文件 → 载入其配置的 Simulation。
+
+    **会话内**（Studio 终端 / agent）：整份替换当前会话模型并返回活实例
+    ——与图形界面「打开仿真」同一语义（2026-10-30 站长定案）。
+    **会话外**：新建实例载入配置（配好凭据即可直接 ``f.run()``）。
+
+    容器格式由 ``genie.core.simfile`` 维护（与 ``f.save`` / Studio
+    的存储/打开同一份实现）。
+    """
+    from .core import simfile
+    from .core import simulate as _simulate
+
+    cfg = simfile.read_cfg(path)
+    hook = _simulate.hooks.get("open_sim")
+    if hook is not None:
+        return hook(cfg)
+    f = connect()
+    f.load_config(cfg)
+    return f
 
 
 def _alive_card() -> dict | None:

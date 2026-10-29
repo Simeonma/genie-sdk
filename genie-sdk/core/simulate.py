@@ -374,6 +374,31 @@ class Simulation:
                 "design (G148)")
         return hook(self, mon, field)
 
+    def save(self, path) -> "Path":
+        """把当前仿真存成 ``.gensim``（**一个文件 = 一个仿真**）。
+
+        内容：当前配置（``to_config``，未提交也可）+ 本实例 ``run()`` 后
+        已自动下载的结果 h5（若有）+ 其元信息（``state.json``）。
+        写盘走 ``genie.core.simfile``（格式正典、原子替换）；返回最终路径。
+
+        语义边界：这是**文档产物**，不是第二份可编辑状态——打开/编辑的
+        唯一真源永远是实例本身（``genie.open`` 会整份替换会话模型）。
+        """
+        from pathlib import Path
+
+        from . import simfile
+        result_p = None
+        state = None
+        pth = getattr(self, "_result_local_path", None)
+        if pth:
+            p = Path(pth)
+            if p.is_file():
+                result_p = p
+                state = simfile.result_state(
+                    p, job_id=str(getattr(self, "_job_id", "") or ""))
+        return simfile.write(path, self.to_config(),
+                             result_path=result_p, state=state)
+
     def _auto_save_result(self) -> None:
         """run() 成功后自动下载结果到 SDK 所在电脑（genie-results-h5/1，
         2026-10-09 站长裁决：SDK 用户的仿真结果应当机落盘）。

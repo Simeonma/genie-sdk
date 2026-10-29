@@ -1,0 +1,232 @@
+"""仿真文件 ``.gensim`` 容器——**格式正典**（G4a 前置件，2026-10-30）。
+
+一个 ``.gensim`` = 一个仿真（2026-10 站长裁决）。zip 容器，成员固定四类：
+
+- ``simconfig.json``（必选）——SimConfig JSON；
+- ``workspace/<basename>``（可选，平铺、无子目录）——工作区文件快照；
+- ``results/<basename>``（可选）——随仿真带的结果 h5；
+- ``state.json``（可选，与 ``results/`` 成对）——``job_id`` / ``state`` /
+  ``executed_steps`` / ``dt`` / ``grid_shape``。
+
+SDK 公开面 = ``Simulation.save(path)`` / ``genie.open(path)``；Studio 的
+``/api/sim/export|import`` 只是本模块的 HTTP 薄壳。成员白名单、路径守卫、
+大小上限、原子写**只在这里维护一份**（单一来源纪律，G87）。
+
+写法纪律：先写 ``.part`` 再 ``os.replace``——跑一半崩了不留烂档。
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import zipfile
+from pathlib import Path
+
+__all__ = [
+    "SimfileError", "SimfileFormatError", "SimfileTooLarge",
+    "SIMCONFIG", "STATE", "MAX_RESULT_BYTES", "MAX_TEXT_BYTES", "TEXT_EXTS",
+    "member_kind", "cap_for", "validate_structure", "read_cfg", "inspect",
+    "write", "result_state",
+]
+
+SIMCONFIG = "simconfig.json"
+STATE = "state.json"
+
+#: 上限（与 HTTP 上传面同一口径）：文本类 256KiB、二进制 512MiB。
+MAX_TEXT_BYTES = 256 * 1024
+MAX_RESULT_BYTES = 512 * 1024 * 1024
+TEXT_EXTS = ("py", "json", "txt")
+
+
+class SimfileError(ValueError):
+    """.gensim 容器错误基类（SDK 面按 ValueError 捕获）。"""
+
+
+class SimfileFormatError(SimfileError):
+    """结构/成员名非法（Studio 映射 422）。"""
+
+
+class SimfileTooLarge(SimfileError):
+    """成员或容器超上限（Studio 映射 413）。"""
+
+
+def _ensure_suffix(target) -> Path:
+    p = Path(target)
+    return p if p.suffix.lower() == ".gensim" else p.with_name(p.name + ".gensim")
+
+
+def member_kind(name: str) -> str:
+    """成员名 → 类别（``cfg`` / ``state`` / ``workspace`` / ``result``）。
+
+    结构非法（子目录、``..``、未知目录/根级成员）→ ``SimfileFormatError``。
+    """
+    if not isinstance(name, str) or not name:
+        raise SimfileFormatError("仿真文件含空成员名——拒绝")
+    if "/" not in name:
+        if name == SIMCONFIG:
+            return "cfg"
+        if name == STATE:
+            return "state"
+        raise SimfileFormatError(
+            f"仿真文件含未知根级成员（{name}）——只认 "
+            f"{SIMCONFIG} / {STATE}")
+    prefix, _, base = name.partition("/")
+    if name.endswith("/"):
+        raise SimfileFormatError(f"仿真文件含目录成员（{name}）——只认文件")
+    if (not base or "/" in base or base in (".", "..")
+            or base.startswith("/") or "\\" in base):
+        raise SimfileFormatError(
+            f"仿真文件含容器外成员（{name}）——拒绝（成员必须平铺、无子目录）")
+    if prefix == "workspace":
+        return "workspace"
+    if prefix == "results":
+        return "result"
+    raise SimfileFormatError(
+        f"仿真文件含未知成员目录（{prefix}/）——只认 workspace/ 与 results/")
+
+
+def cap_for(name: str) -> int:
+    """单个成员的上限（字节）：文本类 256KiB，二进制 512MiB。"""
+    kind = member_kind(name)
+    if kind in ("cfg", "state"):
+        return MAX_TEXT_BYTES
+    base = name.split("/", 1)[1]
+    ext = base.rsplit(".", 1)[-1].lower() if "." in base else ""
+    return MAX_TEXT_BYTES if ext in TEXT_EXTS else MAX_RESULT_BYTES
+
+
+def validate_structure(zf: zipfile.ZipFile) -> list[str]:
+    """结构校验（不读内容）：必选成员存在、成员名合法、results↔state 成对。"""
+    names = zf.namelist()
+    if SIMCONFIG not in names:
+        raise SimfileFormatError(
+            f"仿真文件缺 {SIMCONFIG}（不是 .gensim 容器？）")
+    for n in names:
+        member_kind(n)
+    if any(n.startswith("results/") for n in names) and STATE not in names:
+        raise SimfileFormatError(
+            "容器含 results/ 但缺 state.json（job_id）——无法还原结果态")
+    if STATE in names and not any(n.startswith("results/") for n in names):
+        raise SimfileFormatError(
+            "容器含 state.json 但无 results/——结果与元信息必须成对")
+    return names
+
+
+def _open_zip(source):
+    """source = 路径 / 字节 / 可读文件对象 → 打开的 ZipFile（坏容器→格式错）。"""
+    try:
+        return zipfile.ZipFile(source)
+    except (zipfile.BadZipFile, OSError) as e:
+        raise SimfileFormatError(
+            f"不是合法的仿真文件（.gensim 应为 zip 容器）：{e}") from e
+
+
+def read_cfg(source) -> dict:
+    """读容器里的 SimConfig（不校验 schema——调用方用同一双 validate 手）。"""
+    with _open_zip(source) as zf:
+        validate_structure(zf)
+        info = zf.getinfo(SIMCONFIG)
+        if info.file_size > MAX_TEXT_BYTES:
+            raise SimfileTooLarge(
+                f"{SIMCONFIG} 超 {MAX_TEXT_BYTES >> 10}KiB 上限")
+        try:
+            cfg = json.loads(zf.read(SIMCONFIG).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as e:
+            raise SimfileFormatError(
+                f"{SIMCONFIG} 不是合法 JSON（{e}）") from e
+    if not isinstance(cfg, dict):
+        raise SimfileFormatError(f"{SIMCONFIG} 须是 SimConfig JSON 对象")
+    return cfg
+
+
+def inspect(path) -> dict:
+    """容器摘要：``{cfg, members, job_id, has_results}``（打开前预览用）。"""
+    with _open_zip(path) as zf:
+        names = validate_structure(zf)
+        cfg = read_cfg(path)
+        job_id = ""
+        if STATE in names:
+            try:
+                st = json.loads(zf.read(STATE).decode("utf-8"))
+                job_id = str((st or {}).get("job_id") or "")
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                job_id = ""
+    return {"cfg": cfg, "members": names, "job_id": job_id,
+            "has_results": any(n.startswith("results/") for n in names)}
+
+
+def result_state(h5path, *, job_id: str = "") -> dict:
+    """读结果 h5 根 attrs → ``state.json`` 形态（读不到就给最小 dict）。"""
+    st: dict = {"job_id": job_id or Path(h5path).name.removesuffix("_results.h5"),
+                "state": "done"}
+    try:
+        import h5py
+        with h5py.File(h5path, "r") as h5:
+            a = h5.attrs
+            for k, cast in (("executed_steps", int), ("dt", float)):
+                if k in a:
+                    st[k] = cast(a[k])
+            if "grid_shape" in a:
+                st["grid_shape"] = [int(v) for v in a["grid_shape"]]
+    except Exception:   # noqa: BLE001 —— best-effort：坏 h5 不该拦存档
+        pass
+    return st
+
+
+def write(target, cfg: dict, *, result_path=None, state: dict | None = None,
+          files=None) -> Path:
+    """写一个 .gensim（原子替换）。返回最终路径。
+
+    Parameters
+    ----------
+    target : str | Path
+        目标路径；不带 ``.gensim`` 后缀时自动补。
+    cfg : dict
+        非空 SimConfig JSON（调用方负责先 validate——本函数只管容器）。
+    result_path : str | Path | None
+        结果 h5（通常在 ``$GENIE_RESULT_DIR``）；给了就写 ``results/`` +
+        ``state.json``。
+    state : dict | None
+        ``state.json`` 内容；缺省从 h5 根 attrs 反推（``result_state``）。
+    files : iterable[str | Path] | None
+        工作区文件快照（只取基名，平铺进 ``workspace/``；点文件与
+        ``.part`` 跳过）。
+    """
+    if not isinstance(cfg, dict) or not cfg:
+        raise SimfileError("cfg 须非空 SimConfig dict")
+    target = _ensure_suffix(target)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".part")
+    try:
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as zf:
+            zf.writestr(SIMCONFIG,
+                        json.dumps(cfg, ensure_ascii=False, indent=2))
+            for p in files or []:
+                p = Path(p)
+                if (not p.is_file() or p.name.startswith(".")
+                        or p.name.endswith(".part")):
+                    continue
+                if p.stat().st_size > cap_for("workspace/" + p.name):
+                    raise SimfileTooLarge(
+                        f"{p.name} 超 {cap_for('workspace/' + p.name) >> 20}MiB "
+                        f"上限——不进仿真文件")
+                zf.write(p, arcname="workspace/" + p.name)
+            if result_path is not None:
+                rp = Path(result_path)
+                if not rp.is_file():
+                    raise SimfileError(f"结果文件不存在：{rp}")
+                zf.write(rp, arcname="results/" + rp.name)
+                st = dict(state or result_state(rp))
+                zf.writestr(STATE, json.dumps(st, ensure_ascii=False, indent=2))
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+    try:
+        os.chmod(target, 0o600)
+    except OSError:
+        pass
+    return target
