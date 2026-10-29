@@ -95,10 +95,23 @@ plotting fallback by design — for custom figures, read the ndarrays from
 
 - Slice lazy h5py reads wherever possible (`data.tr.Ex[:, 0]`) instead of
   pulling the full array first.
-- Comparing result files across parameter sweeps — use `digest()` (see
-  page 07).
+- Comparing points across a parameter sweep — take the sweep's `results()`
+  (page 08) and reduce over the leading parameter axes with NumPy
+  (`np.abs(r.tr.T).max(axis=1)`); there is no separate summary table.
 
 See also　Monitor definitions: [Monitors](#f-mon-monitors); auto-save paths: [f.run](#f-submit-lifecycle).
+
+## Sweep results (same surface, k extra axes)
+
+`h.results()` (see page 08) returns the **same `SimData`**; the only
+difference is that every field array gained one **leading axis per swept
+parameter** (k parameters → k extra dimensions). Coordinates such as
+`r.tr.freqs` stay 1-D; `r.tr.T[2]` is the third point's original array;
+failed points are NaN slices. The parameter axes are described by the
+root attribute `sweep` (`r.attrs["sweep"]` — a JSON string with
+`{"axes": [{"name", "values"}, …], "grid": […]}`), so the file carries its
+own coordinates. `h.visualize(mon, field)` pushes the same result to the
+Plot panel, whose axis pickers list the parameter axes like any other.
 
 ## The h5 key protocol
 

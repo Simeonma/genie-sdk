@@ -77,12 +77,34 @@ def _push_visualize(sim, mon: str, field: str | None = None) -> None:
                       data=sim._result_bytes())
 
 
+def _push_sweep_visualize(sw, mon: str, field: str | None = None) -> None:
+    """G182 P5c：扫描的 ``visualize``——同一个动词、同一条推送路径。
+
+    推的是**合并结果**（数据多 k 维，坐标不复制）；会话面板已有的
+    轴选择器/滑条把参数轴当普通轴用——画图实现只有一套（G148 定案：
+    SDK 面零 matplotlib，交互只住 GUI）。"""
+    sid = str(getattr(sw, "id", "") or "")
+    if not sid:
+        raise RuntimeError("visualize: 这个扫描还没有 id（sweep.json 缺 "
+                           "sweep_id）——重跑一次 f.sweep() 即可")
+    from .studio.session_client import SessionClient
+    cli = SessionClient.discover()
+    if cli is None:
+        raise RuntimeError(
+            "visualize: 找不到本机会话门牌——先 `genie studio` 开会话"
+            "（在 Studio 里跑脚本则天然可用）；按定案无本地画图退化轨")
+    cli.result_inject(job_id=sid, mon=mon, field=field or "",
+                      data=sw._cube_bytes())
+
+
 def _wire_core_hooks() -> None:
     from .core import simulate as _simulate
+    from .core import sweep as _sweep
 
     _simulate._wire(
         visualize=_push_visualize,
     )
+    _sweep.hooks.update(visualize_sweep=_push_sweep_visualize)
     # 2026-10-27 G19b 翻转：材质库 HTTP 回退（remote_nk_fetch）退役——
     # 材质库纯本地（genie/nkdata 随包分发），材质面不再接线。
     # 2026-10-28 G174：preview 的 connect 交换钩子（_swap_connect）随
@@ -218,11 +240,11 @@ def open_sweep(sweep_dir) -> "SweepSet":
     """打开一个**磁盘上的扫描文件夹**（G182 P5）→ ``SweepSet``。
 
     只读索引 + 点文档里的结果：``axes`` / ``points``（元数据）/
-    ``rollup()`` / ``aggregate()``；**不打开任何逐点仿真实例**（站长
-    2026-10-30 裁：读取只要聚合结果）。典型用法：
+    ``rollup()`` / ``results()``；**不打开任何逐点仿真实例**（站长
+    2026-10-30 裁：读取只要结果）。典型用法：
 
     ``sw = genie.open_sweep("D:/proj/sweeps/pitch-20261030-0217")``
-    ``agg = sw.aggregate()``   # param_* + pt_* 列，与活句柄同契约
+    ``r = sw.results()``    # 与单跑同一个对象。r.tr.T 多 k 个前导维
 
     与 ``f.sweep()`` 的活句柄互补：一个跑，一个读；同一个文件夹。
     """

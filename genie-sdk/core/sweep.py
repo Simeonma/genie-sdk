@@ -18,16 +18,20 @@ sweep = 编排层：把"跑一个仿真"原语（Simulation.run）用 N 次。
   （凭据失效、传输断开、网关拒绝）= **环境的事**，第一次出现就停排，
   `wait()` 原样抛出一次——一把坏 key 不再变成 N 个失败点；
 - **gpus_per_sim（G90 构造性修复）**：每点 run(gpu=...)——旋钮真实生效；
-- **digest 聚合**：本地优先（G170：digest 随各点结果 h5 attrs 带出，
-  0 次 HTTP）→ 缺键/本地不可得回退 GET → build_aggregate（NaN 语义
-  零变化）。transmission 换算依赖内核 source 谱归一——物理不过 SDK
-  （铁律）。
+- **结果 = 立方**（G182 P5b，站长 2026-10-30 裁）：扫描不新增结果面——
+  N 份点结果摞成**一份普通结果**（``results()``）：每个字段数组前加
+  k 维（k = 扫描轴数，不设上限；轴序 = 轴序声明序），坐标
+  （freqs/time/x/y/z）一条轴仍是一个向量，失败点 = NaN 切片。
+  取单点就是 ``r.tr.T[i]``（numpy 切片），不另设逐点入口。
+  transmission 等换算依赖内核 source 谱归一——物理不过 SDK（铁律）。
 
 铁律沿用：零计算零物理——SDK 只做线格式搬运与编排，仿真永远是内核的事。
 """
 from __future__ import annotations
 
+import io
 import json
+import math
 import os
 import re
 import secrets
@@ -37,16 +41,17 @@ import weakref
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import numpy as np
+
 from .job_state import TERMINAL_BAD as _JOB_TERMINAL_BAD
+from .results import AXIS_KEYS
 from ..models.errors import GenieConfigError, GenieHTTPError, GenieJobError
 
 # 父终态口径（与旧服务端父状态机同名，下游消费零迁移）
 SWEEP_TERMINAL_OK = "done"
 SWEEP_TERMINAL_BAD = ("failed", "canceled")
 
-AGGREGATE_NAME = "aggregate.npz"
 MANIFEST_NAME = "sweep.json"
-_AXES_KEYS = ("values", "linspace", "logspace")
 
 
 def _slug(text: str) -> str:
@@ -89,7 +94,7 @@ _ACTIVE_LOCK = threading.Lock()
 #   扫描终态 {"type":"sweep_done", sweep_id, state, rollup, total}
 # None（缺省）= 零开销直通——独立 SDK 使用者无感。回调异常吞掉
 # （R29 S3 同款纪律：观测面不得有控制权，不拦编排）。
-hooks: dict = {"on_event": None}
+hooks: dict = {"on_event": None, "visualize_sweep": None}
 
 
 def _emit_event(ev: dict) -> None:
@@ -108,81 +113,149 @@ def active_handles() -> list["SweepHandle"]:
         return list(_ACTIVE_SWEEPS)
 
 
-def unique_column(base: str, taken: set) -> str:
-    """列名去重：冲突加 ``_2``/``_3`` …（确定性，先到先得）。"""
-    if base not in taken:
-        taken.add(base)
-        return base
-    i = 2
-    while f"{base}_{i}" in taken:
-        i += 1
-    col = f"{base}_{i}"
-    taken.add(col)
-    return col
-
-
-def flatten_numeric(obj, prefix: str = "") -> tuple[dict, list]:
-    """递归展平：数值标量叶 → {键: float}；非数值叶 → 跳过键清单。
-
-    dict 按键名、list 按下标续接键名（``monitors.0.comps.Ex.abs_max``）；
-    bool 是 int 子类但语义非数值——按非数值跳过键清单。
-    NaN/Inf 数值叶原样保留（聚合语义里 NaN = 缺失，与缺键同列处理）。
-    """
-    out: dict = {}
-    skipped: list = []
-    if isinstance(obj, dict):
-        for k, v in obj.items():
-            key = f"{prefix}.{k}" if prefix else str(k)
-            sub, sub_skip = flatten_numeric(v, key)
-            out.update(sub)
-            skipped.extend(sub_skip)
-    elif isinstance(obj, list):
-        # C1（R29）：本分支原写 str(k)——k 只在 dict 分支存在，无 prefix
-        # 的顶层 list 直接 NameError；正确形态是下标 i。
-        for i, v in enumerate(obj):
-            key = f"{prefix}.{i}" if prefix else str(i)
-            sub, sub_skip = flatten_numeric(v, key)
-            out.update(sub)
-            skipped.extend(sub_skip)
-    elif isinstance(obj, bool):
-        skipped.append(prefix)
-    elif isinstance(obj, (int, float)):
-        out[prefix] = float(obj)
-    else:
-        skipped.append(prefix)
-    return out, skipped
-
-
 def _read_param(point: dict, name: str) -> float:
     """点配置里取参数值（点配置已解析——parameters[name] 是具体数字）。"""
     return point.get("parameters", {}).get(name, float("nan"))
 
 
-def build_aggregate(points: list[dict], axis_names: list[str],
-                    digests: list) -> tuple[dict, dict]:
-    """纯函数：点配置 × 轴参数名 × 逐点 digest（None = 失败/取消/不可读）
-    → npz 列 dict + manifest 摘要 dict。逐列手算可锚（测试主战场）。"""
-    arrays: dict = {}
-    axes_map: dict[str, str] = {}
-    taken: set = set()
-    for name in axis_names:
-        col = unique_column(f"param_{name}", taken)
-        arrays[col] = [_read_param(p, name) for p in points]
-        axes_map[col] = name
-    # 结果列：全点数值叶并集，缺失点/键 NaN
-    flat = [flatten_numeric(d) if d is not None else ({}, [])
-            for d in digests]
-    keys = sorted({k for f, _ in flat for k in f})
-    for k in keys:
-        arrays[f"pt_{k}"] = [f.get(k, float("nan")) for f, _ in flat]
-    skipped = sorted({s for _, sk in flat for s in sk})
-    arrays["_axes"] = json.dumps(
-        [{"column": c, "name": p} for c, p in axes_map.items()],
-        ensure_ascii=False)
-    arrays["_skipped_keys"] = json.dumps(skipped, ensure_ascii=False)
-    meta = {"ok": True, "file": "aggregate.npz",
-            "n_result_columns": len(keys), "axes": axes_map}
-    return arrays, meta
+# ── 立方：扫描 = 结果多 k 维（G182 P5b，站长 2026-10-30 裁）─────────────
+# 数据数组形状 = (各扫描轴取值数 …) + 点内形状；坐标（AXIS_KEYS）一条轴
+# 仍是一个向量、不复制；失败点 = 该切片 NaN；形状对不上（扫参改了网格）
+# 明报不猜。k 不设上限——协议面已经限了 ≤32 轴。
+
+
+def _grid(obj) -> tuple[int, ...]:
+    """扫描轴取值数（轴序 = ``axis_names``）；非笛卡尔（zip）→ (点数,)。"""
+    vals = obj.params
+    sizes = [len(dict.fromkeys(np.asarray(vals[a]).tolist()))
+             for a in obj.axis_names]
+    n = len(obj.points)
+    if not sizes or math.prod(sizes) != n:
+        return (n,)                    # zip：点序就是唯一的那一维
+    return tuple(sizes)
+
+
+def _sweep_id(obj) -> str:
+    return str(getattr(obj, "id", None)
+               or (getattr(obj, "manifest", {}) or {}).get("sweep_id") or "")
+
+
+def _point_state(obj, i: int) -> tuple[str, str]:
+    """第 i 点的 (state, job_id)——活句柄读内存数组，只读集合读索引。"""
+    states = getattr(obj, "states", None)
+    if states is not None:
+        jids = getattr(obj, "job_ids", None) or [None] * len(states)
+        return str(states[i]), str(jids[i] or "")
+    p = obj.points[i] or {}
+    return str(p.get("state") or ""), str(p.get("job_id") or "")
+
+
+def _cube_meta(obj) -> dict:
+    """合并结果的根 attrs ``sweep``：轴名/取值（与 `_grid` 同序）+ 点表。
+
+    数据自带坐标——谁拿到这份结果都知道前 k 维是什么，不用另传参数表。
+    """
+    vals = obj.params
+    axes = [{"name": a,
+             "values": list(dict.fromkeys(np.asarray(vals[a]).tolist()))}
+            for a in obj.axis_names]
+    pts = []
+    for i in range(len(obj.points)):
+        st, jid = _point_state(obj, i)
+        pts.append({"idx": i, "state": st, "job_id": jid})
+    return {"sweep_id": _sweep_id(obj),
+            "name": str(getattr(obj, "name", "") or ""),
+            "dir": str(getattr(obj, "dir", "") or ""),
+            "state": str(getattr(obj, "state", "") or ""),
+            "axes": axes, "grid": list(_grid(obj)), "points": pts}
+
+
+def _open_runs(blobs: list) -> list:
+    """逐点结果字节 → 打开的 h5py.File 列表（None = 失败/无结果）。"""
+    import h5py
+    return [h5py.File(io.BytesIO(b), "r") if b else None for b in blobs]
+
+
+def _merge_cube(runs: list, grid: tuple, meta: dict) -> bytes:
+    """逐点结果 h5（None = 失败）→ 合并结果 h5 的字节（数据多 k 维）。"""
+    import h5py
+
+    base = next((r for r in runs if r is not None), None)
+    if base is None:
+        raise RuntimeError("扫描还没有任何成功点——没有结果可读")
+    buf = io.BytesIO()
+    with h5py.File(buf, "w") as out:
+        for k, v in base.attrs.items():
+            out.attrs[k] = v
+        out.attrs["sweep"] = json.dumps(meta, ensure_ascii=False)
+        for mon in base:
+            src = base[mon]
+            dst = out.create_group(mon)
+            for k, v in src.attrs.items():
+                dst.attrs[k] = v
+            for key in src:
+                if key in AXIS_KEYS:          # 坐标：一条轴一个向量
+                    dst.create_dataset(key, data=src[key][()])
+                    continue
+                a0 = src[key][()]
+                rows = []
+                for i, r in enumerate(runs):
+                    if r is None:             # 失败点：NaN 切片，形状不塌
+                        rows.append(np.full(a0.shape, np.nan))
+                        continue
+                    if mon not in r or key not in r[mon]:
+                        raise ValueError(
+                            f"点 {i + 1} 缺 {mon}/{key}——首点有、它没有："
+                            f"扫描改了监视器配置，不能摞成一个结果")
+                    a = r[mon][key][()]
+                    if a.shape != a0.shape:
+                        raise ValueError(
+                            f"点 {i + 1} 的 {mon}/{key} 形状 {a.shape} ≠ "
+                            f"首点 {a0.shape}——扫参改了网格，不能摞成一个结果")
+                    rows.append(a)
+                dst.create_dataset(
+                    key, data=np.stack(rows).reshape(grid + a0.shape))
+    return buf.getvalue()
+
+
+def _results(obj):
+    """扫描 → 合并结果对象（与单跑同一个 ``SimData``）。"""
+    import h5py
+
+    from .results import SimData
+
+    return SimData(h5py.File(io.BytesIO(_cube_bytes(obj)), "r"),
+                   job_id=_sweep_id(obj))
+
+
+def _cube_bytes(obj) -> bytes:
+    """逐点结果 → 合并结果 h5 字节（数据多 k 维；坐标不复制）。"""
+    blobs = [obj._point_bytes(i) for i in range(len(obj.points))]
+    runs = _open_runs(blobs)
+    try:
+        return _merge_cube(runs, _grid(obj), _cube_meta(obj))
+    finally:
+        for h in runs:
+            if h is not None:
+                h.close()
+
+
+def _visualize(obj, mon: str, field: str | None = None):
+    """扫描看图：与 ``f.visualize`` 同一个动词、同一个 Plot 面板。
+
+    G182 P5c：推的是合并结果（数据多 k 维）——面板已有的轴选择器/
+    滑条把参数轴当普通轴用，画图实现只有一套。无会话 → 明确报错
+    （SDK 面零 matplotlib，G148 定案）。
+    """
+    hook = hooks.get("visualize_sweep")
+    if hook is None:
+        raise RuntimeError(
+            "visualize needs a GUI session — open `genie studio` and run "
+            "the script inside it (the session wires visualize), or "
+            "connect via a session (bare connect) for the external push "
+            "channel; there is no local plotting fallback by design "
+            "(G148)")
+    return hook(obj, mon, field)
 
 
 class SweepSet:
@@ -221,6 +294,11 @@ class SweepSet:
 
     # ---- 元数据 ----
 
+    @property
+    def id(self) -> str:
+        """扫描 id（sweep.json 的 ``sweep_id``）——visualize 的结果键。"""
+        return str(self.manifest.get("sweep_id") or "")
+
     def doc_path(self, i: int) -> Path | None:
         """第 i 点的文档路径（文件夹内相对名 → 绝对；无 → None）。"""
         name = str((self.points[i] or {}).get("doc") or "")
@@ -242,46 +320,44 @@ class SweepSet:
                             "doc": p.get("doc")}
                            for i, p in enumerate(self.points)]}
 
-    # ---- 聚合（从点文档读结果，零 HTTP）----
+    # ---- 结果（扫描 = 结果多 k 维；只读文档，零 HTTP）----
 
-    def digests(self) -> list[dict | None]:
-        import io
+    @property
+    def params(self) -> dict:
+        """{轴名: 逐点取值}——轴序 = ``axis_names``（笛卡尔积序）。"""
+        return {a: np.asarray([(p.get("params") or {}).get(a, np.nan)
+                               for p in self.points], dtype=float)
+                for a in self.axis_names}
 
+    def _point_bytes(self, i: int):
+        """第 i 点的结果字节（失败/无文档/坏文档 → None ⇒ NaN 切片）。"""
         from . import simfile
-        out: list[dict | None] = []
-        for i, p in enumerate(self.points):
-            if str(p.get("state")) != "succeeded":
-                out.append(None)
-                continue
-            doc = self.doc_path(i)
-            if doc is None or not doc.is_file():
-                out.append(None)
-                continue
-            try:
-                data = simfile.result_bytes(doc)
-                if data is None:
-                    out.append(None)
-                    continue
-                import h5py
-                from .results import SimData
-                with h5py.File(io.BytesIO(data), "r") as h5:
-                    out.append(SimData(
-                        h5, job_id=str(p.get("job_id") or "")).digest)
-            except Exception:   # noqa: BLE001 —— 坏点文档 → NaN 行
-                out.append(None)
-        return out
+        doc = self.doc_path(i)
+        if doc is None or not doc.is_file():
+            return None
+        try:
+            return simfile.result_bytes(doc)
+        except Exception:   # noqa: BLE001 —— 坏点文档 → NaN 切片
+            return None
 
-    def aggregate(self) -> dict:
-        """聚合列 dict（``param_*`` 轴列 + digest 数值列 + NaN 语义）。
+    def results(self):
+        """扫描结果 → ``SimData``（与单跑同一个类型，数据多 k 维）。
 
-        与活句柄 ``SweepHandle.aggregate()`` 同一函数/同一契约——点参数
-        来自索引、数值来自各点文档内嵌 h5。
+        ``r.tr.T`` 形状 = (n1, …, nk) + 点内形状（轴序 = ``axes``）；
+        坐标（``r.tr.freqs``）不复制；取单点就是 ``r.tr.T[i]``。
         """
-        points = [{"parameters": dict(p.get("params") or {})}
-                  for p in self.points]
-        arrays, _meta = build_aggregate(points, self.axis_names,
-                                        self.digests())
-        return arrays
+        return _results(self)
+
+    def _cube_bytes(self) -> bytes:
+        return _cube_bytes(self)
+
+    def visualize(self, mon: str, field: str | None = None) -> None:
+        """把扫描结果推到 Studio 的 Plot 面板（与 ``f.visualize`` 同款）。
+
+        推的是合并后的结果（数据多 k 维）——面板把参数轴当普通轴。
+        无会话 = 明确报错（无本地画图退化轨，G148）。
+        """
+        return _visualize(self, mon, field)
 
     def __repr__(self) -> str:  # pragma: no cover —— 调试便利
         return f"<SweepSet {self.name!r} {self.state} dir={self.dir}>"
@@ -679,40 +755,50 @@ class SweepHandle:
         self._finalize()
         return {"sweep_id": self.id, "state": self.state}
 
-    # ---- 聚合与落盘 ----
+    # ---- 结果（扫描 = 结果多 k 维）----
 
-    def digests(self) -> list[dict | None]:
-        """逐点 digest（成功点拉取；失败/取消/未跑 = None → NaN 行）。
+    @property
+    def params(self) -> dict:
+        """{轴名: 逐点取值}——轴序 = ``axis_names``（笛卡尔积序）。"""
+        return {a: np.asarray([_read_param(p, a) for p in self.points],
+                              dtype=float)
+                for a in self.axis_names}
 
-        G170 起本地优先：digest 随各点结果 h5 根 attrs 带出，直接读
-        auto-save 的本地文件——聚合 0 次 HTTP（G166 的服务端拉取时序
-        随之消失）。旧产物缺键/本地不可得回退 GET（同旧行为）。"""
-        out: list[dict | None] = []
-        for i, s in enumerate(self.sims):
-            if self.states[i] == self._GOOD and self.job_ids[i]:
-                d = None
-                get_local = getattr(s, "_digest_from_local", None)
-                if get_local is not None:
-                    d = get_local(self.job_ids[i])
-                if d is None:
-                    try:
-                        d = self._client.digest(self.job_ids[i])
-                    except GenieHTTPError:
-                        d = None
-                out.append(d)
-            else:
-                out.append(None)
-        return out
+    def _point_bytes(self, i: int):
+        """第 i 点的结果字节：先读它的文档（G182 P4 产物），
+        无文档（未落盘/测试直构）才退回实例自身的结果。"""
+        from . import simfile
+        doc = self.doc_paths[i] if i < len(self.doc_paths) else None
+        if doc is not None and doc.is_file():
+            try:
+                return simfile.result_bytes(doc)
+            except Exception:   # noqa: BLE001 —— 坏文档 → NaN 切片
+                return None
+        if self.states[i] == self._GOOD:
+            try:
+                return self.sims[i]._result_bytes()
+            except Exception:   # noqa: BLE001 —— 取不到 → NaN 切片
+                return None
+        return None
 
-    def aggregate(self) -> dict:
-        """聚合列 dict（param_* 轴列 + pt_* digest 数值列 + NaN 语义）。"""
-        arrays, _meta = build_aggregate(self.points, self.axis_names,
-                                        self.digests())
-        return arrays
+    def results(self):
+        """扫描结果 → ``SimData``（与单跑同一个类型，数据多 k 维）。
 
-    def results(self, i: int):
-        """第 i 点的 SimData（读该点结果文档内嵌 h5；未跑/失败点报错）。"""
-        return self.sims[i].results()
+        ``r.tr.T`` 形状 = (n1, …, nk) + 点内形状（轴序 = ``axis_names``）；
+        坐标（``r.tr.freqs``）不复制；取单点就是 ``r.tr.T[i]``。
+        """
+        return _results(self)
+
+    def _cube_bytes(self) -> bytes:
+        return _cube_bytes(self)
+
+    def visualize(self, mon: str, field: str | None = None) -> None:
+        """把扫描结果推到 Studio 的 Plot 面板（与 ``f.visualize`` 同款）。
+
+        推的是合并后的结果（数据多 k 维）——面板把参数轴当普通轴。
+        无会话 = 明确报错（无本地画图退化轨，G148）。
+        """
+        return _visualize(self, mon, field)
 
     def __repr__(self) -> str:  # pragma: no cover —— 调试便利
         return f"<SweepHandle {self.id} {self.state} dir={self.dir}>"

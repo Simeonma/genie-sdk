@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import numpy as np
@@ -33,6 +34,27 @@ AXIS_KEYS = ("freqs", "time", "x", "y", "z")
 # 格式家族升级时明报，不静默按旧布局误读；缺 attrs 同样拒（G94/R19
 # 实证：真产物必有根 attrs，全空的是探针残留）。
 H5_FORMAT_PREFIX = "genie-results-h5/"
+
+
+def sweep_axes(h5) -> list[dict] | None:
+    """根 attrs ``sweep`` → 参数轴表 ``[{"name","values"}]``（G182 P5b）。
+
+    扫描结果是**一份普通结果**，只是字段数组前面多了 k 维；这 k 维的
+    名字/取值随数据走（写文件的 SDK 落 attrs）。非扫描结果 → None。
+    """
+    raw = h5.attrs.get("sweep")
+    if raw is None or raw == "" or raw == b"":
+        return None
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", "replace")
+    try:
+        d = json.loads(raw)
+    except ValueError:
+        return None
+    ax = d.get("axes") if isinstance(d, dict) else None
+    if not isinstance(ax, list) or not ax:
+        return None
+    return [a for a in ax if isinstance(a, dict) and a.get("name")]
 
 
 def ensure_supported_format(h5) -> None:
@@ -151,39 +173,13 @@ def _unflatten_axis_map(group, n_cells: int) -> dict:
     return uniq
 
 
-def select(group, field: str, *, axes: list | None = None,
-           slices: dict | None = None):
-    """n-D 取数尺（G148 单一真源）：h5 组 + 场 → 选轴视图。
+def _point_layout(group, field: str, data):
+    """单点布局（G148 批 0 钉死）：场数组 → (坐标表, 轴序, 重排后数组)。
 
-    - ``axes=None``（缺省）：**峰值列折叠**——与 ``curve()`` 同口径
-      （G142 定案），现 GUI 行为零漂移；
-    - ``axes=["x"]``：1D——指定轴为横轴；``axes=["y","x"]``：2D——
-      第一元素 = 横轴（x）、第二元素 = 纵轴（y），输出 data 形状
-      (len(y), len(x))；
-    - 可选轴名：``"time"``/``"freqs"``（谱/时间，dim0）+ 反展平成功
-      的 ``"x"``/``"y"``/``"z"`` + ``"cell"``（格点下标，无法反展平
-      时的空间轴）；
-    - ``slices={"axis": int}``：未选中的轴定切片，**缺省 = 联合峰值
-      切片**——全部缺省轴取全局峰格（同一个格）的坐标，与峰值列折叠
-      严格同值（G142 同义，非"逐轴各自 argmax"）；全 NaN 退 0；
-    - 复数取模（``is_cplx`` 标记）。
-
-    返回 ``{"dim": 1|2, "x": {"key","values"}, "y": {...}|None,
-    "data": ndarray, "tag": str, "is_cplx": bool}``。场缺失 →
-    KeyError（G146 口径）；轴名/切片形状错 → ValueError 带定位。
-
-    维度约定见本节头注（批 0 钉死：场 ≤2D，dim1 = C 序展平格点
-    x 最快，规则子盒才可反展平为 (nz,ny,nx)）。"""
-    if field not in group:
-        raise KeyError(
-            f"field {field!r} not found in monitor group (present: "
-            f"{sorted(k for k in group if k not in _SPATIAL_KEYS)}")
-    _reject_axis_dataset(group, field)
-    arr = np.asarray(group[field][()])
-    is_cplx = np.iscomplexobj(arr)
-    data = np.abs(arr) if is_cplx else arr
-
-    # 可用轴表 + data 的轴序（order[i] ↔ data 第 i 维）
+    ``data`` = **一个点**的场（≤2 维：谱/时间 × 展平格点）；返回的
+    ``order[i]`` 对应重排后数组第 i 维。扫描结果先切出点内片再进来
+    （参数轴在文件级，见 `sweep_axes`）。
+    """
     spec_key = next((k for k in ("freqs", "time") if k in group), None)
     coords: dict[str, np.ndarray] = {}
     order: list[str] = []
@@ -236,10 +232,52 @@ def select(group, field: str, *, axes: list | None = None,
         else:
             coords["cell"] = np.arange(n)
             order.append("cell")
+    return coords, order, data
 
-    # 缺省视图 = 峰值列折叠（G142，与 curve() 同口径；mon 形参仅用于
-    # curve 的消息文案，select 面没有监视器名可传，占位空串）
-    if axes is None:
+
+def select(group, field: str, *, axes: list | None = None,
+           slices: dict | None = None, sweep: list | None = None):
+    """n-D 取数尺（G148 单一真源）：h5 组 + 场 → 选轴视图。
+
+    - ``axes=None``（缺省）：非扫描 = **峰值列折叠**（与 ``curve()``
+      同口径，G142 定案，GUI 行为零漂移）；扫描 = 点内轴先摆 x/ y，
+      缺的一位由第一个参数轴补上、其余参数轴取首片（就是"二维图 +
+      滑条"，多出来的维默认可见）；
+    - ``axes=["x"]``：1D——指定轴为横轴；``axes=["y","x"]``：2D——
+      第一元素 = 横轴（x）、第二元素 = 纵轴（y），输出 data 形状
+      (len(y), len(x))；
+    - 可选轴名：``"time"``/``"freqs"``（谱/时间，dim0）+ 反展平成功
+      的 ``"x"``/``"y"``/``"z"`` + ``"cell"``（格点下标，无法反展平
+      时的空间轴）+ **扫描参数轴**（``sweep``：k 维，见 `sweep_axes`）；
+    - ``slices={"axis": int}``：未选中的轴定切片，**缺省 = 联合峰值
+      切片**——全部缺省轴取全局峰格（同一个格）的坐标，与峰值列折叠
+      严格同值（G142 同义，非"逐轴各自 argmax"）；全 NaN 退 0；
+    - 复数取模（``is_cplx`` 标记）。
+
+    返回 ``{"dim": 1|2, "x": {"key","values"}, "y": {...}|None,
+    "data": ndarray, "tag": str, "is_cplx": bool}``。场缺失 →
+    KeyError（G146 口径）；轴名/切片形状错 → ValueError 带定位。
+
+    维度约定见本节头注（批 0 钉死：场 ≤2D，dim1 = C 序展平格点
+    x 最快，规则子盒才可反展平为 (nz,ny,nx)）。"""
+    if field not in group:
+        raise KeyError(
+            f"field {field!r} not found in monitor group (present: "
+            f"{sorted(k for k in group if k not in _SPATIAL_KEYS)}")
+    _reject_axis_dataset(group, field)
+    arr = np.asarray(group[field][()])
+    is_cplx = np.iscomplexobj(arr)
+    data = np.abs(arr) if is_cplx else arr
+
+    # 扫描结果 = 数据前 k 维是参数轴（k 不设上限）；点内布局照旧，
+    # 只是把点内那片先切出来（第 0 号参数组合）再算坐标/轴序。
+    lead = [a for a in (sweep or []) if a.get("name")]
+    lead_shape = tuple(len(a.get("values") or []) for a in lead)
+
+    # 非扫描缺省视图 = 峰值列折叠（G142，与 curve() 同口径）——先于布局
+    # 计算：curve() 对任意 ndim 都折叠（3D 体数据历来走这里，不能因为
+    # select 的 ≤2 维布局守卫而变红）。
+    if axes is None and not lead:
         if slices:
             # R25 小案：缺省视图无切片面——GUI parse_view 早有同口径
             # 拦截（"slices 需要 axes"），SDK 直调面修前静默丢弃。
@@ -250,6 +288,37 @@ def select(group, field: str, *, axes: list | None = None,
         return {"dim": 1, "x": {"key": axis_key or "index",
                                 "values": xs},
                 "y": None, "data": ys, "tag": tag, "is_cplx": is_cplx}
+
+    if lead:
+        if (data.ndim < len(lead_shape)
+                or data.shape[:len(lead_shape)] != lead_shape):
+            raise ValueError(
+                f"field {field!r} 形状 {data.shape} 与扫描轴 {lead_shape} "
+                f"不符——结果文件的 attrs sweep 与数据自相矛盾")
+        point = data[(0,) * len(lead_shape)]
+    else:
+        point = data
+    pcoords, porder, pdata = _point_layout(group, field, point)
+    if lead:
+        data = data.reshape(lead_shape + pdata.shape)
+        coords = {a["name"]: np.asarray(a["values"], dtype=float)
+                  for a in lead}
+        coords.update(pcoords)
+        order = [a["name"] for a in lead] + porder
+    else:
+        data, coords, order = pdata, pcoords, porder
+
+    # 扫描缺省视图：数据自己的维度先摆（点内轴当 x，二维就再占 y），
+    # 缺的一位由第一个参数轴补上，其余参数轴取首片——多出来的维默认
+    # 就"看得见"（二维图 + 滑条）。
+    if axes is None:
+        base = list(porder[:2])
+        for a in lead:
+            if len(base) >= 2:
+                break
+            base.append(a["name"])
+        cut = {a["name"]: 0 for a in lead if a["name"] not in base}
+        return select(group, field, axes=base, slices=cut, sweep=lead)
 
     if not isinstance(axes, list) or not 1 <= len(axes) <= 2:
         raise ValueError(
@@ -324,7 +393,7 @@ def select(group, field: str, *, axes: list | None = None,
             "data": np.asarray(out), "tag": "", "is_cplx": is_cplx}
 
 
-def axis_lengths(group) -> dict:
+def axis_lengths(group, sweep=None) -> dict:
     """轴存在表 + 长度（G148：meta/面板的单一真源）。
 
     - ``time``/``freqs`` = 轴长；
@@ -332,16 +401,19 @@ def axis_lengths(group) -> dict:
       的展平长度！曾把 1600 格点云当 z 轴 1600 个切片位，造出
       "z[0..1599]" 的假轴，站长真机质询抓出）；
     - 云无法反展平（Yee 裁剪/退化）→ 只报 ``cell`` = n_cells；
-    - 点监视器（场 1D、无云）→ 只有谱轴。
+    - 点监视器（场 1D、无云）→ 只有谱轴；
+    - ``sweep``（G182 P5b）：扫描参数轴，k 个就 k 行，排在最前
+      （它们是外层维）。
     面板据此渲染轴行/滑条；轴能否真当选仍由 select() 裁决。"""
     out: dict[str, int] = {}
     spec = next((k for k in ("freqs", "time") if k in group), None)
     if spec is not None:
         out[spec] = int(np.asarray(group[spec][()]).size)
+    lead = len(sweep or [])          # G182 P5b：前 k 维是参数轴，不算场维
     fields = [k for k in group if k not in _SPATIAL_KEYS and k != spec]
     n_cells = None
     for k in fields:
-        shp = np.asarray(group[k][()]).shape
+        shp = np.asarray(group[k][()]).shape[lead:]
         if len(shp) >= 2:
             if shp[1] > 1:      # (nf,1) 点监视器不算空间轴（R25 确凿 3）
                 n_cells = int(shp[1])
@@ -357,6 +429,10 @@ def axis_lengths(group) -> dict:
             out.update({a: int(len(v)) for a, v in spatial.items()})
         else:
             out["cell"] = n_cells
+    if sweep:
+        lead = {a["name"]: len(a.get("values") or []) for a in sweep}
+        lead.update(out)
+        return lead
     return out
 
 
@@ -521,10 +597,15 @@ class IndexResult(_DataBase):
 
 
 class _MonitorView:
-    """单监视器视图：属性/下标直达数据集（data.tr.Ex → 复数 ndarray）。"""
+    """单监视器视图：属性/下标直达数据集（data.tr.Ex → 复数 ndarray）。
 
-    def __init__(self, group) -> None:
+    ``owner`` = 所属 ``SimData`` 的强引用：``data.tr.Ex`` 这种链式访问里
+    中间的 SimData 是临时对象，没有它就会被 ``__del__`` 关掉 h5 文件
+    （G182 P5b 实证：视图拿到的是死 group）。"""
+
+    def __init__(self, group, owner=None) -> None:
         self._g = group
+        self._owner = owner
 
     def __getattr__(self, name: str):
         # G145（R19）：下划线守卫——_f/_g 赋值前的属性探测（pickle/
@@ -611,12 +692,12 @@ class SimData:
         if name.startswith("_"):
             raise AttributeError(name)
         try:
-            return _MonitorView(self._f[name])
+            return _MonitorView(self._f[name], self)
         except KeyError as e:
             raise AttributeError(name) from e
 
     def __getitem__(self, name: str) -> _MonitorView:
-        return _MonitorView(self._f[name])
+        return _MonitorView(self._f[name], self)
 
     def __dir__(self):
         return sorted(set(list(super().__dir__()) + self.monitors))

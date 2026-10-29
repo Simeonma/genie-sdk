@@ -21,7 +21,7 @@ import h5py
 import numpy as np
 
 from genie.core import simfile
-from genie.core.results import AXIS_KEYS, axis_lengths, curve, select
+from genie.core.results import AXIS_KEYS, axis_lengths, select, sweep_axes
 
 
 def _open_h5(source):
@@ -120,13 +120,8 @@ def series(source: Path, mon: str, field: str, maxpoints: int = 1200,
     with _open_h5(source) as f:
         if mon not in f or field not in f[mon]:
             raise KeyError(f"监视器/场不存在: {mon}/{field}")
-        view = (select(f[mon], field, axes=axes, slices=slices)
-                if axes is not None else None)
-        if view is None:
-            axis_key, xs, ys, tag, _cplx = curve(f[mon], mon, field)
-            view = {"dim": 1, "x": {"key": axis_key or "idx",
-                                    "values": xs}, "y": None,
-                    "data": ys, "tag": tag}
+        view = select(f[mon], field, axes=axes, slices=slices,
+                      sweep=sweep_axes(f))
     if view["dim"] == 1:
         ys = np.asarray(view["data"])
         xs = np.asarray(view["x"]["values"])
@@ -219,6 +214,7 @@ def meta(source: Path) -> dict:
     文档（G182 P3 主路径）或旧 h5。
     """
     with _open_h5(source) as f:
+        sw = sweep_axes(f)          # G182 P5b：扫描参数轴（非扫描 → None）
         mons = []
         for name, grp in f.items():
             keys = list(grp.keys())
@@ -227,13 +223,14 @@ def meta(source: Path) -> dict:
                 "domain": str(grp.attrs.get("domain", "")),
                 "fields": sorted(k for k in keys if k not in AXIS_KEYS),
                 "axes": sorted(k for k in keys if k in AXIS_KEYS),
-                "axes_len": axis_lengths(grp)})
+                "axes_len": axis_lengths(grp, sw)})
         st = {
             "ok": True,
             "job_id": _job_id_of(source),
             "executed_steps": int(f.attrs.get("executed_steps", 0)),
             "dt": float(f.attrs.get("dt", 0)),
             "grid_shape": [int(v) for v in f.attrs.get("grid_shape", [])],
+            "sweep": sw,
             "monitors": mons}
     return st
 
