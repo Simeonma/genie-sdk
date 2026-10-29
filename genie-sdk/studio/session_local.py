@@ -73,7 +73,7 @@ class LocalSessionHost:
         return _svc.get_kernel(owner, session_id).attach(key)
 
     def result_meta(self, *, owner: str,
-                    session_id: str = DEFAULT_SESSION, job_id: str = "") -> dict:
+                    session_id: str = DEFAULT_SESSION, job_id: str) -> dict:
         return _svc.result_meta(job_id=job_id, owner=owner,
                                 session_id=session_id)
 

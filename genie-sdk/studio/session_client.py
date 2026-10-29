@@ -234,7 +234,9 @@ class SessionClient:
             "session_id": self._sid(session_id)})
 
     def result_meta(self, *, owner: str = "",
-                    session_id: str = "", job_id: str = "") -> dict:
+                    session_id: str = "", job_id: str) -> dict:
+        """结果结构清单。**job_id 必填**（G58/G66 定案 2026-10-29：
+        服务端不猜"最近一次"）。"""
         return self._json("GET", "/result/meta", params={
             "job_id": job_id, "owner": self._owner(owner),
             "session_id": self._sid(session_id)})
@@ -446,8 +448,9 @@ def register_result_routes(app, *, owner_of,
     cli = client or SessionClient()
 
     @app.get("/api/result/meta")
-    async def api_result_meta(req: Request, job_id: str = "") -> dict:
-        """结果结构清单（job_id 缺省 = 最近一次——页面重开的回退）。"""
+    async def api_result_meta(req: Request, job_id: str) -> dict:
+        """结果结构清单。**job_id 必填**——服务端不猜"最近一次"
+        （G58/G66 定案 2026-10-29）。"""
         return await run_in_threadpool(
             cli.result_meta, owner=owner_of(req),
             session_id=_sid_of(req), job_id=job_id)

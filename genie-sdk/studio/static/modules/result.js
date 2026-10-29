@@ -474,12 +474,14 @@ function _cancelJobButton(jobId) {
     + "cursor:pointer;color:#c0392b";
   b.onclick = () => {
     b.disabled = true;
-    b.textContent = "取消中…";
+    b.textContent = "取消请求已发送…";
     const KEYH = { "X-API-Key": localStorage.getItem("genie_v2_api_key") || "" };
     fetch("/api/jobs/" + encodeURIComponent(jobId || "") + "/cancel",
           { method: "POST", headers: KEYH })
       .then(r => { if (!r.ok) throw new Error("HTTP " + r.status); })
-      .then(() => { b.textContent = "已取消"; })
+      // 终态由 job-done 事件统一播报（"作业已取消"）——按钮不自说
+      // "已取消"，否则同一件事两套措辞（G66③，R49）。
+      .then(() => { b.textContent = "等待作业终态…"; })
       .catch(() => { b.disabled = false; b.textContent = "✕ 取消(重试)"; });
   };
   return b;

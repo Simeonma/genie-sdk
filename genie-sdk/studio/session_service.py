@@ -258,15 +258,22 @@ def attach(body: AttachIn) -> dict:
 @app.get("/result/meta")
 def result_meta(job_id: str = "", owner: str = "user",
                 session_id: str = DEFAULT_SESSION) -> dict:
-    """结果结构清单。job_id 缺省 = 最近一次（页面重开后无事件时的
-    回退数据源）。"""
+    """结果结构清单。**job_id 必填**（G58/G66 定案 2026-10-29：不猜）。
+
+    修前缺省 = ``latest_result()`` 按文件 mtime 猜"最近一次"——那是替用户
+    判断"你想看哪个"，与"不做保姆"哲学冲突，且多 session/多作业下会张冠
+    李戴。现在缺 job_id 直接 422 指路。"""
     from pathlib import Path
     from genie.studio import results_view
+    if not job_id:
+        raise HTTPException(
+            status_code=422,
+            detail="job_id 必填——结果按作业 id 取；id 从 get_model / 作业日志"
+                   "（或 job-done 事件）里拿，服务端不替你猜'最近一次'")
     owner = check_owner(owner)   # R25 确凿 5：修前 ../ 跨目录读他人 h5
     d = Path(workspace_root()) / owner
     try:
-        p = (results_view.result_path(d, job_id, session_id) if job_id
-             else results_view.latest_result(d, session_id))
+        p = results_view.result_path(d, job_id, session_id)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     if p is None or not p.is_file():

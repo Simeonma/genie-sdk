@@ -445,10 +445,70 @@ function importCfg() {
 
 /* e2e 钩子（headless 无下载/文件选择对话框——直接调函数面） */
 window.__g14 = { exportCfg, importCfgText };
+window.__g60 = { exportScript };   /* File → Export .py（askName=false 走下载通道） */
+
+/* ── 当前模型 → Python 脚本（G60 出口，2026-10-30 站长裁）──────────
+ * File → Export .py：把**当前模型**（与「存储仿真」同一个取值面
+ * window.getCfg）渲染成脚本并下载。渲染器 = 服务端 core/script.render
+ * （golden 字节锁定的唯一一份）——参数保留为变量、表达式槽保留为
+ * 表达式，文件可独立运行重建同一模型。
+ * 语义边界（与 R1/G57 一致）：**只下载、不碰编辑器**——脚本是脚本、
+ * 仿真是仿真；这是"模型→代码"的一次性交接，不做任何同步。 */
+async function exportScript(askName = true) {
+  const c = (typeof window.getCfg === "function") ? window.getCfg() : null;
+  if (!c || !Object.keys(c).length) {
+    toast("还没有可导出的模型——先跑一次脚本或在表单里搭好配置", "warn");
+    return null;
+  }
+  let fname = "genie_sim.py";
+  let handle = null;
+  if (askName && window.showSaveFilePicker) {
+    try {
+      handle = await window.showSaveFilePicker({
+        suggestedName: fname,
+        types: [{ description: "Python 脚本（可独立运行）",
+                  accept: { "text/x-python": [".py"] } }],
+      });
+      fname = handle.name || fname;
+    } catch (e) {
+      if (e && e.name === "AbortError") return null;   /* 用户取消 */
+      handle = null;                                   /* 选择器故障 → 老通道 */
+    }
+  }
+  try {
+    const r = await fetch("/api/sim/script", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cfg: c }) });
+    if (!r.ok) {
+      let detail = String(r.status);
+      try { detail = (await r.json()).detail || detail; } catch {}
+      throw new Error(detail);
+    }
+    const text = (await r.json()).script || "";
+    const blob = new Blob([text], { type: "text/x-python" });
+    if (handle) {
+      const w = await handle.createWritable();
+      await w.write(blob);
+      await w.close();
+    } else {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = fname;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+    toast("脚本已导出（" + fname + "）——参数保留为变量，可独立运行", "ok");
+    return text;
+  } catch (e) {
+    toast("导出脚本失败：" + e.message, "err");
+    return null;
+  }
+}
 
 /* 直钮绑定（File▾ 下拉已删）：处理器零事件参数依赖，直接挂 */
 $("file-save-btn").addEventListener("click", exportCfg);
 $("file-open-btn").addEventListener("click", importCfg);
+$("file-script-btn").addEventListener("click", () => exportScript(true));
 /* load-py 本机文件上岗（G17 走查补漏 2026-10-16）：f4d1e23 只上了钮
  * 没接线——出生即死钮。语义同工作区点行载入：File API 读用户笔记本
  * （零上传），ed.value + input 事件（未存态，Run 前必存进工作区）。 */

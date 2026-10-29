@@ -134,10 +134,11 @@ def results_dir(owner_dir: Path, session_id: str | None = None) -> Path:
     """结果目录：``<owner>/genie_results/``，O2 起再按 session 分一层。
 
     分层的理由：结果 = 会话状态。两个 session 的结果混在一个目录里，
-    ``latest_result``（页面重开的回退数据源）会把别人的最新文件当成自己的。
+    按 mtime 回退取"最新"会把别人的文件当成自己的（G58/G66 定案后
+    已删 latest_result——结果一律按显式 job_id 取，不猜）。
 
     例外：``None`` / ``""`` / ``"default"`` 保持**平铺**（O2 之前的布局，
-    也是云宿主与旧客户端的缺省会话）——升级不动存量，旧调用零改动。
+    也是旧客户端的缺省会话）——升级不动存量，旧调用零改动。
     """
     d = owner_dir / "genie_results"
     # 字面 "default" 而非 import DEFAULT_SESSION：本模块被 worker 子进程
@@ -154,16 +155,6 @@ def result_path(owner_dir: Path, job_id: str,
     if not re.fullmatch(r"[\w\-]{1,128}", job_id or ""):
         raise ValueError("job_id 非法（字母/数字/_/-，≤128）")
     return results_dir(owner_dir, session_id) / f"{job_id}_results.h5"
-
-
-def latest_result(owner_dir: Path, session_id: str | None = None) -> Path | None:
-    """owner 工作区最近一次的 h5（页面重开后无事件时的回退数据源）。"""
-    d = results_dir(owner_dir, session_id)
-    if not d.is_dir():
-        return None
-    files = [p for p in d.iterdir()
-             if p.is_file() and p.name.endswith("_results.h5")]
-    return max(files, key=lambda p: p.stat().st_mtime) if files else None
 
 
 def meta(h5path: Path) -> dict:

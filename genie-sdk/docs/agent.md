@@ -28,7 +28,7 @@ out = cli.output()
 model = out["cfg"]        # 线格式 SimConfig（字段见手册参考页）
 out["busy"]               # True = 有人在跑东西（exec/run/写模型）
 out["phase"]              # exec|submit|queue|run|download|idle
-out["job_id"]             # 最近一次作业
+out["job_id"]             # 会话当前/最近一次作业的 id（取结果时显式带上）
 ```
 
 `cfg` 为 `None` / `{}` = 会话还没有模型（先 `replace` 一份或跑一段 `exec`）。
@@ -117,6 +117,9 @@ job = cli.output()["job_id"]
 cli.result_meta(job_id=job)                      # 有哪些监视器/字段
 cli.result_series(job_id=job, mon="t1", field="Ey")
 ```
+
+`job_id` **必填**（G58/G66 定案 2026-10-29：服务端不猜"最近一次"；
+从 `output()["job_id"]` 或作业日志里拿）。
 
 ## 6. 别做这些
 

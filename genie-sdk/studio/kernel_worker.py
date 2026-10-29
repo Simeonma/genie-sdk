@@ -104,6 +104,23 @@ class _Out:
         pass
 
 
+def _jobdone_text(exc: BaseException, jid: str) -> str:
+    """一次 run 尝试了结播报（**唯一措辞源**，R49 2026-10-29）。
+
+    按真实终态区分——修前一律"✗ 作业失败"，用户点了取消也报"失败"，
+    与取消按钮自己说的"已取消"打架（G66③ 两套措辞）：
+    - 用户停止（StopExec）→ 已停止；
+    - 作业被取消（状态 killed/canceled）→ 已取消；
+    - 其余 → 作业失败。
+    """
+    who = jid or "未提交"
+    if isinstance(exc, StopExec):
+        return f"⏹ 已停止（{who}）\n"
+    if str(getattr(exc, "state", "") or "") in ("killed", "canceled"):
+        return f"✕ 作业已取消（{who}）\n"
+    return f"✗ 作业失败（{who}）\n"
+
+
 def main(readline=None, emit_fn=None, expose=None) -> None:
     global _exec_busy, _stop_requested
     # 运行时缝（LEDGER G80）：readline / emit_fn 可注入——本机缺省 =
@@ -760,28 +777,13 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
             _last_state["phase"] = None
             _emit_state("exec")
             emit({"ev": "out", "kind": "job-done",
-                  "text": f"✗ 作业失败（{jid or '未提交'}）\n",
+                  "text": _jobdone_text(e, jid or ""),
                   "data": {"job_id": jid or "", "ok": False}})
-            # 连不上网关 = 机器层隧道断了（本地 Studio 形态下最常见的一类
-            # "未提交"失败——隧道是机器基础设施，不是会话的一部分）。
-            # 说人话 + 给下一步动作；traceback 原样保留供诊断（R7：只有
-            # 一种措辞，这里不重复 detail）。判据走因链遍历：client 层把
-            # 传输错误包成 GenieHTTPError（from e），顶层类型探不到。
-            def _conn_dead(exc) -> bool:
-                c = exc
-                while c is not None:
-                    if isinstance(c, (ConnectionError, OSError)):
-                        return True
-                    c = c.__cause__
-                return False
-            if _conn_dead(e):
-                url = getattr(getattr(self, "_client", None),
-                              "base_url", "") or "网关"
-                emit({"ev": "out", "kind": "note",
-                      "text": f"⚠ 连不上 {url}——本机隧道可能断了"
-                              "（它是机器基础设施，重启 studio 救不了）："
-                              "任务计划程序里运行任务 genie-tunnel，"
-                              "或重开 start-studio。\n"})
+            # （R49 2026-10-29：删原"连不上网关→本机隧道/genie-tunnel"
+            # 的 note——它违反 R7「失败只有一种措辞」（client 层已把
+            # 传输错误翻成"网络错误 …"），还把任务计划程序这类内部
+            # 运维细节暴露给用户。断网/后端不可达由底层错误文本表达，
+            # 用户自己看得见，不需要第二套话。）
             raise
         # G13② 结果事件：run 成功（含自动下载落盘）→ job-done 进环，
         # GUI 靠它切结果模式/按 job_id 读会话工作区的 h5（结果=会话状态）。

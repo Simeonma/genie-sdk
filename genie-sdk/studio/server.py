@@ -698,6 +698,31 @@ def create_app(*, static_dir: str | Path | None = None,
         finally:
             os.unlink(tmp.name)
 
+    # ── 当前模型 → Python 脚本（G60 出口，2026-10-30 站长裁）──────
+    @app.post("/api/sim/script")
+    async def sim_script(req: Request) -> dict:
+        """当前模型渲染成 Python 脚本文本（File → Export .py）。
+
+        只读投影：入参 = 前端手里的当前模型 cfg（与 /api/sim/export 同源），
+        渲染器 = `core/script.render`（golden 字节锁定的唯一一份）——参数
+        保留为变量、表达式槽保留为表达式，生成的脚本可独立运行重建同一模型。
+        **不碰会话、不写盘、不改编辑器**（脚本是脚本、仿真是仿真；这是
+        模型→代码的一次性交接）。
+        """
+        body = await req.json()
+        cfg = body.get("cfg")
+        if not isinstance(cfg, dict) or not cfg:
+            raise HTTPException(
+                status_code=422,
+                detail="还没有可导出的模型——先运行脚本或在表单里搭好配置")
+        from genie.core.script import render
+        try:
+            text = render(cfg)
+        except Exception as e:  # noqa: BLE001 —— 渲染失败回 422（形状错）
+            raise HTTPException(status_code=422,
+                                detail=f"脚本渲染失败：{e}") from e
+        return {"ok": True, "script": text}
+
     # ── 静态资产版本号（防缓存根治）：static 目录最大 mtime 作版本，
     # "/" 返回的 index.html 里所有 js/css 引用追加 ?v=——文件一改版本
     # 即变，浏览器必然拉新（no-cache 只保证回验，改不掉启发式缓存的

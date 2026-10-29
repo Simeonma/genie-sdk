@@ -201,11 +201,13 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "取结果。不给 mon → 返回结构清单（有哪些监视器/字段，"
             "用 /api/result/meta）；给 mon+field → 返回曲线数据。"
-            "job_id 缺省 = 会话最近一次作业。"),
+            "**job_id 必填**（从 get_model 的返回值里拿；服务端不猜"
+            "'最近一次'——G58/G66 定案 2026-10-29）。"),
         "parameters": {
             "type": "object",
             "properties": {
-                "job_id": {"type": "string", "description": "缺省=最近一次"},
+                "job_id": {"type": "string",
+                           "description": "必填：从 get_model 的 job_id 拿"},
                 "mon": {"type": "string", "description": "监视器名"},
                 "field": {"type": "string", "description": "如 Ey / Ex"},
                 "maxpoints": {"type": "integer", "description": "抽稀到多少点（缺省 1200）"},
@@ -372,6 +374,11 @@ def _do_run_model(cli, args: dict) -> dict:
 
 def _do_get_results(cli, args: dict) -> dict:
     job_id = str(args.get("job_id") or "")
+    if not job_id:
+        # G58/G66 定案 2026-10-29：不猜"最近一次"——显式要 id，指路给它。
+        return {"ok": False, "error":
+                "job_id 必填——从 get_model 返回的 job_id（或作业日志/"
+                "job-done 事件）里拿；服务端不替你猜'最近一次'"}
     mon = str(args.get("mon") or "")
     if not mon:
         return {"ok": True, "meta": cli.result_meta(job_id=job_id)}
