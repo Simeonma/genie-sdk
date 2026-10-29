@@ -230,11 +230,6 @@ body.mobile-mode #three-container { position: relative; }
     background: #EFF6FF; color: #1F62B0;
     box-shadow: inset 3px 0 0 #1F62B0;
   }
-  body.mobile-mode #tree-panel .m-edit-connect-cta {
-    flex-shrink: 0; width: auto; align-self: stretch;
-    margin: 8px 10px 4px; min-height: 40px;
-    border-radius: 8px; font-size: 13px;
-  }
 
   /* ④ 结果页空态行动钮 */
   .m-viz-goedit {
@@ -381,11 +376,6 @@ body.mobile-mode #three-container { position: relative; }
 }
 
 @media (max-width: 767px) {
-  /* ② 默认（非本页）：两处 CTA 全隐藏；激活页再放开。:not([hidden])
-   * 保证连接态的 hidden 属性语义不被覆盖（含 .m-cta-mini 降级路径）。 */
-  body.mobile-mode[data-mpage] #tree-panel .m-edit-connect-cta { display: none; }
-  body.mobile-mode[data-mpage="edit"] #tree-panel .m-edit-connect-cta:not([hidden]) { display: block; }
-
   /* ③ 英雄区态机换装过渡：背景/边框/文字色 0.3s（计算中蓝 → amber
    * 停止态、→ 浅红错误态不再生硬跳变） */
   .m-hero {
@@ -496,11 +486,6 @@ body.mobile-mode #three-container { position: relative; }
 }
 
 @media (max-width: 767px) {
-  #mobile-nav #mobile-preview-toggle {
-    margin-left: auto; font-weight: 600; color: var(--accent-2);
-    border: 1px solid var(--accent-line); border-radius: 999px;
-    padding: 6px 12px; align-self: center;
-  }
   /* 预览条内的 3D：工具列与空态卡收回容器内（不浮到编辑区上） */
   body.mobile-mode .scene-tools {
     position: absolute; right: 8px; bottom: 8px;

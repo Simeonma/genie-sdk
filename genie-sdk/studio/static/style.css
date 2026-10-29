@@ -238,7 +238,7 @@ html,body {
 body { display: flex; flex-direction: column; }
 input,select,button,textarea { font-family: inherit; font-size: inherit; }
 /* 数值列一律等宽数字：输入框/代码/表格/仪表（仪器读数对齐的基本要求） */
-input,textarea,.mono,code,pre,.si-hint,#term-out { font-variant-numeric: tabular-nums; }
+input,textarea,code,pre,.si-hint,#term-out { font-variant-numeric: tabular-nums; }
 pre,textarea,.si-hint,code { user-select: text; }
 ::selection { background: rgba(31, 98, 176, 0.18); }
 
@@ -1481,7 +1481,6 @@ body.auth-locked #v2-conn { background: transparent; }
 /* P1-6：.actions button:disabled（.4/default）散点删除 —— 全局底 .45/not-allowed */
 
 /* ══ 通用 ══ */
-.small { font-size: var(--fs-sm); }
 .dim { color: var(--text-secondary); }
 .err { color: var(--danger); }
 .ok { color: var(--success); }
