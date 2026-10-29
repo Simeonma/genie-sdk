@@ -509,6 +509,53 @@ async function exportScript(askName = true) {
 $("file-save-btn").addEventListener("click", exportCfg);
 $("file-open-btn").addEventListener("click", importCfg);
 $("file-script-btn").addEventListener("click", () => exportScript(true));
+
+/* ── 工作区（G4a 2026-10-30 站长定案）：常显当前路径 + 原生文件夹对话框 ──
+ * 机器级持久设置（服务端 ~/.genie/workspace.json）：换根后会话自动重挂，
+ * 之后的结果/脚本/自动存档 .gensim 都落这里。路径常显（用户不该猜）。 */
+function setFileWorkspacePath(root) {
+  const el = $("file-workspace-path");
+  if (!el) return;
+  el.textContent = root || "";
+  el.title = root ? "当前工作区：" + root : "";
+}
+async function loadFileWorkspace() {
+  try {
+    const r = await fetch("/api/workspace");
+    const j = await r.json();
+    setFileWorkspacePath(j.root || "");
+  } catch { /* 状态面失败不拦页面 */ }
+}
+async function pickFileWorkspace() {
+  const b = $("file-workspace-btn");
+  const btns = $("page-file").querySelectorAll(".tb-btn");
+  btns.forEach((x) => { x.disabled = true; });
+  const old = b.querySelector("span").textContent;
+  b.querySelector("span").textContent = "选择中…";
+  try {
+    const r = await fetch("/api/workspace", { method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.detail || ("HTTP " + r.status));
+    setFileWorkspacePath(j.root);
+    if (j.session === "busy") {
+      toast("工作区已设为 " + j.root + "；会话正忙——空闲后自动生效"
+            + "（或重启 Studio）", "warn");
+    } else if (j.session === "restarted") {
+      toast("工作区已切换：" + j.root + "（会话已重挂）", "ok");
+    } else {
+      toast("工作区已设为 " + j.root, "ok");
+    }
+  } catch (e) {
+    toast("切换工作区失败：" + e.message, "err");
+  } finally {
+    b.querySelector("span").textContent = old;
+    btns.forEach((x) => { x.disabled = false; });
+  }
+}
+$("file-workspace-btn").addEventListener("click", pickFileWorkspace);
+loadFileWorkspace();
 /* load-py 本机文件上岗（G17 走查补漏 2026-10-16）：f4d1e23 只上了钮
  * 没接线——出生即死钮。语义同工作区点行载入：File API 读用户笔记本
  * （零上传），ed.value + input 事件（未存态，Run 前必存进工作区）。 */

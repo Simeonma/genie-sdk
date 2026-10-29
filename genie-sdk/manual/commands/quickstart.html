@@ -343,6 +343,11 @@ pip install https://cdn.jsdelivr.net/gh/Simeonma/genie-sdk@dist/dist/genie_sdk-<
 <p>Where do the URL and credentials come from? The service address and the account come from whoever operates the GENIE deployment being used — there is no public signup.</p>
 <p>Post-install sanity check:</p>
 <pre class="code"><code>python -c <span class="str">&quot;import genie; print(genie.__version__)&quot;</span></code></pre>
+<p>Where do files go? One machine-level workspace holds the scripts, result files, and the auto-saved <code>.gensim</code> documents:</p>
+<pre class="code"><code>genie workspace              <span class="cm"># show the current workspace (and recent ones)</span>
+genie workspace D:\proj      <span class="cm"># set it — everything afterwards lives there</span>
+genie studio                 <span class="cm"># GUI: File → Workspace… picks the same setting</span></code></pre>
+<p>Unset, the workspace defaults to <code>~/data/genie/scripts</code>; result files land under <code>&lt;workspace&gt;/&lt;owner&gt;/genie_results/</code>, and after every successful run the current simulation is auto-saved to <code>&lt;workspace&gt;/&lt;owner&gt;/&lt;session&gt;.gensim</code> (no manual save needed).</p>
 <h2 id="the-whole-script"><a class="anchor" href="#the-whole-script" aria-label="Link to this section">#</a>The whole script</h2>
 <p>This is a real, runnable simulation — a 10-period dielectric grating with a plane-wave source and a frequency-domain transmission monitor:</p>
 <pre class="code"><code><span class="kw">import</span> genie

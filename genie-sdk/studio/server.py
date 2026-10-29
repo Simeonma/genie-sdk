@@ -435,6 +435,56 @@ def create_app(*, static_dir: str | Path | None = None,
             raise HTTPException(status_code=404, detail="脚本不存在")
         return {"name": name, "text": p.read_text(encoding="utf-8")}
 
+    # ── 工作区根（G4a 2026-10-30 站长定案）：查看 / 选择 ─────────────
+    # 机器级持久设置（~/.genie/workspace.json）的唯一读写口；本地 Studio
+    # 的 Workspace… 按钮走 POST（无 path → 服务端原生目录对话框），
+    # 换根后当前会话自动重挂（GENIE_RESULT_DIR/GENIE_DOC_PATH 是 spawn env）。
+    from . import workspace_setting as _ws
+
+    @app.get("/api/workspace")
+    async def workspace_get() -> dict:
+        return {"ok": True, "root": str(_ws.current_root()),
+                "source": _ws.source(), "recents": _ws.recents()}
+
+    @app.post("/api/workspace")
+    async def workspace_set(req: Request) -> dict:
+        if _ws.source() == "env":
+            raise HTTPException(
+                status_code=409,
+                detail="本机设了 GENIE_SESSION_CWD / GENIE_SCRIPTS_DIR，"
+                       "环境变量优先——请改环境变量，或先移除它们再选工作区")
+        body = {}
+        try:
+            body = await req.json()
+        except Exception:   # noqa: BLE001 —— 空体 = 弹原生对话框
+            body = {}
+        path = str((body or {}).get("path") or "").strip()
+        if not path:
+            picked = await run_in_threadpool(_ws.pick_directory)
+            if not picked:
+                raise HTTPException(
+                    status_code=409,
+                    detail="没有选择工作区（或本机系统对话框不可用）——"
+                           "也可在终端用 `genie workspace PATH` 设置")
+            path = picked
+        try:
+            root = await run_in_threadpool(_ws.set_root, path)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        outcome = "remote"
+        if sess is not None and hasattr(sess, "restart_for_workspace"):
+            from .session_client import DEFAULT_SESSION, check_session_id
+            try:
+                r = await run_in_threadpool(
+                    sess.restart_for_workspace,
+                    owner=owner_of(req),
+                    session_id=check_session_id(
+                        req.headers.get("X-Session-Id") or DEFAULT_SESSION))
+                outcome = "busy" if r.get("busy") else "restarted"
+            except Exception:   # noqa: BLE001 —— 会话侧故障不拦设置生效
+                outcome = "remote"
+        return {"ok": True, "root": str(root), "session": outcome}
+
     # ── 工作区文件面板（B3/B4）：脚本 + savefig 图片 + 数据文件统一列、
     # 看、传、下。与 /api/scripts 同款认证；owner 一律 owner_fn(req)。
     # 只列根一层不递归（目录树/配额明确越界不做）。.py 删除也放行——

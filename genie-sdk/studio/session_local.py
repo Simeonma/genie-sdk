@@ -68,6 +68,11 @@ class LocalSessionHost:
         部署的 /api/exec/reset 走这里（修前 cli 无此方法 → 500）。"""
         return _svc.get_kernel(owner, session_id).reset()
 
+    def restart_for_workspace(self, *, owner: str,
+                              session_id: str = DEFAULT_SESSION) -> dict:
+        """切工作区后重挂会话（G4a）：与 SessionKernel 同名方法同鸭子面。"""
+        return _svc.get_kernel(owner, session_id).restart_for_workspace()
+
     def attach(self, *, owner: str, session_id: str = DEFAULT_SESSION,
                key: str = "") -> dict:
         return _svc.get_kernel(owner, session_id).attach(key)

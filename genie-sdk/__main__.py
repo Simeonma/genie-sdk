@@ -199,6 +199,43 @@ def cmd_connect(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_workspace(args: argparse.Namespace) -> int:
+    """``genie workspace [PATH]``：查看 / 设置当前工作区（G4a 2026-10-30）。
+
+    无参 = 显示当前工作区与来源（env/设置/缺省）+ 最近列表；带参 = 设为
+    当前工作区（目录不存在则创建，校验可写）。机器级持久：之后所有会话、
+    结果、脚本、自动存档的 .gensim 都跟着它走（已开的 Studio 需重启会话
+    才换根——GUI 的 Workspace… 按钮会自动重挂）。"""
+    from genie.studio import workspace_setting as ws
+
+    if not args.path:
+        root = ws.current_root()
+        src = {"env": "环境变量", "setting": "本机设置",
+               "default": "缺省值"}[ws.source()]
+        print(f"当前工作区：{root}  （来源：{src}）")
+        rec = ws.recents()
+        if rec:
+            print("最近使用：")
+            for r in rec:
+                print("  " + r)
+        if ws.source() == "env":
+            print("· 环境变量 GENIE_SESSION_CWD/GENIE_SCRIPTS_DIR 优先——"
+                  "要改请改环境变量或先移除它们")
+        return 0
+    try:
+        p = ws.set_root(args.path)
+    except ValueError as e:
+        print(f"✗ {e}")
+        return 1
+    print(f"✓ 工作区已设为：{p}")
+    print("· 之后的结果/脚本/自动存档 .gensim 都落在这里")
+    if ws.source() == "env":
+        print("⚠ 但本机设了 GENIE_SESSION_CWD/GENIE_SCRIPTS_DIR，"
+              "环境变量仍优先——实际生效的是它")
+    print("· 已开着的 Studio 需重启会话（File → Workspace… 会自动重挂）")
+    return 0
+
+
 def cmd_login(args: argparse.Namespace) -> int:
     """``genie login``：人输一次账号密码 → 直连 ``/api/auth/login`` 换 token
     存本机（G72 终稿：复用 ``Client.login`` 同一条轨，无设备码/轮询）。
@@ -290,6 +327,11 @@ def main(argv: list[str] | None = None) -> int:
     lo = sub.add_parser("logout", help="吊销本机 token（/tokens/self）并清除本机凭据")
     lo.add_argument("--gateway", default="", help="网关地址（缺省走解析链）")
     lo.set_defaults(fn=cmd_logout)
+    wsc = sub.add_parser(
+        "workspace", help="查看 / 设置当前工作区（结果与文档都落这里）")
+    wsc.add_argument("path", nargs="?", default="",
+                     help="工作区目录（缺省 = 显示当前设置与最近列表）")
+    wsc.set_defaults(fn=cmd_workspace)
     ns = ap.parse_args(argv)
     if ns.cmd is None:                  # 裸敲 genie = studio（一键形态）
         ns.cmd = "studio"

@@ -37,6 +37,20 @@ Post-install sanity check:
 python -c "import genie; print(genie.__version__)"
 ```
 
+Where do files go? One machine-level workspace holds the scripts, result
+files, and the auto-saved `.gensim` documents:
+
+```bash
+genie workspace              # show the current workspace (and recent ones)
+genie workspace D:\proj      # set it — everything afterwards lives there
+genie studio                 # GUI: File → Workspace… picks the same setting
+```
+
+Unset, the workspace defaults to `~/data/genie/scripts`; result files land
+under `<workspace>/<owner>/genie_results/`, and after every successful run
+the current simulation is auto-saved to `<workspace>/<owner>/<session>.gensim`
+(no manual save needed).
+
 ## The whole script
 
 This is a real, runnable simulation — a 10-period dielectric grating with a

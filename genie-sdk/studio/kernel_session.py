@@ -44,16 +44,17 @@ _GC_MIN_AGE_S = 7 * 86400  # 且只清 7 天以前创建的（新会话不动）
 def workspace_root() -> Path:
     """脚本/产物工作区根（B1 按人隔离：其下再按 owner 分一层）。
 
-    解析链与 session 服务落位一致：GENIE_SESSION_CWD → GENIE_SCRIPTS_DIR
-    → 缺省 ~/data/genie/scripts。
+    解析链（G4a 2026-10-30 站长定案，**唯一口径** = workspace_setting）：
+    ``GENIE_SESSION_CWD`` → ``GENIE_SCRIPTS_DIR`` → 本机持久设置
+    （``~/.genie/workspace.json``，`genie workspace PATH` / Studio
+    Workspace… 按钮写它）→ 缺省 ``~/data/genie/scripts``。
 
     **唯一一份**（M2）：此前 studio 侧另有一份 ``GENIE_SCRIPTS_DIR`` 解析，
     只设 ``GENIE_SESSION_CWD`` 时两处得出不同根目录——"文件面板看不到脚本"
     的根源。现在双方都调本函数。
     """
-    return Path(os.environ.get("GENIE_SESSION_CWD")
-                or os.environ.get("GENIE_SCRIPTS_DIR")
-                or Path.home() / "data/genie/scripts")
+    from . import workspace_setting
+    return workspace_setting.current_root()
 
 
 def _session_root() -> Path:
@@ -301,6 +302,19 @@ class SessionKernel:
                    + ("（在途执行已作废）" if had_inflight else ""))
         return {"ok": True, "session_id": self._session_id,
                 "dropped_inflight": had_inflight}
+
+    def restart_for_workspace(self) -> dict:
+        """切工作区后的会话重挂（G4a 2026-10-30）：
+
+        ``GENIE_RESULT_DIR`` / ``GENIE_DOC_PATH`` 是 spawn env——换根必须
+        重生 worker；模型状态由 session_state.json 重放（与 ``reset()``
+        同一条 B2 路径）。忙（作业/脚本在跑）→ 拒绝，让用户等它结束。
+        """
+        if self.busy:
+            return {"ok": False, "busy": True}
+        self._respawn()
+        self._note("工作区已切换：" + str(workspace_root()))
+        return {"ok": True, "busy": False}
 
     def output(self, since: int) -> dict:
         """读取会话快照（**纯读**，不唤起——唤起是产品策略，见 ``ensure()``）。"""
