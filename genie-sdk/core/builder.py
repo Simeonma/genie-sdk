@@ -558,11 +558,13 @@ class Materials:
             raise ValueError(
                 "add_from_library(library) requires a non-empty string")
         from . import material as gm  # lazy：import genie 不背 scipy 面
+        from .nkdata import material_color
 
         wl, n_arr, k_arr = gm.load_library_nk(library)
         res = gm.fit_nk((wl, n_arr, k_arr), fit_range=fit_range,
                         n_drude=n_drude, n_lorentz=n_lorentz,
-                        maxfev=maxfev, name=name or library)
+                        maxfev=maxfev, name=name or library,
+                        color=material_color(library))
         node = res["material_node"]
         if node is None:
             raise ValueError(

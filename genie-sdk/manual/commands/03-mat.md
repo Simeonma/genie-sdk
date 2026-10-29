@@ -55,6 +55,8 @@ f.mat.add_lorentz().name('au_fit') \
 
 Takes data from the built-in n-k material library (bundled locally, works offline, 37 materials) → fits on the client → registers a lorentz pole material node. Computed immediately (not a lazy setter): the config carries the poles themselves, identical locally and in the cloud. Returns: the registered pole material node.
 
+The node also carries the library's preset display colour (e.g. `Au` → `#C9A227`) so the 3D view shows gold as gold; it is display-only and can be overridden with `.color(...)` or cleared to fall back to the automatic per-name colour.
+
 | Param | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `library` | str | ✓ | — | Library name, e.g. `'Au'`; `genie.material.list_library_materials()` lists all |

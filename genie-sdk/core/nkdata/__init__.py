@@ -36,7 +36,39 @@ import numpy as np
 
 _NKDATA_DIR = Path(__file__).resolve().parent   # 进包后 yml 与本文件同包（阶段 ④ 搬家）
 
-__all__ = ["load_nk_data", "available_materials"]
+__all__ = ["load_nk_data", "available_materials", "material_color",
+           "MATERIAL_COLORS"]
+
+#: 材料库预设显示色（库名 → "#RRGGBB"）。
+#: **只是显示**（wire 的 MaterialSpec.color），不影响物理；用户在表单
+#: "显示色"里可改、点"自动"回到按名散列。纪律与 SCENE_PALETTE 同一
+#: 明度带（中明度、低饱和）：金属给特征色相（金/铜/银），半导体偏石板
+#: 蓝，介质偏浅冷灰。缺表项 → 前端按名散列（行为不变）。
+MATERIAL_COLORS = {
+    # ── 金属 ──
+    "Au": "#C9A227",   # 金
+    "Ag": "#C0C6CC",   # 银
+    "Al": "#B8C0C8",   # 铝
+    "Cu": "#B87333",   # 铜
+    "Pt": "#B2B8BE", "Pd": "#AEB6BE", "Rh": "#C6CCD2",
+    "Ti": "#8E99A6", "Cr": "#9AA4AE", "Mo": "#8A929C", "W": "#808A94",
+    "Ta": "#8C96A0", "Ni": "#A9B2BA", "Co": "#8FA0B6", "Fe": "#8B96A1",
+    # ── 半导体 ──
+    "Si": "#6E7C96", "Ge": "#7A8493", "SiC": "#7E8C84",
+    "GaAs": "#7C8FA6", "GaN": "#8FA9C4", "GaP": "#86A88F", "GaSb": "#7E8A9E",
+    "InP": "#8AA3B8", "InAs": "#7E93A8", "InSb": "#74839A",
+    "CdTe": "#8B8FA8", "AlSb": "#7F8C9E", "ZnO": "#9FB6C8", "ZnSe": "#9AA8BE",
+    "Si3N4": "#97A3B0",
+    # ── 介质 / 氧化物 ──
+    "SiO2": "#A9C7E8", "Al2O3": "#B4C3D2", "HfO2": "#A8B6C4",
+    "TiO2": "#B9C0D0", "Nb2O5": "#B0B8CC",
+    "MgF2": "#C6D3DD", "CaF2": "#CFDAE2",
+}
+
+
+def material_color(name):
+    """库名 → 预设显示色（无此项返回 None；调用方退回按名散列）。"""
+    return MATERIAL_COLORS.get(str(name or ""))
 
 
 def _check_material_name(material_name):

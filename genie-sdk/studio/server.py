@@ -313,6 +313,7 @@ def create_app(*, static_dir: str | Path | None = None,
 
             def _fit():
                 from genie.core.material import fit_nk, load_library_nk
+                from genie.core.nkdata import material_color
                 lib = body.get("library")
                 nk = body.get("nk")
                 if (lib is None) == (nk is None):
@@ -342,7 +343,9 @@ def create_app(*, static_dir: str | Path | None = None,
                         n_drude=_int_param("n_drude"),
                         n_lorentz=_int_param("n_lorentz"),
                         maxfev=_int_param("maxfev"),
-                        name=name)
+                        name=name,
+                        # G46：库材料带预设显示色（自备 nk 文本不带）
+                        color=material_color(lib) if lib is not None else None)
                 except ValueError as e:
                     # fit_nk 的全部输入契约错（含窗内非有限值，R38 G86）
                     # 都带可操作文案——422 透传，不许 500。

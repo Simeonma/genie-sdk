@@ -181,6 +181,18 @@ def _gen_materials(list_, W: list, env: dict) -> list[str]:
     def tag(i, name=None):
         return f"materials[{i}]" + (f" {name}" if name else "")
 
+    def color_part(mt, i):
+        """显示色（G46 2026-10-30）：wire 的 MaterialSpec.color 合法才发射
+        ——库材料自带预设色，cfg↔脚本往返必须带得走（否则重建回退散列色）。"""
+        c = mt.get("color")
+        if c is None:
+            return None
+        s = str(c).strip().lstrip("#")
+        if not re.fullmatch(r"[0-9a-fA-F]{6}", s):
+            W.append(tag(i) + " color 非法（须 #RRGGBB），已跳过")
+            return None
+        return ".color(" + py_str("#" + s.upper()) + ")"
+
     for i, mt in enumerate(list_ or []):
         if not isinstance(mt, dict):   # G126：条目非对象不裸崩
             W.append(f"materials[{i}] 不是对象（"
@@ -192,6 +204,9 @@ def _gen_materials(list_, W: list, env: dict) -> list[str]:
                 parts.append(".name(" + py_str(mt.get("name")) + ")")
             else:
                 W.append(tag(i) + "缺 name")
+            cp = color_part(mt, i)
+            if cp:
+                parts.append(cp)
             eps_s = _num_or_list(mt.get("eps"), env, W, f"materials[{i}].eps")
             if eps_s is not None:
                 parts.append(".eps(" + eps_s + ")")
@@ -209,6 +224,9 @@ def _gen_materials(list_, W: list, env: dict) -> list[str]:
                 parts.append(".name(" + py_str(mt.get("name")) + ")")
             else:
                 W.append(tag(i) + "缺 name")
+            cp = color_part(mt, i)
+            if cp:
+                parts.append(cp)
             ei = _num_or_list(mt.get("eps_inf"), env, W, f"materials[{i}].eps_inf")
             if ei is not None and mt.get("eps_inf") != _DEF["eps_inf"]:
                 parts.append(".eps_inf(" + ei + ")")

@@ -342,12 +342,13 @@ def _fit_range_bounds(fit_range):
     return lo, hi
 
 
-def _scalar_result(fit, w, n_data, k_data, default_name):
+def _scalar_result(fit, w, n_data, k_data, default_name, color=None):
     """Assemble the single-component result dict（Studio 端点/GUI 契约形态）。
 
     ``fit`` is a ``_ComponentFit``; ``w``/``n_data``/``k_data`` are the masked
     in-window arrays.  The config ``material_node`` is built only when the fit
-    converged AND eps_inf > 0.
+    converged AND eps_inf > 0.  ``color``（G46 2026-10-30）= 库材料预设显示
+    色（"#RRGGBB"），只随节点下行供 3D/表单上色，不参与任何物理。
     """
     omega = 2.0 * np.pi * _C0_SI / w
     d = _evaluate_dispersion(fit.eps_inf, fit.poles, omega)
@@ -383,6 +384,8 @@ def _scalar_result(fit, w, n_data, k_data, default_name):
                 "name": default_name,
                 "eps_inf": float(fit.eps_inf),
                 "poles": poles}
+        if color:                      # 库材料预设显示色（G46）：只显示
+            node["color"] = color
         try:
             _sanity_check_lorentz_node(node)
         except ValueError as e:
@@ -415,14 +418,15 @@ _ANISO_AXES = {"xx": (1.0, 0.0, 0.0), "yy": (0.0, 1.0, 0.0),
                "zz": (0.0, 0.0, 1.0)}
 
 
-def _anisotropic_node(per_component, name):
+def _anisotropic_node(per_component, name, color=None):
     """把 xx/yy/zz 三份 iso 拟合组装成一个各向异性 lorentz 节点。
 
     eps_inf = [exx, eyy, ezz]（3 元对角）；每轴每个极点转 rank-1
     （alpha=轴单位向量，beta 不写——线格式语义缺省 beta=alpha）。
     任一轴 material_node 为 None（未收敛/eps_inf≤0/校验失败）→ 返回
     None，原因在该轴已折叠进 warnings 的条目里。dict 输入（自定义
-    分量名）不走这里——保持 dict-of-nodes 形态。
+    分量名）不走这里——保持 dict-of-nodes 形态。``color`` 同
+    ``_scalar_result``（库材料预设显示色，只显示）。
     """
     axes = ("xx", "yy", "zz")
     if any(per_component[c]["material_node"] is None for c in axes):
@@ -433,15 +437,18 @@ def _anisotropic_node(per_component, name):
             q = dict(p)
             q["alpha"] = list(_ANISO_AXES[c])
             poles.append(q)
-    return {"type": "lorentz", "name": name,
+    node = {"type": "lorentz", "name": name,
             "eps_inf": [per_component[c]["eps_inf"] for c in axes],
             "poles": poles}
+    if color:
+        node["color"] = color
+    return node
 
 
 def fit_nk(nk, fit_range=LIBRARY_FIT_DEFAULTS["fit_range"],
            n_drude=LIBRARY_FIT_DEFAULTS["n_drude"],
            n_lorentz=LIBRARY_FIT_DEFAULTS["n_lorentz"],
-           maxfev=LIBRARY_FIT_DEFAULTS["maxfev"], name=None):
+           maxfev=LIBRARY_FIT_DEFAULTS["maxfev"], name=None, color=None):
     """Fit n-k data to a Drude-Lorentz model → poles config.
 
     Parameters
@@ -464,6 +471,11 @@ def fit_nk(nk, fit_range=LIBRARY_FIT_DEFAULTS["fit_range"],
     name : str | None
         Name for the config ``material_node`` (defaults to "fitted" for a
         3-tuple, or the component key for multi-component input).
+    color : str | None
+        Optional display colour ("#RRGGBB") written onto the config node
+        (G46 2026-10-30: library materials carry a preset colour so the 3D
+        view shows gold as gold).  Display only — never part of the physics;
+        the user can override or clear it in the form / script.
 
     Returns
     -------
@@ -562,9 +574,9 @@ def fit_nk(nk, fit_range=LIBRARY_FIT_DEFAULTS["fit_range"],
 
     if is_scalar:
         w, nd, kd = fit_data['']
-        return _scalar_result(fits[''], w, nd, kd, name or "fitted")
+        return _scalar_result(fits[''], w, nd, kd, name or "fitted", color)
 
-    out = {c: _scalar_result(fits[c], *fit_data[c], name or c)
+    out = {c: _scalar_result(fits[c], *fit_data[c], name or c, color)
            for c in comps}
     result = {
         "converged": {c: o["converged"] for c, o in out.items()},
@@ -580,7 +592,8 @@ def fit_nk(nk, fit_range=LIBRARY_FIT_DEFAULTS["fit_range"],
     # materials 数组；拟合明细（converged/eps_inf/poles/quality）仍按
     # 分量键控。dict 输入保持 dict-of-nodes（自定义分量名不假定是轴）。
     if is_aniso:
-        result["material_node"] = _anisotropic_node(out, name or "fitted")
+        result["material_node"] = _anisotropic_node(out, name or "fitted",
+                                                    color)
     return result
 
 
