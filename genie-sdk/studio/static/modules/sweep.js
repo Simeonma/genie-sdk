@@ -111,13 +111,15 @@ function sweepPaneEvent(d) {
     return;
   }
   if (!d.sweep_id) return;
-  sweepState.sweepId = d.sweep_id;
   const total = Number(d.total) || 0;
   const r = d.rollup || {};
   const pending = (r.pending || 0) + (r.running || 0);
   const finished = Math.max(0, total - pending);
   const bad = Math.max(0, finished - (r.succeeded || 0));
   const terminal = d.state && d.state !== "running" && d.state !== "pending";
+  /* 只有"有成功点"的扫描才值得 Plot（全失败 → 立方没有一片真数据；
+     但跑完后从历史回放里恢复"最近一次可画"的扫描是想要的行为）。 */
+  if (!terminal || (r.succeeded || 0) > 0) sweepState.sweepId = d.sweep_id;
   if (terminal) {
     sweepState.running = false;
     sweepState.status = (d.state === "done" ? "✓ 完成 " : "✗ 已中止 ")
@@ -197,11 +199,18 @@ async function sweepPlot() {
 
 function _sweepAxisRow(i, names) {
   const a = sweepState.axes[i];
-  const row = document.createElement("div");
-  row.className = "frow sweep-axis";
+  const box = document.createElement("div");
+  box.className = "sweep-axis";
+
+  /* 头行：参数 + 方式 + 删除。中栏只有 ~315px，轴行必须分两行放——
+   * 单行塞「参数 + 方式 + 三个取值输入」必然横向溢出，浏览器一聚焦
+   * 输入就把容器滚右，左边的 select 被裁掉（2026-10-30 截图实证）。 */
+  const head = document.createElement("div");
+  head.className = "frow sweep-axis-head";
 
   const sel = document.createElement("select");
-  sel.className = "flabel";
+  sel.className = "sweep-param";
+  sel.title = "要扫描的参数";
   const ph = document.createElement("option");
   ph.value = ""; ph.textContent = "参数…";
   sel.appendChild(ph);
@@ -212,11 +221,12 @@ function _sweepAxisRow(i, names) {
   }
   sel.value = a.name;
   sel.addEventListener("change", () => { a.name = sel.value; });
-  row.appendChild(sel);
+  head.appendChild(sel);
 
   const mode = document.createElement("select");
-  mode.className = "param-value";
-  [["linspace", "线性"], ["logspace", "对数 10^x"], ["values", "列表"]]
+  mode.className = "sweep-mode";
+  mode.title = "取值方式：线性 / 对数(10 的指数) / 显式列表";
+  [["linspace", "线性"], ["logspace", "对数"], ["values", "列表"]]
     .forEach(([v, l]) => {
       const o = document.createElement("option");
       o.value = v; o.textContent = l;
@@ -227,32 +237,10 @@ function _sweepAxisRow(i, names) {
     a.mode = mode.value;
     renderSweepPane();      /* 取值控件形态变了：整页重建（同一份 state） */
   });
-  row.appendChild(mode);
-
-  if (a.mode === "values") {
-    const inp = document.createElement("input");
-    inp.className = "param-value sweep-values";
-    inp.placeholder = "1e-7, 2e-7, 3e-7";
-    inp.value = a.values;
-    inp.addEventListener("input", () => { a.values = inp.value; sweepUpdateTotal(); });
-    row.appendChild(inp);
-  } else {
-    const mk = (key, placeholder) => {
-      const inp = document.createElement("input");
-      inp.className = "param-value sweep-num";
-      inp.placeholder = placeholder;
-      inp.value = a[key];
-      inp.addEventListener("input", () => { a[key] = inp.value; sweepUpdateTotal(); });
-      return inp;
-    };
-    const log = a.mode === "logspace";
-    row.appendChild(mk("a", log ? "起(指数)" : "起点"));
-    row.appendChild(mk("b", log ? "止(指数)" : "终点"));
-    row.appendChild(mk("n", "点数"));
-  }
+  head.appendChild(mode);
 
   const del = document.createElement("button");
-  del.className = "mini";
+  del.className = "mini sweep-del";
   del.textContent = "✕";
   del.title = "删掉这条轴";
   del.addEventListener("click", () => {
@@ -260,8 +248,42 @@ function _sweepAxisRow(i, names) {
     if (!sweepState.axes.length) sweepState.axes = [_sweepNewAxis()];
     renderSweepPane();
   });
-  row.appendChild(del);
-  return row;
+  head.appendChild(del);
+  box.appendChild(head);
+
+  /* 取值行：独立一行，输入占满，不挤 select */
+  const vals = document.createElement("div");
+  vals.className = "frow sweep-axis-vals";
+  if (a.mode === "values") {
+    const inp = document.createElement("input");
+    inp.className = "param-value sweep-values";
+    inp.placeholder = "1e-7, 2e-7, 3e-7";
+    inp.value = a.values;
+    inp.addEventListener("input", () => {
+      a.values = inp.value;
+      sweepUpdateTotal();
+    });
+    vals.appendChild(inp);
+  } else {
+    const mk = (key, placeholder) => {
+      const inp = document.createElement("input");
+      inp.className = "param-value sweep-num";
+      inp.placeholder = placeholder;
+      inp.title = placeholder;
+      inp.value = a[key];
+      inp.addEventListener("input", () => {
+        a[key] = inp.value;
+        sweepUpdateTotal();
+      });
+      return inp;
+    };
+    const log = a.mode === "logspace";
+    vals.appendChild(mk("a", log ? "起(指数)" : "起点"));
+    vals.appendChild(mk("b", log ? "止(指数)" : "终点"));
+    vals.appendChild(mk("n", "点数"));
+  }
+  box.appendChild(vals);
+  return box;
 }
 
 function renderSweepPane() {
@@ -323,9 +345,9 @@ function renderSweepPane() {
 
   const optRow = document.createElement("div");
   optRow.className = "frow";
-  optRow.appendChild(_sweepLab("并发"));
+  optRow.appendChild(_sweepLab("并发", "sweep-lab"));
   const conc = document.createElement("select");
-  conc.className = "param-value";
+  conc.className = "param-value sweep-opt";
   for (const n of [1, 2, 3, 4]) {
     const o = document.createElement("option");
     o.value = String(n); o.textContent = String(n);
@@ -334,9 +356,9 @@ function renderSweepPane() {
   conc.value = String(sweepState.maxParallel || 1);
   conc.addEventListener("change", () => { sweepState.maxParallel = +conc.value; });
   optRow.appendChild(conc);
-  optRow.appendChild(_sweepLab("失败"));
+  optRow.appendChild(_sweepLab("失败", "sweep-lab"));
   const fail = document.createElement("select");
-  fail.className = "param-value";
+  fail.className = "param-value sweep-opt";
   [["continue", "继续跑"], ["abort", "首败即停"]].forEach(([v, l]) => {
     const o = document.createElement("option");
     o.value = v; o.textContent = l;
