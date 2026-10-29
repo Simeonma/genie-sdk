@@ -185,6 +185,108 @@ def build_aggregate(points: list[dict], axis_names: list[str],
     return arrays, meta
 
 
+class SweepSet:
+    """磁盘上的一个扫描（G182 P5）：读 ``sweep.json`` + 点文档。
+
+    **不打开任何仿真实例**（站长 2026-10-30 裁：读取只要聚合结果）——
+    公开入口 ``genie.open_sweep(dir)``。可用于新会话/另一台机器。
+    """
+
+    def __init__(self, sweep_dir):
+        p = Path(sweep_dir).expanduser()
+        if not p.is_dir():
+            raise ValueError(f"扫描文件夹不存在：{p}")
+        mp = p / MANIFEST_NAME
+        if not mp.is_file():
+            raise ValueError(
+                f"不是扫描文件夹（缺 {MANIFEST_NAME}）：{p}")
+        try:
+            data = json.loads(mp.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            raise ValueError(f"扫描索引读不了（{mp}）：{e}") from e
+        if not isinstance(data, dict) or data.get("version") != 1:
+            raise ValueError(f"扫描索引版本不支持：{mp}")
+        self.dir = p
+        self.manifest = data
+        self.name = str(data.get("name") or "")
+        self.axes = data.get("axes") or []
+        self.state = str(data.get("state") or "")
+        self.created = str(data.get("created") or "")
+        self.settings = dict(data.get("settings") or {})
+        self.points = list(data.get("points") or [])
+        self.axis_names = [a.get("name") for a in self.axes
+                           if isinstance(a, dict) and a.get("name")]
+        if not self.axis_names and self.points:
+            self.axis_names = list(self.points[0].get("params") or {})
+
+    # ---- 元数据 ----
+
+    def doc_path(self, i: int) -> Path | None:
+        """第 i 点的文档路径（文件夹内相对名 → 绝对；无 → None）。"""
+        name = str((self.points[i] or {}).get("doc") or "")
+        return (self.dir / name) if name else None
+
+    def rollup(self) -> dict:
+        c: dict = {}
+        for p in self.points:
+            key = str(p.get("state") or "pending")
+            c[key] = c.get(key, 0) + 1
+        return c
+
+    def status(self) -> dict:
+        return {"sweep_id": self.manifest.get("sweep_id", ""),
+                "state": self.state, "dir": str(self.dir),
+                "rollup": self.rollup(),
+                "points": [{"idx": i, "state": p.get("state"),
+                            "job_id": p.get("job_id"),
+                            "doc": p.get("doc")}
+                           for i, p in enumerate(self.points)]}
+
+    # ---- 聚合（从点文档读结果，零 HTTP）----
+
+    def digests(self) -> list[dict | None]:
+        import io
+
+        from . import simfile
+        out: list[dict | None] = []
+        for i, p in enumerate(self.points):
+            if str(p.get("state")) != "succeeded":
+                out.append(None)
+                continue
+            doc = self.doc_path(i)
+            if doc is None or not doc.is_file():
+                out.append(None)
+                continue
+            try:
+                data = simfile.result_bytes(doc)
+                if data is None:
+                    out.append(None)
+                    continue
+                import h5py
+                from .results import SimData
+                with h5py.File(io.BytesIO(data), "r") as h5:
+                    out.append(SimData(
+                        h5, job_id=str(p.get("job_id") or "")).digest)
+            except Exception:   # noqa: BLE001 —— 坏点文档 → NaN 行
+                out.append(None)
+        return out
+
+    def aggregate(self) -> dict:
+        """聚合列 dict（``param_*`` 轴列 + digest 数值列 + NaN 语义）。
+
+        与活句柄 ``SweepHandle.aggregate()`` 同一函数/同一契约——点参数
+        来自索引、数值来自各点文档内嵌 h5。
+        """
+        points = [{"parameters": dict(p.get("params") or {})}
+                  for p in self.points]
+        arrays, _meta = build_aggregate(points, self.axis_names,
+                                        self.digests())
+        return arrays
+
+    def __repr__(self) -> str:  # pragma: no cover —— 调试便利
+        return f"<SweepSet {self.name!r} {self.state} dir={self.dir}>"
+
+
 class SweepHandle:
     """客户端 sweep 编排：N 个点实例 × run() 原语的窗口执行。
 

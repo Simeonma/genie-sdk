@@ -119,7 +119,7 @@ _wire_agent_surface()
 # （G174/R33：preview_script/check_script 公开名已随硬摘轮删除——
 #  锁 = test_public_surface_contract「名字不在公开面」。）
 __all__ = [
-    "connect", "open", "Simulation", "SweepHandle",
+    "connect", "open", "open_sweep", "Simulation", "SweepHandle",
     "TimeResult", "FreqResult", "IndexResult",
     "GenieError", "GenieHTTPError", "GenieJobError", "GenieConfigError",
     "material",
@@ -212,6 +212,22 @@ def open(path) -> Simulation:
     f.load_config(cfg)
     f._doc_path = str(path)
     return f
+
+
+def open_sweep(sweep_dir) -> "SweepSet":
+    """打开一个**磁盘上的扫描文件夹**（G182 P5）→ ``SweepSet``。
+
+    只读索引 + 点文档里的结果：``axes`` / ``points``（元数据）/
+    ``rollup()`` / ``aggregate()``；**不打开任何逐点仿真实例**（站长
+    2026-10-30 裁：读取只要聚合结果）。典型用法：
+
+    ``sw = genie.open_sweep("D:/proj/sweeps/pitch-20261030-0217")``
+    ``agg = sw.aggregate()``   # param_* + pt_* 列，与活句柄同契约
+
+    与 ``f.sweep()`` 的活句柄互补：一个跑，一个读；同一个文件夹。
+    """
+    from .core.sweep import SweepSet
+    return SweepSet(sweep_dir)
 
 
 def _alive_card() -> dict | None:
