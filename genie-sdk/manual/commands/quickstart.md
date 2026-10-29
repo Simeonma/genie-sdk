@@ -49,7 +49,9 @@ genie studio                 # GUI: File → Workspace… picks the same setting
 Unset, the workspace defaults to `~/data/genie/scripts`; result files land
 under `<workspace>/<owner>/genie_results/`, and after every successful run
 the current simulation is auto-saved to `<workspace>/<owner>/<session>.gensim`
-(no manual save needed).
+(no manual save needed). Opening a `.gensim` in Studio (`File → Open…`)
+also **switches the workspace to that file's folder** and makes the opened
+file the auto-save target — so a run updates the document you opened.
 
 ## The whole script
 

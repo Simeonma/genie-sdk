@@ -505,9 +505,51 @@ async function exportScript(askName = true) {
   }
 }
 
+/* ── 打开仿真（G4a 2026-10-30 站长定案）：Open = 打开文件 + 工作区切到
+ * 它所在文件夹。浏览器拿不到真实路径，所以先走服务端原生文件对话框
+ * （/api/sim/open）；本机没有系统对话框时退回浏览器上传（importCfg）。 */
+async function openSimulation() {
+  const b = $("file-open-btn");
+  const btns = $("page-file").querySelectorAll(".tb-btn");
+  btns.forEach((x) => { x.disabled = true; });
+  try {
+    const r = await fetch("/api/sim/open", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: "{}" });
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 422) { toast("打开失败：" + (j.detail || r.status), "err"); return; }
+    if (!r.ok) throw new Error(j.detail || ("HTTP " + r.status));
+    if (j.ok === false) {
+      if (j.reason === "cancelled") return;      /* 用户取消，静默 */
+      importCfg();                               /* 无原生对话框 → 回退上传 */
+      return;
+    }
+    const ok = await replaceModel(j.cfg, "gensim");
+    if (window.loadWorkspaceFiles) loadWorkspaceFiles();
+    setFileWorkspacePath(j.workspace || "");
+    if (j.session === "busy") {
+      toast("已打开（工作区切换到 " + j.workspace + "；会话正忙，"
+            + "自动存档将在下个作业前生效）", "warn");
+    } else {
+      toast("已打开 " + j.doc + "；工作区 = " + j.workspace, "ok");
+    }
+    if (j.has_results && j.job_id) {
+      window.__lastJobId = j.job_id;
+      window.__resultStatus = null;
+      if (typeof enterResult === "function") enterResult(true);
+      if (typeof refreshResultChip === "function") refreshResultChip();
+    }
+    return ok;
+  } catch (e) {
+    toast("打开仿真失败：" + e.message, "err");
+    return null;
+  } finally {
+    btns.forEach((x) => { x.disabled = false; });
+  }
+}
+
 /* 直钮绑定（File▾ 下拉已删）：处理器零事件参数依赖，直接挂 */
 $("file-save-btn").addEventListener("click", exportCfg);
-$("file-open-btn").addEventListener("click", importCfg);
+$("file-open-btn").addEventListener("click", openSimulation);
 $("file-script-btn").addEventListener("click", () => exportScript(true));
 
 /* ── 工作区（G4a 2026-10-30 站长定案）：常显当前路径 + 原生文件夹对话框 ──

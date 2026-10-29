@@ -378,12 +378,15 @@ def create_app(*, static_dir: str | Path | None = None,
     _scripts_dir.mkdir(parents=True, exist_ok=True)
 
     def _owner_scripts_dir(req: Request) -> Path:
-        """本请求的 owner 脚本目录 = 根/<owner>/（懒落位 0700；白名单
-        = session_client.check_owner 全仓唯一一份——owner 用作目录名，
-        路径穿越/非 ASCII 一律拒）。"""
+        """本请求的 owner 脚本目录 = **当前**工作区根/<owner>/（懒落位 0700）。
+
+        工作区根**每次请求重解析**（G4a 2026-10-30）：`genie workspace` /
+        Workspace… 按钮切换后，文件面板/导入/结果必须立刻跟到新根——修前
+        在这里把根钉死在进程启动时，换根要重启 Studio 才生效。
+        """
         owner = str(owner_of(req) or "local")
         check_owner(owner)
-        d = _scripts_dir / owner
+        d = workspace_root() / owner
         d.mkdir(parents=True, exist_ok=True)
         os.chmod(d, 0o700)   # mkdir 的 mode 受 umask 影响，落位后显式收紧
         return d
@@ -484,6 +487,57 @@ def create_app(*, static_dir: str | Path | None = None,
             except Exception:   # noqa: BLE001 —— 会话侧故障不拦设置生效
                 outcome = "remote"
         return {"ok": True, "root": str(root), "session": outcome}
+
+    @app.post("/api/sim/open")
+    async def sim_open(req: Request) -> dict:
+        """打开本机 ``.gensim``（服务端原生对话框）→ **工作区切到它所在目录**。
+
+        与浏览器上传的本质区别：本机 Python 进程拿得到**真实路径**。所以
+        "打开文件"能同时做三件事（G4a 2026-10-30 站长定案）：
+        ① 载入模型；② 工作区根 = 文件所在文件夹（结果/脚本跟着走）；
+        ③ 把自动存档钉回这个文件（之后跑完直接更新它）。
+        文件恢复/结果回落复用 ``sim_import`` 的同一份实现。
+        """
+        body = {}
+        try:
+            body = await req.json()
+        except Exception:   # noqa: BLE001 —— 空体 = 弹原生文件对话框
+            body = {}
+        path = str((body or {}).get("path") or "").strip()
+        if not path:
+            picked = await run_in_threadpool(_ws.pick_file)
+            if not picked:
+                return {"ok": False,
+                        "reason": "cancelled" if os.name == "nt"
+                        else "unavailable"}
+            path = picked
+        p = Path(path).expanduser()
+        if not p.is_file():
+            raise HTTPException(status_code=422, detail=f"文件不存在：{p}")
+        if _ws.source() == "env":
+            switched = _ws.current_root()      # env 优先：不切根，如实回报
+        else:
+            switched = await run_in_threadpool(_ws.set_root, p.parent)
+        from .session_client import DEFAULT_SESSION, check_session_id
+        sid = check_session_id(req.headers.get("X-Session-Id")
+                               or DEFAULT_SESSION)
+        from .kernel_session import set_doc_path
+        await run_in_threadpool(set_doc_path, owner_of(req), sid, str(p))
+        sess_state = "remote"
+        if sess is not None and hasattr(sess, "restart_for_workspace"):
+            try:
+                r = await run_in_threadpool(
+                    sess.restart_for_workspace, owner=owner_of(req),
+                    session_id=sid)
+                sess_state = "busy" if r.get("busy") else "restarted"
+            except Exception:   # noqa: BLE001 —— 会话侧故障不拦打开
+                sess_state = "remote"
+        from starlette.datastructures import UploadFile as _UploadFile
+        with open(p, "rb") as fh:
+            out = await sim_import(req, _UploadFile(file=fh, filename=p.name))
+        out.update({"workspace": str(switched), "doc": str(p),
+                    "session": sess_state})
+        return out
 
     # ── 工作区文件面板（B3/B4）：脚本 + savefig 图片 + 数据文件统一列、
     # 看、传、下。与 /api/scripts 同款认证；owner 一律 owner_fn(req)。

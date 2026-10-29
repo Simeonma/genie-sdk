@@ -347,7 +347,7 @@ pip install https://cdn.jsdelivr.net/gh/Simeonma/genie-sdk@dist/dist/genie_sdk-<
 <pre class="code"><code>genie workspace              <span class="cm"># show the current workspace (and recent ones)</span>
 genie workspace D:\proj      <span class="cm"># set it — everything afterwards lives there</span>
 genie studio                 <span class="cm"># GUI: File → Workspace… picks the same setting</span></code></pre>
-<p>Unset, the workspace defaults to <code>~/data/genie/scripts</code>; result files land under <code>&lt;workspace&gt;/&lt;owner&gt;/genie_results/</code>, and after every successful run the current simulation is auto-saved to <code>&lt;workspace&gt;/&lt;owner&gt;/&lt;session&gt;.gensim</code> (no manual save needed).</p>
+<p>Unset, the workspace defaults to <code>~/data/genie/scripts</code>; result files land under <code>&lt;workspace&gt;/&lt;owner&gt;/genie_results/</code>, and after every successful run the current simulation is auto-saved to <code>&lt;workspace&gt;/&lt;owner&gt;/&lt;session&gt;.gensim</code> (no manual save needed). Opening a <code>.gensim</code> in Studio (<span class="mathi">File → Open…</span>) also <strong>switches the workspace to that file's folder</strong> and makes the opened file the auto-save target — so a run updates the document you opened.</p>
 <h2 id="the-whole-script"><a class="anchor" href="#the-whole-script" aria-label="Link to this section">#</a>The whole script</h2>
 <p>This is a real, runnable simulation — a 10-period dielectric grating with a plane-wave source and a frequency-domain transmission monitor:</p>
 <pre class="code"><code><span class="kw">import</span> genie

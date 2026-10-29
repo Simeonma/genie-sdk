@@ -116,6 +116,77 @@ def clear() -> None:
     _atomic_write(data)
 
 
+def pick_file(title: str = "打开仿真文件",
+              filter_: str = "GENIE 仿真文件 (*.gensim)\0*.gensim\0"
+                             "所有文件 (*.*)\0*.*\0") -> str | None:
+    """服务端**原生**打开文件对话框（本地 Studio 专用）。
+
+    返回用户选中的绝对路径；取消 / 非 Windows / 失败 → None。
+    用途：GUI 的 Open——浏览器拿不到真实路径，只有本机进程能拿到，
+    拿到后才能"打开文件 = 把工作区切到它所在文件夹"。
+    """
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    class _OPENFILENAMEW(ctypes.Structure):
+        _fields_ = [
+            ("lStructSize", wintypes.DWORD),
+            ("hwndOwner", wintypes.HWND),
+            ("hInstance", wintypes.HINSTANCE),
+            ("lpstrFilter", wintypes.LPCWSTR),
+            ("lpstrCustomFilter", wintypes.LPWSTR),
+            ("nMaxCustFilter", wintypes.DWORD),
+            ("nFilterIndex", wintypes.DWORD),
+            ("lpstrFile", wintypes.LPWSTR),
+            ("nMaxFile", wintypes.DWORD),
+            ("lpstrFileTitle", wintypes.LPWSTR),
+            ("nMaxFileTitle", wintypes.DWORD),
+            ("lpstrInitialDir", wintypes.LPCWSTR),
+            ("lpstrTitle", wintypes.LPCWSTR),
+            ("Flags", wintypes.DWORD),
+            ("nFileOffset", wintypes.WORD),
+            ("nFileExtension", wintypes.WORD),
+            ("lpstrDefExt", wintypes.LPCWSTR),
+            ("lCustData", wintypes.LPARAM),
+            ("lpfnHook", ctypes.c_void_p),
+            ("lpTemplateName", wintypes.LPCWSTR),
+            ("pvReserved", ctypes.c_void_p),
+            ("dwReserved", wintypes.DWORD),
+            ("FlagsEx", wintypes.DWORD),
+        ]
+
+    comdlg32 = ctypes.windll.comdlg32
+    ole32 = ctypes.windll.ole32
+    OFN_FILEMUSTEXIST = 0x00001000
+    OFN_PATHMUSTEXIST = 0x00000800
+    OFN_NOCHANGEDIR = 0x00000008
+    OFN_EXPLORER = 0x00080000
+
+    ole32.CoInitialize(None)
+    try:
+        buf = ctypes.create_unicode_buffer(2048)
+        ofn = _OPENFILENAMEW()
+        ofn.lStructSize = ctypes.sizeof(_OPENFILENAMEW)
+        ofn.hwndOwner = None
+        ofn.lpstrFilter = filter_
+        ofn.nFilterIndex = 1
+        ofn.lpstrFile = ctypes.cast(buf, wintypes.LPWSTR)
+        ofn.nMaxFile = len(buf)
+        ofn.lpstrTitle = title
+        ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR \
+            | OFN_EXPLORER
+        ofn.lpstrDefExt = "gensim"
+        comdlg32.GetOpenFileNameW.restype = wintypes.BOOL
+        comdlg32.GetOpenFileNameW.argtypes = [ctypes.POINTER(_OPENFILENAMEW)]
+        if not comdlg32.GetOpenFileNameW(ctypes.byref(ofn)):
+            return None
+        return buf.value or None
+    finally:
+        ole32.CoUninitialize()
+
+
 def pick_directory(title: str = "选择工作区") -> str | None:
     """服务端**原生**目录对话框（本地 Studio 专用）。
 

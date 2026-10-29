@@ -122,6 +122,48 @@ def results_dir(owner: str, session_id: str) -> Path:
     return d if session_id in ("", DEFAULT_SESSION) else d / session_id
 
 
+def doc_path(owner: str, session_id: str) -> Path:
+    """本会话自动存档的文档路径（G4a 2026-10-30）。
+
+    优先读会话目录的 ``doc.json``（GUI **Open 打开的 .gensim**——跑完把
+    结果写回这个文件）；没有则 = owner 工作区的 ``<session>.gensim``
+    （本站默认文档，用户从未打开过文件时的落点）。
+    """
+    p = _session_dir(owner, session_id) / "doc.json"
+    try:
+        v = str(json.loads(p.read_text(encoding="utf-8")).get("path")
+                or "").strip()
+    except (OSError, json.JSONDecodeError):
+        v = ""
+    if v:
+        return Path(v)
+    return _owner_dir(owner) / f"{session_id or DEFAULT_SESSION}.gensim"
+
+
+def set_doc_path(owner: str, session_id: str, path: str | None) -> Path | None:
+    """钉本会话的文档（``None``/空串 = 清回默认）。
+
+    只写会话状态目录（系统空间，不进工作区）；worker 重挂时由
+    ``_respawn`` 读进 ``GENIE_DOC_PATH``——Open 打开文件后**跑完自动写回
+    那个文件**靠的就是这条。
+    """
+    d = _session_dir(owner, session_id)
+    p = d / "doc.json"
+    if not path:
+        try:
+            p.unlink()
+        except OSError:
+            pass
+        return None
+    d.mkdir(parents=True, exist_ok=True)
+    resolved = str(Path(path).expanduser().resolve())
+    tmp = p.with_name(p.name + ".part")
+    tmp.write_text(json.dumps({"path": resolved}, ensure_ascii=False),
+                   encoding="utf-8")
+    os.replace(tmp, p)
+    return Path(resolved)
+
+
 class SessionKernel:
     """一 (owner, session_id) 一份会话管理器（spawn/重生 worker、输出环、凭据）。
 
@@ -497,10 +539,10 @@ class SessionKernel:
                # O2：结果按会话分层（两个模型的结果不互相污染 latest）
                "GENIE_RESULT_DIR": str(results_dir(self._owner, self._session_id)),
                # G4a（2026-10-30）：跑完自动存档的文档路径（绝对）。
-               # 目标先钉 = 本 owner 工作区的 <session>.gensim；"工作区跟随
-               # 文档"（打开/另存为时换根）落地后由会话设置改这里。
-               "GENIE_DOC_PATH": str(_owner_dir(self._owner)
-                                     / f"{self._session_id or DEFAULT_SESSION}.gensim"),
+               # 优先 = 用户 Open 打开的 .gensim（session doc.json），
+               # 否则本会话默认 <session>.gensim；换工作区/换文档都靠重挂
+               # 让这个 env 生效。
+               "GENIE_DOC_PATH": str(doc_path(self._owner, self._session_id)),
                # 后端是部署属性：worker 从环境读，不从请求读
                "GENIE_BACKEND": backend()}
         # cwd = 本 owner 的脚本工作区（workspace 根/<owner>/，spawn 时落
