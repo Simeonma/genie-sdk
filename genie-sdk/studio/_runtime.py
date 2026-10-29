@@ -143,6 +143,12 @@ class InprocRuntime:
 
     def start(self) -> None:
         from . import kernel_worker
+        # 同进程形态会改写 core 的注入面（simulate/sweep 的 hooks）——先把
+        # 宿主那份存下来，kill() 原样还回去。不还 = 同进程里别的消费者
+        # 继承了 worker 的注入面（测试串味；宿主里会变成双份事件/双写）。
+        from genie.core import simulate as _sim
+        from genie.core import sweep as _swp
+        self._hooks = (dict(_sim.hooks), dict(_swp.hooks))
         box: dict = {}
         kernel_worker.main(emit_fn=self._emit,
                            expose=lambda step: box.setdefault("step", step))
@@ -178,6 +184,14 @@ class InprocRuntime:
         return False                   # 没有信号可用；浏览器里用 terminate()
 
     def kill(self) -> None:
+        hooks = getattr(self, "_hooks", None)
+        if hooks:
+            from genie.core import simulate as _sim
+            from genie.core import sweep as _swp
+            for mod, saved in ((_sim, hooks[0]), (_swp, hooks[1])):
+                mod.hooks.clear()
+                mod.hooks.update(saved)
+            self._hooks = None
         self._alive = False
 
 

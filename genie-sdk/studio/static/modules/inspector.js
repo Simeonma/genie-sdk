@@ -4,6 +4,8 @@
 function renderInspector() {
   let k = inspectorSel.kind, i = inspectorSel.i;
   if (k === "params") { renderParamsPane(); return; }
+  /* G182 P6：扫参页（参数页底部入口进来；不是模型节点，故不进树选择） */
+  if (k === "sweep") { renderSweepPane(); return; }
   if (i != null && !((cfg[k] || [])[i])) i = null;
   inspectorSel = { kind: k, i };
   if (!cfg) {
@@ -151,6 +153,18 @@ function renderParamsPane() {
   add.appendChild(valIn);
   add.appendChild(addBtn);
   body.appendChild(add);
+
+  /* G182 P6 定稿入口：参数页底部 Parameter Sweep → 中间栏扫参页。
+   * 参数页仍是"单次仿真的单值表"——扫参不内联，独立一副手套。 */
+  const cta = document.createElement("div");
+  cta.className = "pane-sweep-cta";
+  const sweepBtn = document.createElement("button");
+  sweepBtn.className = "mini";
+  sweepBtn.textContent = "⇢ Parameter Sweep";
+  sweepBtn.title = "用参数表里的参数做一次扫描（每条轴一组取值）";
+  sweepBtn.addEventListener("click", openSweepPane);
+  cta.appendChild(sweepBtn);
+  body.appendChild(cta);
 }
 
 function selectObj(kind, i) {

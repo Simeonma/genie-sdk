@@ -192,6 +192,22 @@ class SessionClient:
             "gpu": gpu, "timeout_s": timeout_s, "key": key,
             "owner": self._owner(owner), "session_id": self._sid(session_id)})
 
+    def sweep(self, axes: list, *, owner: str = "", session_id: str = "",
+              max_parallel: int = 1, on_failure: str = "continue",
+              name: str = "", key: str = "") -> dict:
+        """跑一次参数扫描（扫参页 Run）——与 ``run`` 同一模式。"""
+        return self._json("POST", "/sweep", json_body={
+            "axes": list(axes or []), "max_parallel": max_parallel,
+            "on_failure": on_failure, "name": name, "key": key,
+            "owner": self._owner(owner), "session_id": self._sid(session_id)})
+
+    def sweep_plot(self, mon: str, *, field: str = "", owner: str = "",
+                   session_id: str = "", key: str = "") -> dict:
+        """把最近一次扫描的结果推到 Plot 面板。"""
+        return self._json("POST", "/sweep/plot", json_body={
+            "mon": mon, "field": field, "key": key,
+            "owner": self._owner(owner), "session_id": self._sid(session_id)})
+
     def patch(self, ops: list, *, owner: str = "",
               session_id: str = "", key: str = "") -> dict:
         """模型路径级增量：一条 op = ``{path, value, verb?}``。
@@ -357,6 +373,37 @@ def register_session_routes(
             cli.run, owner=owner_of(req),
             session_id=_sid_of(req),
             gpu=body.get("gpu"), timeout_s=body.get("timeout_s"), key=key)
+        return {"id": out["id"]}
+
+    @app.post("/api/sweep")
+    async def api_sweep(req: Request) -> dict:
+        """跑一次参数扫描（扫参页 Run）：worker 展开 + 逐点 run + 等终态。"""
+        body = await req.json()
+        axes = body.get("axes")
+        if not isinstance(axes, list) or not axes:
+            raise HTTPException(status_code=422,
+                                detail="axes 须非空列表（每条轴 "
+                                       "{name, values|linspace|logspace}）")
+        key = _key_of(exec_credentials_of, req)
+        out = await run_in_threadpool(
+            cli.sweep, axes, owner=owner_of(req),
+            session_id=_sid_of(req),
+            max_parallel=int(body.get("max_parallel") or 1),
+            on_failure=str(body.get("on_failure") or "continue"),
+            name=str(body.get("name") or ""), key=key)
+        return {"id": out["id"]}
+
+    @app.post("/api/sweep/plot")
+    async def api_sweep_plot(req: Request) -> dict:
+        """把最近一次扫描的结果推到 Plot 面板（与单跑 visualize 同一路）。"""
+        body = await req.json()
+        mon = str(body.get("mon") or "")
+        if not mon.strip():
+            raise HTTPException(status_code=422, detail="mon 必填")
+        key = _key_of(exec_credentials_of, req)
+        out = await run_in_threadpool(
+            cli.sweep_plot, mon, field=str(body.get("field") or ""),
+            owner=owner_of(req), session_id=_sid_of(req), key=key)
         return {"id": out["id"]}
 
     @app.post("/api/model/patch")

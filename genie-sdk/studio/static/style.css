@@ -2811,3 +2811,35 @@ input:focus-visible,textarea:focus-visible { outline: none; }
 @media (min-width: 768px) {
   .m-term-jump,#term-chips { display: none !important; }
 }
+
+/* ══ 扫参页（G182 P6，2026-10-30）：参数页底部入口 → 中间栏一副手套 ══
+ * 形态：说明一句 + 轴行（参数/方式/取值）+ 再加一条轴 + 总点数 +
+ * Run/状态 + 左下角 Plot。轴行复用 .frow/.flabel/.param-value，只补
+ * 宽度与总点数/动作行的排布。 */
+.pane-sweep-cta { margin-top: 14px; }
+.sweep-head {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+}
+.sweep-title {
+  font-size: var(--fs-xs); font-weight: 600; color: var(--text-primary);
+}
+.sweep-axis select { min-width: 92px; }
+.sweep-axis input.sweep-num { width: 78px; }
+.sweep-axis input.sweep-values { flex: 1; min-width: 140px; }
+.sweep-total {
+  font-variant-numeric: tabular-nums; color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+.sweep-total.over { color: var(--danger); font-weight: 600; }
+.sweep-actions {
+  display: flex; align-items: center; gap: 10px; margin-top: 12px;
+}
+.sweep-status {
+  color: var(--text-muted); font-size: var(--fs-2xs);
+  min-height: 1em; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sweep-plot-row {
+  display: flex; align-items: center; gap: 8px; margin-top: 10px;
+}
+.sweep-plot-row .sweep-mon { min-width: 120px; }

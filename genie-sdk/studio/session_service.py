@@ -105,6 +105,26 @@ class RunIn(BaseModel):
     session_id: str = DEFAULT_SESSION
 
 
+class SweepIn(BaseModel):
+    """扫参页 Run（G182 P6）：轴列表原样交给 ``f.sweep``（本地展开）。"""
+    axes: list = []
+    max_parallel: int = 1
+    on_failure: str = "continue"
+    name: str = ""
+    key: str = ""
+    owner: str = "user"
+    session_id: str = DEFAULT_SESSION
+
+
+class SweepPlotIn(BaseModel):
+    """扫参页 Plot：把最近一次扫描的结果推到 Plot 面板。"""
+    mon: str = ""
+    field: str = ""
+    key: str = ""
+    owner: str = "user"
+    session_id: str = DEFAULT_SESSION
+
+
 class PatchIn(BaseModel):
     """模型路径级增量（M3b）。``ops`` = [{path, value}]，路径点分、下标即段。"""
     ops: list = []
@@ -166,6 +186,26 @@ def run_action(*, owner: str, session_id: str, gpu=None,
     return k.run(gpu=gpu, timeout_s=timeout_s)
 
 
+def sweep_action(*, owner: str, session_id: str, axes: list,
+                 max_parallel: int = 1, on_failure: str = "continue",
+                 name: str = "", key: str = "") -> str:
+    """扫参页 Run（G182 P6）：worker 展开 + 逐点 run + 等终态。"""
+    k = get_kernel(owner, session_id)
+    if key:
+        k.attach(key)
+    return k.sweep(axes, max_parallel=max_parallel,
+                   on_failure=on_failure, name=name)
+
+
+def sweep_plot_action(*, owner: str, session_id: str, mon: str,
+                      field: str = "", key: str = "") -> str:
+    """扫参页 Plot：最近一次扫描的结果 → Plot 面板（同一事件路）。"""
+    k = get_kernel(owner, session_id)
+    if key:
+        k.attach(key)
+    return k.sweep_plot(mon, field)
+
+
 def patch_action(*, owner: str, session_id: str, ops: list,
                  key: str = "") -> str:
     k = get_kernel(owner, session_id)
@@ -189,6 +229,29 @@ def exec_(body: ExecIn) -> dict:
     return {"id": exec_action(owner=body.owner, session_id=body.session_id,
                               code=body.code, mode=body.mode,
                               label=body.label, key=body.key)}
+
+
+@app.post("/sweep")
+def sweep_(body: SweepIn) -> dict:
+    """跑一次参数扫描（扫参页 Run）：与 /run 同一模式（立即返回 op id）。"""
+    if not body.axes:
+        raise HTTPException(status_code=422, detail="axes 须非空列表（每条轴 "
+                                                    "{name, values|linspace|logspace}）")
+    return {"id": sweep_action(owner=body.owner, session_id=body.session_id,
+                               axes=body.axes, max_parallel=body.max_parallel,
+                               on_failure=body.on_failure, name=body.name,
+                               key=body.key)}
+
+
+@app.post("/sweep/plot")
+def sweep_plot_(body: SweepPlotIn) -> dict:
+    """把最近一次扫描的结果推到 Plot 面板（与单跑 visualize 同一路）。"""
+    if not body.mon.strip():
+        raise HTTPException(status_code=422, detail="mon 必填")
+    return {"id": sweep_plot_action(owner=body.owner,
+                                    session_id=body.session_id,
+                                    mon=body.mon, field=body.field,
+                                    key=body.key)}
 
 
 @app.post("/run")

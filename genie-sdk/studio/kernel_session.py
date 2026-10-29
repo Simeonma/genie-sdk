@@ -291,6 +291,39 @@ class SessionKernel:
                     "url": backend(), "key": self._key})
         return eid
 
+    def sweep(self, axes: list, *, max_parallel: int = 1,
+              on_failure: str = "continue", name: str = "") -> int:
+        """跑一次参数扫描（扫参页的 Run）→ 扫描 op id。
+
+        与 ``run`` 同一条原语：worker 里 ``f.sweep(axes).wait()``（展开 +
+        逐点 run + 等终态）；进度走 ``sweep-progress`` 事件（chip/页面都
+        吃它），终态事件带 ``state``。
+        """
+        self._ensure()
+        eid = self._next_id
+        self._next_id += 1
+        self._begin(eid, "sweep")
+        self._send({"op": "sweep", "id": eid, "axes": list(axes or []),
+                    "max_parallel": int(max_parallel),
+                    "on_failure": str(on_failure or "continue"),
+                    "name": str(name or ""),
+                    "url": backend(), "key": self._key})
+        return eid
+
+    def sweep_plot(self, mon: str, field: str = "") -> int:
+        """把最近一次扫描的结果推到 Plot 面板 → op id。
+
+        与单跑 ``f.visualize`` 同一条事件路：worker 侧把合并结果落会话
+        结果目录并 emit ``plot`` 事件（job_id = 扫描 id）——面板零改动。
+        """
+        self._ensure()
+        eid = self._next_id
+        self._next_id += 1
+        self._begin(eid, "sweep_plot")
+        self._send({"op": "sweep_plot", "id": eid, "mon": str(mon or ""),
+                    "field": str(field or ""), "key": self._key})
+        return eid
+
     def patch(self, ops: list) -> int:
         """模型**路径级增量**（M3b）：表单/树/工具条的一次改动。
 

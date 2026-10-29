@@ -173,6 +173,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
     # session_connect 连出来的实例落这里。**build（脚本运行）期间临时改道**
     # 到一个 build 私有的列表——脚本建的实例在成功之前不属于会话（见 exec）。
     sink = {"sims": sims}
+    _last_sweep: dict = {}   # 最近一次扫描的句柄（扫参页 Plot 按钮用）
 
     def _new_sim():
         """新建一个会话实例（不自动入账——调用方决定落哪个 sink）。
@@ -217,6 +218,23 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         return s
 
     _sim_mod.hooks["sweep_sim_factory"] = _sweep_point_sim
+
+    # G182 P6：会话内扫描的 visualize —— 与单跑**同一条事件路**：合并结果
+    # 落会话结果目录（``<sweep_id>_results.h5``，面板按 job_id 照常定位），
+    # 再发一条 plot 事件（job_id = 扫描 id）。零 HTTP：worker 不回头打自己
+    # 的门；面板侧零改动（参数轴由结果的 attrs 自带）。
+    def _sweep_visualize(sw, mon, field=None):
+        sid = str(getattr(sw, "id", "") or "")
+        base = os.environ.get("GENIE_RESULT_DIR")
+        if base and sid:
+            p = Path(base) / f"{sid}_results.h5"
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(sw._cube_bytes())
+        emit({"ev": "out", "kind": "plot",
+              "data": {"mon": str(mon), "field": field or "",
+                       "job_id": sid}})
+
+    _sweep_mod.hooks["visualize_sweep"] = _sweep_visualize
 
     # 会话内 ``genie.open(path)``（2026-10-30 站长定案）：**整份替换**当前
     # 会话模型——与 GUI「打开仿真」同一语义（用户心智：打开一个仿真 =
@@ -1086,6 +1104,48 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
             persist_state()     # 模型变了才落盘（build 失败时提交前状态不变，
                                 # 但 persist 是幂等快照，照写无妨）
             emit({"ev": "done", "id": eid, "ok": ok, "err": err})
+
+        elif op in ("sweep", "sweep_plot"):
+            # G182 P6 扫参页：Run = 展开 + 逐点 run + 等终态（与终端里
+            # `f.sweep(...).wait()` 同一条原语）；Plot = 把最近一次扫描的
+            # 合并结果推给 Plot 面板（与 f.visualize 同一条事件路，扫描
+            # 句柄的 visualize 由上面的 _sweep_visualize 接管）。
+            eid = msg.get("id", 0)
+            if msg.get("url") and not sess_url:
+                sess_url = msg["url"]
+            if sim is None and msg.get("key"):
+                attach({"url": sess_url, "key": msg.get("key")})
+            try:
+                if op == "sweep":
+                    if sim is None:
+                        raise RuntimeError(
+                            "还没有模型可扫描——先建域/网格/源/监视器"
+                            "（或跑一段脚本）")
+                    h = sim.sweep(
+                        msg.get("axes") or [],
+                        max_parallel=int(msg.get("max_parallel") or 1),
+                        on_failure=str(msg.get("on_failure") or "continue"),
+                        name=str(msg.get("name") or "") or None)
+                    _last_sweep["h"] = h
+                    h.wait()
+                else:
+                    h = _last_sweep.get("h")
+                    if h is None:
+                        raise RuntimeError("还没有跑过扫描——先按 Run 跑一次")
+                    h.visualize(str(msg.get("mon") or ""),
+                                msg.get("field") or None)
+                emit({"ev": "done", "id": eid, "ok": True, "err": ""})
+            except Exception as e:   # noqa: BLE001
+                if op == "sweep":
+                    # 页面要知道"这次根本没跑起来"（否则 Run 状一直转圈）
+                    emit({"ev": "out", "kind": "sweep-progress", "text": "",
+                          "data": {"sweep_id": "", "state": "failed",
+                                   "total": 0, "rollup": {},
+                                   "error": str(e)[:300]}})
+                emit({"ev": "out", "kind": "error",
+                      "text": f"({'扫描' if op == 'sweep' else 'Plot'}"
+                              f"失败: {e})\n"})
+                emit({"ev": "done", "id": eid, "ok": False, "err": str(e)})
 
     if expose is not None:
         # 同进程形态（网页 Pyodide）：不跑循环，把 _step 交出去，

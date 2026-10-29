@@ -635,6 +635,9 @@ window.__jobProgress = (function () {
  * 裁决不做（诊断入口 = 终端每点一行终态 + 扫描终态汇总行的失败点名，
  * 低频信息走低频通道）。终态事件交还 chip 给结果摘要。 */
 window.__sweepProgress = function (d) {
+  /* G182 P6：扫参页也吃这一份（含"根本没跑起来"的 error 事件——它在
+   * 下面的 sweep_id 守卫之前，页面靠它把 Run 态收回来）。 */
+  if (typeof window.__sweepPaneEvent === "function") window.__sweepPaneEvent(d);
   const chip = document.getElementById("result-chip");
   if (!chip || !d || !d.sweep_id) return;
   const total = Number(d.total) || 0;

@@ -44,6 +44,21 @@ class LocalSessionHost:
             owner=owner, session_id=session_id,
             gpu=gpu, timeout_s=timeout_s, key=key)}
 
+    def sweep(self, axes: list, *, owner: str,
+              session_id: str = DEFAULT_SESSION, max_parallel: int = 1,
+              on_failure: str = "continue", name: str = "",
+              key: str = "") -> dict:
+        return {"id": _svc.sweep_action(
+            owner=owner, session_id=session_id, axes=axes,
+            max_parallel=max_parallel, on_failure=on_failure, name=name,
+            key=key)}
+
+    def sweep_plot(self, mon: str, *, field: str = "", owner: str,
+                   session_id: str = DEFAULT_SESSION, key: str = "") -> dict:
+        return {"id": _svc.sweep_plot_action(
+            owner=owner, session_id=session_id, mon=mon, field=field,
+            key=key)}
+
     def patch(self, ops: list, *, owner: str,
               session_id: str = DEFAULT_SESSION, key: str = "") -> dict:
         return {"id": _svc.patch_action(
