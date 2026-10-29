@@ -20,18 +20,20 @@ import os
 import tempfile
 from pathlib import Path
 
+from ..core import paths as _paths
+
 MAX_RECENT = 8
+
+
+def settings_path() -> Path:
+    """``~/.genie/workspace.json``（与凭据仓同目录，永不进公开仓）。"""
+    return _paths.settings_path()
 
 
 def default_root() -> Path:
     """缺省工作区根（**调用时**解析 home——模块导入时钉死会在测试/换
     home 后指向错误目录）。"""
-    return Path.home() / "data" / "genie" / "scripts"
-
-
-def settings_path() -> Path:
-    """``~/.genie/workspace.json``（与凭据仓同目录，永不进公开仓）。"""
-    return Path.home() / ".genie" / "workspace.json"
+    return _paths.default_root()
 
 
 def _read_json() -> dict:
@@ -61,27 +63,17 @@ def _atomic_write(data: dict) -> None:
 
 def env_root() -> Path | None:
     """显式 env 覆盖（最高优先级；空串不算）。"""
-    for key in ("GENIE_SESSION_CWD", "GENIE_SCRIPTS_DIR"):
-        v = os.environ.get(key)
-        if v:
-            return Path(v)
-    return None
+    return _paths.env_root()
 
 
 def current_root() -> Path:
-    """当前工作区根（解析优先级见模块 docstring）。"""
-    root = env_root()
-    if root is not None:
-        return root
-    v = str(_read_json().get("root") or "").strip()
-    return Path(v) if v else default_root()
+    """当前工作区根（解析口径 = core.paths，单一来源）。"""
+    return _paths.workspace_root()
 
 
 def source() -> str:
     """``env`` / ``setting`` / ``default``——界面与 CLI 如实显示来源。"""
-    if env_root() is not None:
-        return "env"
-    return "setting" if str(_read_json().get("root") or "").strip() else "default"
+    return _paths.source()
 
 
 def recents() -> list[str]:

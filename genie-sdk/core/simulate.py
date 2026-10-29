@@ -400,16 +400,24 @@ class Simulation:
                              result_path=result_p, state=state)
 
     def _auto_save_result(self) -> None:
-        """run() 成功后自动下载结果到 SDK 所在电脑（genie-results-h5/1，
+        """run() 成功后自动下载结果到本机（genie-results-h5/1，
         2026-10-09 站长裁决：SDK 用户的仿真结果应当机落盘）。
-        落盘：$GENIE_RESULT_DIR 或 ./genie_results/<job_id>_results.h5
-        （覆盖式）；失败仅告警不抛——不吞 run 的成功语义，results()
-        需要时会现场重取。"""
+
+        落点：``$GENIE_RESULT_DIR``（显式）→ 工作区设置
+        ``<workspace>/genie_results/``（G4a 2026-10-30：SDK 直跑也认
+        ``genie workspace`` 选的根）→ 缺省 ``./genie_results/``。
+        失败仅告警不抛——不吞 run 的成功语义，results() 需要时会现场重取。
+        """
         try:
             import os
             from pathlib import Path
             raw = self._client.fetch_result(self._job_id)
-            d = Path(os.environ.get("GENIE_RESULT_DIR") or "genie_results")
+            env_dir = os.environ.get("GENIE_RESULT_DIR") or ""
+            if env_dir:
+                d = Path(env_dir)
+            else:
+                from . import paths
+                d = paths.result_dir()
             d.mkdir(parents=True, exist_ok=True)
             pth = d / f"{self._job_id}_results.h5"
             pth.write_bytes(raw)
