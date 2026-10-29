@@ -10,7 +10,10 @@
 
 SDK 公开面 = ``Simulation.save(path)`` / ``genie.open(path)``；Studio 的
 ``/api/sim/export|import`` 只是本模块的 HTTP 薄壳。成员白名单、路径守卫、
-大小上限、原子写**只在这里维护一份**（单一来源纪律，G87）。
+原子写**只在这里维护一份**（单一来源纪律，G87）。
+
+**不设大小上限**（2026-10-30 站长裁）：容器装的是用户自己的仿真产物
+（结果 h5 可能很大），"能装多少"是用户磁盘的事，不在格式层设保姆式闸门。
 
 写法纪律：先写 ``.part`` 再 ``os.replace``——跑一半崩了不留烂档。
 """
@@ -23,19 +26,14 @@ import zipfile
 from pathlib import Path
 
 __all__ = [
-    "SimfileError", "SimfileFormatError", "SimfileTooLarge",
-    "SIMCONFIG", "STATE", "MAX_RESULT_BYTES", "MAX_TEXT_BYTES", "TEXT_EXTS",
-    "member_kind", "cap_for", "validate_structure", "read_cfg", "inspect",
+    "SimfileError", "SimfileFormatError",
+    "SIMCONFIG", "STATE",
+    "member_kind", "validate_structure", "read_cfg", "inspect",
     "write", "result_state",
 ]
 
 SIMCONFIG = "simconfig.json"
 STATE = "state.json"
-
-#: 上限（与 HTTP 上传面同一口径）：文本类 256KiB、二进制 512MiB。
-MAX_TEXT_BYTES = 256 * 1024
-MAX_RESULT_BYTES = 512 * 1024 * 1024
-TEXT_EXTS = ("py", "json", "txt")
 
 
 class SimfileError(ValueError):
@@ -44,10 +42,6 @@ class SimfileError(ValueError):
 
 class SimfileFormatError(SimfileError):
     """结构/成员名非法（Studio 映射 422）。"""
-
-
-class SimfileTooLarge(SimfileError):
-    """成员或容器超上限（Studio 映射 413）。"""
 
 
 def _ensure_suffix(target) -> Path:
@@ -85,16 +79,6 @@ def member_kind(name: str) -> str:
         f"仿真文件含未知成员目录（{prefix}/）——只认 workspace/ 与 results/")
 
 
-def cap_for(name: str) -> int:
-    """单个成员的上限（字节）：文本类 256KiB，二进制 512MiB。"""
-    kind = member_kind(name)
-    if kind in ("cfg", "state"):
-        return MAX_TEXT_BYTES
-    base = name.split("/", 1)[1]
-    ext = base.rsplit(".", 1)[-1].lower() if "." in base else ""
-    return MAX_TEXT_BYTES if ext in TEXT_EXTS else MAX_RESULT_BYTES
-
-
 def validate_structure(zf: zipfile.ZipFile) -> list[str]:
     """结构校验（不读内容）：必选成员存在、成员名合法、results↔state 成对。"""
     names = zf.namelist()
@@ -125,10 +109,6 @@ def read_cfg(source) -> dict:
     """读容器里的 SimConfig（不校验 schema——调用方用同一双 validate 手）。"""
     with _open_zip(source) as zf:
         validate_structure(zf)
-        info = zf.getinfo(SIMCONFIG)
-        if info.file_size > MAX_TEXT_BYTES:
-            raise SimfileTooLarge(
-                f"{SIMCONFIG} 超 {MAX_TEXT_BYTES >> 10}KiB 上限")
         try:
             cfg = json.loads(zf.read(SIMCONFIG).decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
@@ -206,10 +186,6 @@ def write(target, cfg: dict, *, result_path=None, state: dict | None = None,
                 if (not p.is_file() or p.name.startswith(".")
                         or p.name.endswith(".part")):
                     continue
-                if p.stat().st_size > cap_for("workspace/" + p.name):
-                    raise SimfileTooLarge(
-                        f"{p.name} 超 {cap_for('workspace/' + p.name) >> 20}MiB "
-                        f"上限——不进仿真文件")
                 zf.write(p, arcname="workspace/" + p.name)
             if result_path is not None:
                 rp = Path(result_path)

@@ -38,7 +38,6 @@ from fastapi.staticfiles import StaticFiles
 from starlette.background import BackgroundTask
 
 import genie
-from genie.core.simfile import MAX_RESULT_BYTES, MAX_TEXT_BYTES
 from genie.models import LIBRARY_FIT_DEFAULTS
 
 # 工作区根**唯一解析点**（M2）：此前 studio 侧另有一份 GENIE_SCRIPTS_DIR
@@ -55,14 +54,16 @@ _TITLE = "genie-studio"
 _PKG = Path(__file__).resolve().parents[1]
 _MANUAL = _PKG / "manual"
 _EXAMPLES = _PKG / "examples"
-_MAX_SCRIPT = MAX_TEXT_BYTES   # 文本类上限（正典 = genie.core.simfile，G87）
+_MAX_SCRIPT = 256 * 1024
 # B3/B4 安全两洞先钉（调研裁决）：① /api/scripts/save 原本无大小上限
 # （_MAX_SCRIPT 只管 drafts）——save/上传文本类统一钉 256KiB（超限 413）；
 # ② \w 裸用连非 ASCII 名都放行（re 无 re.ASCII，实测 "中文脚本.py" 通过）
 # ——所有名字白名单统一 flags=re.ASCII。二进制/数据（multipart 流式）上
 # 限 512MiB：工作区文件是用户仿真产物（savefig 图 / npz/h5 场数据），
-# 够放一次真作业的输出，又不至于打满盘。（数值正典 = simfile，G4a）
-_MAX_BINARY = MAX_RESULT_BYTES
+# 够放一次真作业的输出，又不至于打满盘。
+# （注意：`.gensim` 文档容器**不设上限**——2026-10-30 站长裁，文档面
+#  只认格式不认大小；这两个常量只用于 HTTP 上传面。）
+_MAX_BINARY = 512 * 1024 * 1024
 
 
 class DraftRing:
@@ -564,19 +565,13 @@ def create_app(*, static_dir: str | Path | None = None,
     async def sim_import(req: Request, file: UploadFile) -> dict:
         tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False)
         tmp.close()                        # 只借路径——写出重开（同 export 口径）
-        size = 0
-        cap = _MAX_BINARY + _MAX_SCRIPT   # 容器 ≈ 最大数据件 + 配置文本
         try:
             with open(tmp.name, "wb") as out:
                 while True:
                     chunk = await file.read(1 << 20)
                     if not chunk:
                         break
-                    size += len(chunk)
-                    if size > cap:
-                        raise HTTPException(status_code=413,
-                                            detail=".gensim 超 %dMiB 上限" % (cap >> 20))
-                    out.write(chunk)
+                    out.write(chunk)       # 文档面不设上限（2026-10-30 站长裁）
         finally:
             await file.close()
         try:
@@ -591,14 +586,12 @@ def create_app(*, static_dir: str | Path | None = None,
                 # 结构校验 = simfile 正典（成员白名单/成对规则零手抄）
                 try:
                     names = simfile.validate_structure(zf)
-                except simfile.SimfileTooLarge as e:
-                    raise HTTPException(status_code=413, detail=str(e))
                 except simfile.SimfileError as e:
                     raise HTTPException(status_code=422, detail=str(e))
                 try:
                     cfg = simfile.read_cfg(tmp.name)
-                except simfile.SimfileTooLarge as e:
-                    raise HTTPException(status_code=413, detail=str(e))
+                except simfile.SimfileError as e:
+                    raise HTTPException(status_code=422, detail=str(e))
                 except simfile.SimfileError as e:
                     raise HTTPException(status_code=422, detail=str(e))
 
@@ -654,12 +647,6 @@ def create_app(*, static_dir: str | Path | None = None,
                                 result_job, sid)
                         except ValueError as e:
                             raise HTTPException(status_code=422, detail=str(e))
-                        info = zf.getinfo(n)
-                        if info.file_size > simfile.cap_for(n):
-                            raise HTTPException(
-                                status_code=413,
-                                detail="%s 超 %dMiB 上限"
-                                       % (base, simfile.cap_for(n) >> 20))
                         rp.parent.mkdir(parents=True, exist_ok=True)
                         with zf.open(n) as src, \
                                 rp.with_name(rp.name + ".part") \
@@ -677,12 +664,6 @@ def create_app(*, static_dir: str | Path | None = None,
                                             detail="仿真文件含容器外成员（%s）——拒绝" % n)
                     base = n[len("workspace/"):]
                     p = _workspace_file(ws, base)   # 名守卫：基名白名单，违者 422
-                    cap_f = simfile.cap_for(n)
-                    info = zf.getinfo(n)
-                    if info.file_size > cap_f:
-                        raise HTTPException(status_code=413,
-                                            detail="%s 超 %dMiB 上限"
-                                                   % (base, cap_f >> 20))
                     with zf.open(n) as src, p.with_name(p.name + ".part") \
                             .open("wb") as out:
                         while True:
