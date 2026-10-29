@@ -45,7 +45,6 @@ class Scene3D {
     this.showRulers = true;      /* 边框坐标尺（刻度 + µm 读数） */
     this.showXray = false;       /* X 光：结构半透明，看穿嵌套体 */
     this.projection = "ortho";   /* ortho | persp —— 透视/正交切换 */
-    this.colorMode = "material"; /* material | priority —— 结构着色模式 */
     this.showClip = false;       /* 剖面切片 */
     this.clipAxis = "z";         /* 剖切法轴 */
     this.clipT = 0.5;            /* 剖切位置（0..1 沿该轴） */
@@ -54,7 +53,7 @@ class Scene3D {
     this._srcGroups = {}; this._monGroups = {};   /* 源/监视器的对象组（高亮用） */
     /* 能力表（G39）：scene.js 依此决定浮条按钮可用性，2D 降级是它的补集 */
     this.capabilities = {
-      rulers: true, xray: true, projection: true, priority: true,
+      rulers: true, xray: true, projection: true,
       section: true, highlight: true,
       wireModes: ["solid", "edges", "wire"],
     };
@@ -784,11 +783,8 @@ class Scene3D {
 
   /* geometry 节点（数值数组，新 schema 形状）→ three.js mesh */
   buildStructureMesh(g) {
-    /* 着色模式（2026-10-21）：材料色 / 优先级色阶——后者让"重叠区谁赢"直接可见 */
-    const baseHex = this.colorMode === "priority"
-      ? this._priorityColor(g.priority)
-      : this._materialColor(g.material);
-    const color = new THREE.Color(baseHex).convertSRGBToLinear();
+    const color = new THREE.Color(
+      this._materialColor(g.material)).convertSRGBToLinear();
     let geo = null, pos = { x: 0, y: 0, z: 0 };
     switch (g.type) {
       case "box": {
@@ -1536,21 +1532,6 @@ class Scene3D {
     }
     this.fitCamera();
     this.markDirty();
-  }
-
-  /* ── 按优先级着色（2026-10-21）：priority 是"重叠区谁赢"的唯一依据，
-   * 着色后一眼能看出覆盖关系；关掉回到材料色。 */
-  setPriorityColors(on) {
-    this.colorMode = on ? "priority" : "material";
-    if (this._cfg) this.updateScene(this._cfg);
-  }
-
-  /* 优先级 → 色阶（cool→warm；0 = 中性钢灰，符号即层级高低） */
-  _priorityColor(p) {
-    const ramp = SCENE_PALETTE.PRIORITY || [];
-    const n = Math.round(Number(p) || 0);
-    const i = Math.max(0, Math.min(ramp.length - 1, n + 3));
-    return ramp[i];
   }
 
   /* ── 剖面切片（2026-10-21）──

@@ -50,14 +50,6 @@ function initScene() {
     e.currentTarget.classList.toggle("active", on);
     e.currentTarget.setAttribute("aria-pressed", String(on));
   });
-  /* 按优先级着色 */
-  const prioBtn = $("btn-prio");
-  if (prioBtn) prioBtn.addEventListener("click", (e) => {
-    const on = scene.colorMode !== "priority";
-    scene.setPriorityColors(on);
-    e.currentTarget.classList.toggle("active", on);
-    e.currentTarget.setAttribute("aria-pressed", String(on));
-  });
   /* 剖面切片：开启时浮出轴 + 位置控制板 */
   const secBtn = $("btn-sec");
   const secPanel = $("sec-panel");
@@ -157,8 +149,10 @@ function initScene() {
 
   /* ── G39 能力表闸门（2026-10-21）──
    * 2D 降级（WebGL 不可用）只画等距投影，坐标尺/线框三态/X 光/剖面/透视/
-   * 优先级着色/选中高亮都没有实现。以前按钮照样能点、点了没反应；现在按
-   * `scene.capabilities` 置灰并写明原因——"不可用"要看得见。 */
+   * 选中高亮都没有实现。以前按钮照样能点、点了没反应；现在按
+   * `scene.capabilities` 置灰并写明原因——"不可用"要看得见。
+   * （G41 2026-10-30：优先级着色按钮随存在权裁决删除——每个几何体本来
+   *   就有材料色，叠一层色阶是多余的认知负担。） */
   const cap = scene.capabilities || {};
   const gate = (id, ok, why) => {
     const b = $(id);
@@ -172,7 +166,6 @@ function initScene() {
   gate("btn-xray", cap.xray !== false, no3D);
   gate("btn-ruler", cap.rulers !== false, no3D);
   gate("btn-proj", cap.projection !== false, no3D);
-  gate("btn-prio", cap.priority !== false, no3D);
   gate("btn-sec", cap.section !== false, no3D);
   if (cap.wireModes && cap.wireModes.indexOf("wire") < 0 && wireBtn) {
     /* 2D 只有实体/线框两态：循环序列砍掉纯线框 */

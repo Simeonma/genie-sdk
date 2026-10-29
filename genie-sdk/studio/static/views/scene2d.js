@@ -19,7 +19,7 @@ class Scene2D {
     /* 能力表（G39）：2D 降级只有等距投影 + 线框叠加，其余显示模式没有实现；
      * scene.js 依此把对应浮条按钮置灰，避免"能点但不生效"的假按钮。 */
     this.capabilities = {
-      rulers: false, xray: false, projection: false, priority: false,
+      rulers: false, xray: false, projection: false,
       section: false, highlight: false,
       wireModes: ["solid", "edges"],
     };
@@ -347,7 +347,6 @@ class Scene2D {
   setRulers(v) { this.showRulers = v; this._dirty = true; }
   setXray(v) { this.showXray = v; this._dirty = true; }
   setProjection(v) { this.projection = v; this._dirty = true; }
-  setPriorityColors(v) { this.colorMode = v ? "priority" : "material"; this._dirty = true; }
   setSection(v) { this.showClip = v; this._dirty = true; }
   setClipAxis(v) { this.clipAxis = v; this._dirty = true; }
   setClipPos(v) { this.clipT = v; this._dirty = true; }

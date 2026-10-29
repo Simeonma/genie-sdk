@@ -161,7 +161,6 @@ function buildToolbar() {
     for (const [src, icon, label] of [
       ["btn-fitcam", "view_fit", "复位视角"],
       ["btn-proj", "view_proj", "透视 / 正交"],
-      ["btn-prio", "view_priority", "按优先级着色"],
       ["btn-sec", "view_section", "剖面切片"],
       ["btn-wire", "view_wire", "结构线框"],
       ["btn-ruler", "view_ruler", "边框坐标"],
@@ -211,7 +210,7 @@ function buildToolbar() {
 
 /* VIEW 镜像状态同步：真身的 aria-pressed 是唯一真源，镜像只读它。 */
 function syncViewMirror() {
-  for (const id of ["btn-fitcam", "btn-proj", "btn-prio", "btn-sec", "btn-wire",
+  for (const id of ["btn-fitcam", "btn-proj", "btn-sec", "btn-wire",
                     "btn-ruler", "btn-xray", "btn-grid", "btn-labels", "btn-shot"]) {
     const a = $(id), b = $("view-" + id);
     if (!a || !b) continue;
