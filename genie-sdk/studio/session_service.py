@@ -251,9 +251,19 @@ def attach(body: AttachIn) -> dict:
     return k.attach(body.key)
 
 
-# ── 结果读取（G13②：结果 = 会话状态，从 owner 工作区读 h5）──────
+# ── 结果读取（G13②：结果 = 会话状态；G182 P3：主来源 = 会话当前文档）──
 # 纯函数逻辑 = results_view（可单测）；此处只做 owner 白名单与 404。
-# 结果按 session 分目录（genie_results/<session_id>/）：两个模型的结果不混。
+# 定位：会话当前文档（打开的 .gensim / <session>.gensim，state.job_id 相符）
+# → 旧 h5 只读回退（历史作业 / result/inject）。不扫 runs/sweeps。
+
+def _result_prefer(owner: str, session_id: str) -> list:
+    """会话当前文档候选（G182 P3）：文档是结果的主来源。"""
+    from .kernel_session import doc_path
+    try:
+        return [doc_path(owner, session_id)]
+    except Exception:   # noqa: BLE001 —— 文档指针坏不拦旧 h5 回退
+        return []
+
 
 @app.get("/result/meta")
 def result_meta(job_id: str = "", owner: str = "user",
@@ -273,12 +283,15 @@ def result_meta(job_id: str = "", owner: str = "user",
     owner = check_owner(owner)   # R25 确凿 5：修前 ../ 跨目录读他人 h5
     d = Path(workspace_root()) / owner
     try:
-        p = results_view.result_path(d, job_id, session_id)
+        p = results_view.locate(d, job_id, session_id,
+                                prefer=_result_prefer(owner, session_id))
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     if p is None or not p.is_file():
-        raise HTTPException(status_code=404,
-                            detail="尚无结果——先完成一次 Run")
+        raise HTTPException(
+            status_code=404,
+            detail="作业结果不在本会话当前文档里（可能已被后续运行覆盖）"
+                   "——旧结果文件也没有；重跑一次即可得到新结果")
     return results_view.meta(p)
 
 
@@ -293,12 +306,13 @@ def result_series(job_id: str, mon: str, field: str,
     from genie.studio import results_view
     owner = check_owner(owner)   # R25 确凿 5：修前 ../ 跨目录读他人 h5
     try:
-        p = results_view.result_path(Path(workspace_root()) / owner,
-                                     job_id, session_id)
+        p = results_view.locate(Path(workspace_root()) / owner, job_id,
+                                session_id,
+                                prefer=_result_prefer(owner, session_id))
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
-    if not p.is_file():
-        raise HTTPException(status_code=404, detail="结果文件不存在")
+    if p is None or not p.is_file():
+        raise HTTPException(status_code=404, detail="结果不存在")
     try:
         view = results_view.parse_view(axes, slices)
         return results_view.series(p, mon, field, maxpoints,

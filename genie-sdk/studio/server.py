@@ -626,33 +626,45 @@ def create_app(*, static_dir: str | Path | None = None,
         ws = _owner_scripts_dir(req)
         job_id = str(body.get("job_id") or "")
         result_p = None
+        result_data = None
         state = None
         if job_id:
+            # G182 P3：结果主来源 = 会话当前文档（内嵌 h5）→ 旧 h5 回退。
             from genie.studio import results_view
-            from .kernel_session import workspace_root
+            from genie.core import simfile as _simfile
+            from .kernel_session import doc_path, workspace_root
             from .session_client import DEFAULT_SESSION
             sid = req.headers.get("X-Session-Id") or DEFAULT_SESSION
+            owner = owner_of(req)
             try:
-                rp = results_view.result_path(workspace_root() / owner_of(req),
-                                              job_id, sid)
+                prefer = [doc_path(owner, sid)]
+            except Exception:   # noqa: BLE001
+                prefer = []
+            try:
+                src = results_view.locate(workspace_root() / owner, job_id,
+                                          sid, prefer=prefer)
             except ValueError:
-                rp = None
-            if rp is not None and rp.is_file():
-                result_p = rp
-                st = results_view.meta(rp)
-                state = {"job_id": st["job_id"], "state": "done",
-                         "executed_steps": st["executed_steps"],
-                         "dt": st["dt"], "grid_shape": st["grid_shape"]}
+                src = None
+            if src is not None and src.is_file():
+                if src.suffix.lower() == ".gensim":
+                    result_data = _simfile.result_bytes(src)
+                    state = _simfile.state(src)
+                else:
+                    result_p = src
+                    st = results_view.meta(src)
+                    state = {"job_id": st["job_id"], "state": "done",
+                             "executed_steps": st["executed_steps"],
+                             "dt": st["dt"], "grid_shape": st["grid_shape"]}
 
         def _pack(tmp_path: str) -> None:
             # 容器格式 = genie.core.simfile（正典，G4a 2026-10-30）——
-            # 本端点只负责"取当前工作区文件 + 结果路径"，打包/守卫零手抄。
+            # 本端点只负责"取当前工作区文件 + 结果来源"，打包/守卫零手抄。
             from genie.core import simfile
             files = [p for p in sorted(ws.iterdir(), key=lambda x: x.name)
                      if p.is_file() and not p.name.startswith(".")
                      and not p.name.endswith(".part")]
-            simfile.write(tmp_path, cfg, result_path=result_p, state=state,
-                          files=files)
+            simfile.write(tmp_path, cfg, result_path=result_p,
+                          result_data=result_data, state=state, files=files)
 
         tmp = tempfile.NamedTemporaryFile(suffix=".gensim", delete=False)
         tmp.close()

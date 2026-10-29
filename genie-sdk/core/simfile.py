@@ -30,7 +30,7 @@ __all__ = [
     "SimfileError", "SimfileFormatError",
     "SIMCONFIG", "STATE",
     "member_kind", "validate_structure", "read_cfg", "inspect",
-    "write", "result_state", "result_bytes",
+    "write", "result_state", "result_bytes", "state",
 ]
 
 SIMCONFIG = "simconfig.json"
@@ -136,6 +136,20 @@ def result_bytes(source) -> bytes | None:
                 f"仿真文件含 {len(hits)} 个结果成员——一个仿真只认一份结果")
         data = zf.read(hits[0])
         return data
+
+
+def state(source) -> dict:
+    """容器里的 ``state.json``（结果元信息：job_id/executed_steps/dt/
+    grid_shape）；没有 → ``{}``（未跑过的文档）。P3 定位器用它比对 job_id。"""
+    with _open_zip(source) as zf:
+        names = validate_structure(zf)
+        if STATE not in names:
+            return {}
+        try:
+            data = json.loads(zf.read(STATE).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return {}
+    return data if isinstance(data, dict) else {}
 
 
 def inspect(path) -> dict:

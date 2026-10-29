@@ -1,10 +1,10 @@
 """结果视图纯函数（G13②：结果 = 会话状态，从会话工作区读取）。
 
-会话用户 `f.run()` 的结果自动落盘在 `工作区/<owner>/genie_results/
-<job_id>_results.h5`（simulate._auto_save_result，SDK 用户同一行代码
-落自己电脑——部署形态自动正确）。本模块把 h5 读成 GUI 需要的两件
-东西：结构清单（meta）与降采样曲线（series）。纯函数、零 FastAPI
-依赖、可单测——路由层（session_service / 代理）只做参数校验与调用。
+**G182 P3 起**：结果的主来源 = **会话当前文档**（`.gensim` 内嵌 h5）；
+旧 ``genie_results/*.h5`` 只作只读回退（历史作业 / result/inject 推来的
+结果）。本模块把结果读成 GUI 需要的两件东西：结构清单（meta）与降采样
+曲线（series）。纯函数、零 FastAPI 依赖、可单测——路由层只做参数校验
+与调用。
 
 h5 结构（genie-results-h5/1）：根 attrs（format/dt/executed_steps/
 grid_shape）；每组 = 监视器（attrs 记域 f/t/i），数据集 = 场与轴
@@ -12,13 +12,39 @@ grid_shape）；每组 = 监视器（attrs 记域 f/t/i），数据集 = 场与�
 """
 from __future__ import annotations
 
+import io
 import math
+import re
 from pathlib import Path
 
 import h5py
 import numpy as np
 
+from genie.core import simfile
 from genie.core.results import AXIS_KEYS, axis_lengths, curve, select
+
+
+def _open_h5(source):
+    """结果来源 → 打开的 h5py.File（调用方负责 close）。
+
+    ``.gensim`` 文档 → 取内嵌结果字节（`simfile.result_bytes`）；
+    其它路径 → 按旧 h5 直接打开。文档里没有结果 → ValueError。
+    """
+    p = Path(source)
+    if p.suffix.lower() == ".gensim":
+        data = simfile.result_bytes(p)
+        if data is None:
+            raise ValueError(f"仿真文档里没有结果：{p.name}")
+        return h5py.File(io.BytesIO(data), "r")
+    return h5py.File(p, "r")
+
+
+def _job_id_of(source) -> str:
+    """来源的作业 id：文档读 state.json；旧 h5 用文件名。"""
+    p = Path(source)
+    if p.suffix.lower() == ".gensim":
+        return str(simfile.state(p).get("job_id") or "")
+    return p.name.removesuffix("_results.h5")
 
 
 def parse_view(axes: str | None, slices: str | None) -> dict | None:
@@ -79,7 +105,7 @@ def _pool_max(a: np.ndarray, axis: int, n_target: int) -> np.ndarray:
     return out
 
 
-def series(h5path: Path, mon: str, field: str, maxpoints: int = 1200,
+def series(source: Path, mon: str, field: str, maxpoints: int = 1200,
            axes: list | None = None,
            slices: dict | None = None) -> dict:
     """结果视图：1D 降采样曲线（缺省）或选轴 1D/2D（G148 批 2）。
@@ -89,8 +115,9 @@ def series(h5path: Path, mon: str, field: str, maxpoints: int = 1200,
     ``select()``（G148：任意轴 1D / 2D 切面，未选轴缺省峰值切片）。
     2D 降采样 = 每轴独立 max-pool 到 ≤ maxpoints（保峰值）。
     响应 2D 形态：``z`` = 行列表（行 = y 轴，列 = x 轴），外加
-    ``y_label/y``；1D 形态与历史一致，另加 ``dim`` 字段。"""
-    with h5py.File(h5path, "r") as f:
+    ``y_label/y``；1D 形态与历史一致，另加 ``dim`` 字段。
+    ``source`` 可以是 ``.gensim`` 文档（G182 P3 主路径）或旧 h5。"""
+    with _open_h5(source) as f:
         if mon not in f or field not in f[mon]:
             raise KeyError(f"监视器/场不存在: {mon}/{field}")
         view = (select(f[mon], field, axes=axes, slices=slices)
@@ -157,13 +184,41 @@ def result_path(owner_dir: Path, job_id: str,
     return results_dir(owner_dir, session_id) / f"{job_id}_results.h5"
 
 
-def meta(h5path: Path) -> dict:
+def locate(owner_dir: Path, job_id: str, session_id: str | None = None,
+           *, prefer=()) -> Path | None:
+    """``job_id`` → 结果来源（G182 P3 定位器）。
+
+    顺序：**会话当前文档**（``prefer``：打开的文档或 ``<session>.gensim``，
+    且 ``state.json.job_id`` 必须相符）→ 旧 h5 只读回退。不扫 ``runs/``
+    / ``sweeps/``——那些产物由各自入口显式给文档（SDK 直跑/扫参页）。
+    都没有 → None（调用方 404，话说清"可能已被后续运行覆盖"）。
+    """
+    if not re.fullmatch(r"[\w\-]{1,128}", job_id or ""):
+        raise ValueError("job_id 非法（字母/数字/_/-，≤128）")
+    for cand in prefer:
+        if not cand:
+            continue
+        p = Path(cand)
+        if not p.is_file():
+            continue
+        try:
+            if _job_id_of(p) == job_id:
+                return p
+        except Exception:   # noqa: BLE001 —— 坏文档不拦回退
+            continue
+    hp = result_path(owner_dir, job_id, session_id)
+    return hp if hp.is_file() else None
+
+
+def meta(source: Path) -> dict:
     """结构清单：监视器/场/轴 + 轴长 + 根 attrs（GUI 结果面板与 Plot 建卡）。
 
     ``axes_len``（G148）= core.results.axis_lengths 单一真源：空间轴是
     **唯一值数**（不是坐标云展平长度——曾把 1600 格点云当 z 轴 1600 个
-    切片位）；轴能否真当选由 select() 裁决。"""
-    with h5py.File(h5path, "r") as f:
+    切片位）；轴能否真当选由 select() 裁决。``source`` 可以是 ``.gensim``
+    文档（G182 P3 主路径）或旧 h5。
+    """
+    with _open_h5(source) as f:
         mons = []
         for name, grp in f.items():
             keys = list(grp.keys())
@@ -175,7 +230,7 @@ def meta(h5path: Path) -> dict:
                 "axes_len": axis_lengths(grp)})
         st = {
             "ok": True,
-            "job_id": h5path.name.removesuffix("_results.h5"),
+            "job_id": _job_id_of(source),
             "executed_steps": int(f.attrs.get("executed_steps", 0)),
             "dt": float(f.attrs.get("dt", 0)),
             "grid_shape": [int(v) for v in f.attrs.get("grid_shape", [])],
