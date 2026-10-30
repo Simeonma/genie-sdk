@@ -359,6 +359,12 @@ def create_app(*, static_dir: str | Path | None = None,
         async def api_jobs_fwd(path: str, req: Request) -> Response:
             return await _gw_fwd(req, f"api/jobs/{path}", timeout=120.0)
 
+        # 账本（记账三件套③，2026-10-31）：本人本月卡时/笔数/配额——
+        # 与 jobs 同族的网关代拨（会话侧 _GW_ALLOW 放行 api/usage）。
+        @app.get("/api/usage")
+        async def api_usage_fwd(req: Request) -> Response:
+            return await _gw_fwd(req, "api/usage", timeout=30.0)
+
     # ── 会话端口（只给**跨进程客户端**用：genie console / 外部工具）──
     # 同进程的 GUI 走上面的门面直接调对象（零 HTTP）；这里挂同一套会话
     # 路由，带本机口令（session_service.set_token 由入口设置）。于是
