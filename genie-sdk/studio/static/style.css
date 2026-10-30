@@ -2492,6 +2492,15 @@ body.result-mode #config-content button:not(.plot-cta-btn) {
   pointer-events: none;
   opacity: 0.45;
 }
+/* 扫参面是只读模型上的新动作（不改当前 cfg）：结果态照常可用——
+ * 否则"跑过一次之后扫参入口永远灰着"，看起来像没做（真机实证）。 */
+body.result-mode #config-content .pane-sweep-cta button,
+body.result-mode #config-content .sweep-page button,
+body.result-mode #config-content .sweep-page input,
+body.result-mode #config-content .sweep-page select {
+  pointer-events: auto;
+  opacity: 1;
+}
 body.result-mode #tb-mat-box button,body.result-mode #tb-geo-box button,body.result-mode #tb-src-box button,body.result-mode #tb-mon-box button {
   pointer-events: none;
   opacity: 0.45;
@@ -2773,8 +2782,14 @@ input:focus-visible,textarea:focus-visible { outline: none; }
 }
 .sweep-axis-head .sweep-param { flex: 1.5 1 0; }
 .sweep-axis-head .sweep-del { flex: 0 0 auto; }
-.sweep-axis-vals input { flex: 1 1 0; min-width: 0; }
-.sweep-axis-vals input.sweep-values { flex: 1 1 100%; width: 100%; }
+/* 取值行输入必须压过 `.frow > input` 的 150px 定宽（0,2,1 特异性）——
+ * 否则三个输入总宽 450px，第三个被 `.frow{overflow:hidden}` 裁掉（真机
+ * 截图实证：起点/终点看得见、点数不见）。用 #config-content 前缀拿
+ * (1,2,1)，等于并列地"后写胜出"。 */
+#config-content .sweep-page .frow > input {
+  flex: 1 1 0; width: 0; min-width: 0; max-width: none;
+  text-align: left;
+}
 /* 选项行的短标签（并发/失败）：.flabel 是 112px 定宽的字段标签，两个
  * 就把一行撑爆——这里只要宽度自适应的说明字。 */
 .sweep-lab {

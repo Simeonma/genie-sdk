@@ -20,12 +20,21 @@ const __RESULT_LOCK_TB = ["tb-mat-btns", "tb-geo-btns", "tb-src-btns", "tb-mon-b
 function __lockConfigInputs() {
   const c = document.getElementById("config-content");
   if (c) {
-    c.querySelectorAll("input, select, textarea")
-      .forEach(el => { el.disabled = true; });
+    /* 扫参面（参数页底部的入口 + 扫参页本身）是**只读模型上的新动作**：
+     * 扫描不写当前 cfg，所以结果态的读锁不该锁它——锁了就等于"跑过一次
+     * 之后扫参入口永远点不动"（2026-10-30 真机抓出：result-mode 下按钮
+     * disabled + pointer-events:none，站长看着像"扫参还没做"）。 */
+    c.querySelectorAll("input, select, textarea").forEach(el => {
+      if (el.closest(".sweep-page")) return;
+      el.disabled = true;
+    });
     /* 面板内改 cfg 的按钮（+refine/删除/模式 pill…）同锁——cfg 只读；
-     * 折叠头是 div(role=button) 不受影响照常可点；新建 Plot 例外 */
+     * 折叠头是 div(role=button) 不受影响照常可点；新建 Plot 与扫参入口
+     * 例外 */
     c.querySelectorAll("button").forEach(b => {
-      if (!b.closest(".plot-cta")) b.disabled = true;
+      if (b.closest(".plot-cta") || b.closest(".pane-sweep-cta")
+          || b.closest(".sweep-page")) return;
+      b.disabled = true;
     });
   }
   for (const id of __RESULT_LOCK_TB) {
