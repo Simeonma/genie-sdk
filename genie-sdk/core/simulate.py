@@ -308,14 +308,16 @@ class Simulation:
         return self
 
     def run(self, *, gpu: int | None = None,
-            timeout_s: int | None = None, poll_interval: float = 2.0,
+            timeout_s: int | None = None, poll_interval: float = 1.0,
             progress=None) -> "Simulation":
         """提交（隐含 submit）→ 轮询到终态的同步入口。
 
         仿真时长 = domain.total_time（G18 单旋钮：唯一时间定义，SI 秒；
         作业推进到网格时间容量为止，步数是 build 后派生量）。其余是
         RunSpec 服务端字段：gpu/timeout_s；``progress(status_dict)``
-        每轮询一轮回调一次（打进度条用）。
+        每轮询一轮回调一次（打进度条用）。``poll_interval`` 缺省 1.0s
+        （2026-10-30 提速：与 slurm shim 的 1s 状态拍对齐；8s 的作业
+        不该再等 2s 的客户端拍）。
 
         gpu = **可选上限**（int ≥1；None = 交由调度器决定）。跨仓契约
         （2026-10-25 定案，与手册 07-run / 网关 _decide_n 同口径）：
