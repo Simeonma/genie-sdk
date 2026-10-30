@@ -135,6 +135,18 @@ window.__sweepPaneEvent = sweepPaneEvent;
 
 async function sweepRun() {
   if (sweepState.running) return;
+  if (!Object.keys((cfg && cfg.parameters) || {}).length) {
+    toast("参数表是空的——先在参数页加一个参数", "warn");
+    return;
+  }
+  const used = new Set();
+  for (const a of sweepState.axes) {
+    if (used.has(a.name)) {
+      toast("参数「" + a.name + "」被两条轴同时用了——一条轴扫一个参数", "warn");
+      return;
+    }
+    used.add(a.name);
+  }
   const axes = [];
   for (const a of sweepState.axes) {
     const p = sweepAxisPayload(a);
@@ -316,6 +328,16 @@ function renderSweepPane() {
   body.appendChild(note);
 
   const names = Object.keys((cfg && cfg.parameters) || {});
+  if (!names.length) {
+    const warn = document.createElement("div");
+    warn.className = "pane-note sweep-warn";
+    warn.textContent = "参数表是空的——先回参数页加一个参数，否则没有可扫的轴。";
+    body.appendChild(warn);
+  }
+  /* 换模型后旧轴名可能已不存在：清掉——否则下拉落成空白（选中项不在
+   * 选项里 = selectedIndex -1），点了 Run 还必然在服务端报轴名不存在。 */
+  for (const a of sweepState.axes)
+    if (a.name && !names.includes(a.name)) a.name = "";
   for (let i = 0; i < sweepState.axes.length; i++)
     body.appendChild(_sweepAxisRow(i, names));
 

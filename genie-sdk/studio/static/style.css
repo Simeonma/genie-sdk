@@ -2846,6 +2846,7 @@ input:focus-visible,textarea:focus-visible { outline: none; }
 .sweep-lab {
   flex: 0 0 auto; color: var(--text-secondary); font-size: var(--fs-xs);
 }
+.sweep-warn { color: var(--danger); }
 .sweep-opt { flex: 0 0 auto; min-width: 64px; }
 .sweep-page .frow select { line-height: 1.3; }
 .sweep-page .sweep-run { white-space: nowrap; }
