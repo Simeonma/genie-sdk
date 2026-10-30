@@ -1,6 +1,7 @@
 /* modules/sweep.js — 扫参页（G182 P6 / G4a 剩件；2026-10-30）
  *
- * 形态（站长定稿）：参数页底部 Parameter Sweep → 中间栏**扫参页**；每条
+ * 形态（2026-10-30 站长裁）：左树 Run 组的 **Sweep** 节点（与 Settings
+ * 并列）→ 中间栏**扫参页**；每条
  * 轴 = 一个参数 + 一组取值（线性 / 对数(10^x) / 显式列表），总点数 =
  * 各轴点数之积。参数页本身保持"单次仿真的单值表"，不做内联扫参。
  *
@@ -35,13 +36,8 @@ function _sweepNewAxis() {
   return { name: "", mode: "linspace", a: "", b: "", n: "5", values: "" };
 }
 
-/* 参数页底部入口：进扫参页 */
-function openSweepPane() {
-  if (!sweepState.axes.length) sweepState.axes = [_sweepNewAxis()];
-  inspectorSel = { kind: "sweep", i: null };
-  renderInspector();
-}
-
+/* 扫参页由左树 Run 组的「Sweep」节点打开（selectObj("sweep") →
+ * renderInspector 的 kind 分发）——与 Settings 并列，参数页不放入口。 */
 function _sweepLab(text, cls) {
   const el = document.createElement("span");
   el.className = cls || "flabel";
@@ -301,6 +297,7 @@ function _sweepAxisRow(i, names) {
 function renderSweepPane() {
   const c = $("config-content");
   if (!c) return;
+  if (!sweepState.axes.length) sweepState.axes = [_sweepNewAxis()];
   c.textContent = "";
   const body = document.createElement("div");
   body.className = "pane-body sweep-page";
@@ -308,12 +305,6 @@ function renderSweepPane() {
 
   const head = document.createElement("div");
   head.className = "sweep-head";
-  const back = document.createElement("button");
-  back.className = "mini";
-  back.textContent = "← 参数";
-  back.title = "返回参数表";
-  back.addEventListener("click", () => selectObj("params"));
-  head.appendChild(back);
   const title = document.createElement("span");
   title.className = "sweep-title";
   title.textContent = "参数扫描";

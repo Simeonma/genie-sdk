@@ -66,7 +66,12 @@ function renderTree() {
   }
 
   pushHead("Run", "run", null, true);
-  if (open("run")) pushInfo("Settings", "run");
+  if (open("run")) {
+    /* 扫参与 Settings 并列（2026-10-30 站长裁）：扫描是"怎么跑"的事，
+     * 不是参数表的事——入口挂在 Run 组里，参数页回归纯单值表。 */
+    pushInfo("Settings", "run");
+    pushInfo("Sweep", "sweep");
+  }
 
   /* ══ 物化器：spec → DOM 行（与原 mk* 逐一对应，行为零变化）═══ */
   const mkGroupHeadEl = (sp) => {

@@ -2494,7 +2494,6 @@ body.result-mode #config-content button:not(.plot-cta-btn) {
 }
 /* 扫参面是只读模型上的新动作（不改当前 cfg）：结果态照常可用——
  * 否则"跑过一次之后扫参入口永远灰着"，看起来像没做（真机实证）。 */
-body.result-mode #config-content .pane-sweep-cta button,
 body.result-mode #config-content .sweep-page button,
 body.result-mode #config-content .sweep-page input,
 body.result-mode #config-content .sweep-page select {
@@ -2759,7 +2758,6 @@ input:focus-visible,textarea:focus-visible { outline: none; }
  * 形态：说明一句 + 轴行（参数/方式/取值）+ 再加一条轴 + 总点数 +
  * Run/状态 + 左下角 Plot。轴行复用 .frow/.flabel/.param-value，只补
  * 宽度与总点数/动作行的排布。 */
-.pane-sweep-cta { margin-top: 14px; }
 .sweep-head {
   display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
 }

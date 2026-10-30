@@ -27,6 +27,7 @@ const TREE_META = {
   structure: ["structure", "Structure"], source: ["source", "Sources"],
   monitor: ["monitor", "Monitors"],
   run: ["run", "Settings"],
+  sweep: ["sweep", "Sweep"],
   params: ["params", "Parameters"],
 };
 const TREE_PV_KINDS = { geometry: 1, source: 1, monitor: 1, materials: 1 };

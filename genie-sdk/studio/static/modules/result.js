@@ -32,8 +32,7 @@ function __lockConfigInputs() {
      * 折叠头是 div(role=button) 不受影响照常可点；新建 Plot 与扫参入口
      * 例外 */
     c.querySelectorAll("button").forEach(b => {
-      if (b.closest(".plot-cta") || b.closest(".pane-sweep-cta")
-          || b.closest(".sweep-page")) return;
+      if (b.closest(".plot-cta") || b.closest(".sweep-page")) return;
       b.disabled = true;
     });
   }
