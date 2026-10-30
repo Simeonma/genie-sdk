@@ -49,7 +49,7 @@ from .core.sweep import SweepHandle
 # sys.modules 后属性寻址与语句级 import 皆通（material 实体在 core/）。
 _sys.modules[__name__ + ".material"] = material
 
-__version__ = "2.0.0"
+__version__ = "2.1.0"
 
 
 # ── 组合根（G1 分层契约，2026-10-11 定案）───────────────────────────
