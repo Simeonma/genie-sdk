@@ -392,23 +392,21 @@ button:not(:disabled):active,.tool-btn:not(:disabled):active,.tb-btn:not(:disabl
 }
 .param-name { flex: 0 0 110px; }
 .param-value { flex: 1 1 auto; min-width: 0; }
-/* 值列必须真的能收缩：`.frow > input` 的 150px 定宽（0,2,1）会顶掉
- * `.param-value` 的 flex——名字 110 + 值 150 + 单位 58 + 删 26 超出 ~315px
- * 中栏，单位下拉和删除钮被 overflow 裁掉（截图实证）。名字列同款压回
- * 110px（否则 `input` 的 150px 规则也会把名字撑到 150）。 */
+/* 参数表三列（2026-10-30 站长定稿）：名字 100 / 值可写单位、可收缩 /
+ * 第三列是**只读 SI 显示**（不是输入控件）。`.frow > input` 的 150px 定宽
+ * （0,2,1）会顶掉这两列的 flex、把名字撑到 150——必须用 id 选择器压过
+ * （截图实证：单位和删除钮曾被 overflow 裁掉）。 */
 #config-content .param-name {
-  flex: 0 0 110px; width: 110px; max-width: 110px;
+  flex: 0 0 100px; width: 100px; max-width: 100px;
 }
 #config-content .param-value {
   flex: 1 1 0; width: 0; min-width: 0; max-width: none;
 }
-/* 单位下拉（2026-10-30）：数字参数右侧的 58px 窄列；resolved 小注缩进到
- * 值列下方（与参数名 110px 对齐）。选择器带 #config-content，压过
- * `.frow select { flex: 1 1 auto }`（否则单位列会被拉宽/挤掉）。 */
-#config-content .param-unit { flex: 0 0 58px; min-width: 50px; }
-.param-si {
-  font-size: var(--fs-2xs); color: var(--text-muted);
-  padding: 0 0 4px 116px; font-variant-numeric: tabular-nums;
+.param-si-col {
+  flex: 0 0 64px; align-self: center; text-align: right;
+  padding-right: 4px; font-size: var(--fs-2xs); color: var(--text-muted);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
 }
 .param-name[readonly] { color: var(--text-secondary); background: var(--bg-secondary); }
 .frow .param-name + .param-value { margin-left: 6px; }

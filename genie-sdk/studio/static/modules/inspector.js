@@ -46,15 +46,11 @@ function renderInspector() {
 /* 参数页（G60① R24c 收口：可编辑表）——加/删/改值走 M3b 同一通道：
  * 直接改本地 cfg.parameters → onFormMutate → diff 出 patch 增量
  * （改名 = 删后重建；非法名前端即拒，与协议校验同一正则口径）。
- * 值解析：可转有限数字则存数字，否则存字符串（表达式槽语义）。
  *
- * 单位（2026-10-30 站长裁"参数表要能配单位"）：数字 + 单位下拉 → 存协议
- * 的单位串 ``0.5[um]``（求值域 = 纯数值换算，服务端解析成 5e-7）。表达式
- * （如 d/4）不走下拉——单位要写进表达式自己的字面量。行下 ``= 5e-7`` 是
- * resolved 快照，用户能直接看到"0.5 µm 到底是几米"。 */
-const PARAM_UNITS = ["", "m", "mm", "um", "nm", "pm",
-                     "s", "ms", "us", "ns", "ps", "fs",
-                     "Hz", "kHz", "MHz", "GHz", "THz"];
+ * 单位（2026-10-30 站长两次定稿）：**值里直接写单位**——`0.5[um]`，也接受
+ * `0.5um` / `0.5 um`（落 cfg 统一成协议串 `0.5[um]`）；第三列是**只读
+ * SI 显示**（本地立刻换算，不等服务端回声）——"0.5 µm 到底是几米"一眼可见。
+ * 表达式（`d/4`）原样存字符串，SI 列回落到 resolved 快照，取不到显示 —。 */
 const PARAM_NUM_RE = /^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/;
 /* 单位 SI 尺度（与协议 ``genie_protocol.expr._UNITS`` 的长度/时间/频率
  * 三族对齐）。GUI 要**立刻**给出 "0.5 µm = 5e-7"，不能等 resolved 回声
@@ -64,38 +60,28 @@ const PARAM_UNIT_SCALE = {
   s: 1, ms: 1e-3, us: 1e-6, ns: 1e-9, ps: 1e-12, fs: 1e-15,
   Hz: 1, kHz: 1e3, MHz: 1e6, GHz: 1e9, THz: 1e12, PHz: 1e15,
 };
+/* 带单位的值：数字 + （[unit] | unit），如 0.5[um] / 0.5um / 0.5 um。 */
+const PARAM_UNIT_SUFFIX_RE =
+  /^([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*(?:\[\s*([A-Za-z\u00b5\u03bc]+)\s*\]|([A-Za-z\u00b5\u03bc]+))$/;
 
-function _parseParamText(text) {
+/* 值文本 → {val: 要存进 cfg 的值, si: 本地可算的 SI 值}；
+ * 表达式返回 {val} 无 si（SI 列由 resolved 快照补）；坏单位返回 {err}。 */
+function _parseParamInput(text) {
   const t = String(text).trim();
-  if (t === "") return null;
-  const n = Number(t);
-  return Number.isFinite(n) ? n : t;
-}
-
-function _splitParamUnit(raw) {
-  const s = String(raw == null ? "" : raw).trim();
-  const m = s.match(
-    /^([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*\[([A-Za-z\u00b5\u03bc]+)\]$/);
-  if (!m) return { num: s, unit: "" };
-  const u = m[2].replace(/[\u00b5\u03bc]/g, "u");
-  return { num: m[1], unit: u };
-}
-
-function _paramUnitSelect(unit, onChange) {
-  const sel = document.createElement("select");
-  sel.className = "param-unit";
-  sel.title = "单位（换算成 SI 后存进 cfg；表达式请把单位写进字面量）";
-  const opts = PARAM_UNITS.slice();
-  if (unit && !opts.includes(unit)) opts.push(unit);   /* 保留未知/别名单位 */
-  for (const u of opts) {
-    const o = document.createElement("option");
-    o.value = u;
-    o.textContent = u || "—";
-    sel.appendChild(o);
+  if (t === "") return { err: "值不能为空" };
+  const m = t.match(PARAM_UNIT_SUFFIX_RE);
+  if (m) {
+    const num = m[1];
+    const unit = (m[2] || m[3]).replace(/[\u00b5\u03bc]/g, "u");
+    const scale = PARAM_UNIT_SCALE[unit];
+    if (scale == null) {
+      return { err: "未知单位 " + unit + "（支持 "
+               + Object.keys(PARAM_UNIT_SCALE).join("/") + "）" };
+    }
+    return { val: num + "[" + unit + "]", si: Number(num) * scale };
   }
-  sel.value = unit || "";
-  sel.addEventListener("change", onChange);
-  return sel;
+  if (PARAM_NUM_RE.test(t)) return { val: Number(t), si: Number(t) };
+  return { val: t };                    /* 表达式：单位写进字面量 */
 }
 
 function renderParamsPane() {
@@ -107,8 +93,8 @@ function renderParamsPane() {
   c.appendChild(body);
   const note = document.createElement("div");
   note.className = "pane-note";
-  note.textContent = "参数表 · 值可带单位（0.5 + µm = 5e-7 m）；表达式槽/sweep 轴"
-    + "引用这些名字（与脚本 f.parameters 同源）";
+  note.textContent = "参数表 · 值里直接写单位（0.5[um] / 0.5um），右列是换算"
+    + "后的 SI 值；表达式槽/sweep 轴引用这些名字（与脚本 f.parameters 同源）";
   body.appendChild(note);
   if (!(cfg.parameters && typeof cfg.parameters === "object")) cfg.parameters = {};
   const params = cfg.parameters;
@@ -120,26 +106,22 @@ function renderParamsPane() {
     renderInspector();               /* 离散动作后重建行集 */
     if (okMsg) toast(okMsg, "ok");
   };
-
-  /* 把"数值框 + 单位下拉"合成要存的协议值：有单位 → "0.5[um]"；
-   * 无单位 → 数字/表达式串（旧语义不变）。 */
-  const compose = (numText, unit) => {
-    const t = String(numText).trim();
-    if (t === "") return { err: "值不能为空" };
-    if (unit) {
-      if (!PARAM_NUM_RE.test(t))
-        return { err: "带单位时值必须是数字（表达式请把单位写进表达式）" };
-      return { val: t + "[" + unit + "]" };
-    }
-    const val = _parseParamText(t);
-    return val === null ? { err: "值不能为空" } : { val };
-  };
   const resolvedOf = (k) => {
     try {
       if (typeof displayCfg !== "undefined" && displayCfg
           && displayCfg.parameters) return displayCfg.parameters[k];
-    } catch (e) { /* 快照未到不显示小注 */ }
+    } catch (e) { /* 快照未到不显示 */ }
     return undefined;
+  };
+  const fmtSi = (v) => (typeof v === "number" && Number.isFinite(v))
+    ? v.toExponential(3) : "—";
+  /* 只读 SI 列：解析当前文本（本地可算就本地算，表达式回落 resolved） */
+  const siCell = (getSi) => {
+    const el = document.createElement("span");
+    el.className = "param-si-col";
+    el.title = "SI 值（单位已换算；表达式取服务端解析值）";
+    el.textContent = fmtSi(getSi());
+    return el;
   };
 
   for (const k of keys) {
@@ -152,33 +134,30 @@ function renderParamsPane() {
     l.title = "参数名（改名 = 删除后重建）";
     row.appendChild(l);
 
-    const { num, unit } = _splitParamUnit(params[k]);
     const v = document.createElement("input");
     v.className = "param-value";
-    v.value = num;
-    v.title = "数值（可配右侧单位）或表达式串（如 d/4）";
-    const us = _paramUnitSelect(unit, () => {
-      const out = compose(v.value, us.value);
-      if (out.err) { toast(out.err, "warn"); renderInspector(); return; }
-      mutate(() => { params[k] = out.val; });
-    });
-    /* 表达式不走单位下拉：单位必须在表达式字面量里 */
-    if (!PARAM_NUM_RE.test(num.trim()) && !unit) {
-      us.disabled = true;
-      us.title = "表达式不支持单位下拉——单位写进表达式字面量（如 0.5[um]/2）";
-    }
+    v.value = String(params[k]);
+    v.title = "值：数字、带单位（0.5[um] / 0.5um / 0.5 um）或表达式（d/4）";
+    const parsedSi = () => {
+      const p = _parseParamInput(v.value);
+      if (p.si != null) return p.si;
+      const res = resolvedOf(k);
+      return typeof res === "number" ? res : null;
+    };
+    const si = siCell(parsedSi);
+    v.addEventListener("input", () => { si.textContent = fmtSi(parsedSi()); });
     v.addEventListener("change", () => {
-      const out = compose(v.value, us.value);
-      if (out.err) {
-        toast(out.err, "warn");
-        const old = _splitParamUnit(params[k]);
-        v.value = old.num;
+      const p = _parseParamInput(v.value);
+      if (p.err) {
+        toast(p.err, "warn");
+        v.value = String(params[k]);
+        si.textContent = fmtSi(parsedSi());
         return;
       }
-      mutate(() => { params[k] = out.val; });
+      mutate(() => { params[k] = p.val; });
     });
     row.appendChild(v);
-    row.appendChild(us);
+    row.appendChild(si);
 
     const del = document.createElement("button");
     del.className = "mini";
@@ -204,23 +183,6 @@ function renderParamsPane() {
     });
     row.appendChild(del);
     body.appendChild(row);
-
-    /* resolved 小注：单位/表达式换算后的 SI 值（"0.5 µm 到底是几米"）。
-     * 带单位的数字本地立刻算（不等回声）；表达式才回落 resolved 快照。 */
-    let si;
-    if (unit && PARAM_NUM_RE.test(num.trim())
-        && PARAM_UNIT_SCALE[unit] != null) {
-      si = Number(num) * PARAM_UNIT_SCALE[unit];
-    } else {
-      const res = resolvedOf(k);
-      if (typeof res === "number") si = res;
-    }
-    if (si != null && String(si) !== num.trim()) {
-      const hint = document.createElement("div");
-      hint.className = "param-si";
-      hint.textContent = "= " + si.toExponential(4) + "（SI）";
-      body.appendChild(hint);
-    }
   }
   if (!keys.length) {
     const empty = document.createElement("div");
@@ -236,9 +198,17 @@ function renderParamsPane() {
   nameIn.placeholder = "名称";
   const valIn = document.createElement("input");
   valIn.className = "param-value";
-  valIn.placeholder = "2e-7 / 0.5 + 单位";
-  const unitIn = _paramUnitSelect("", () => {});
-  unitIn.title = "新参数的单位";
+  valIn.placeholder = "0.5[um] / 2e-7";
+  const addSi = siCell(() => {
+    const p = _parseParamInput(valIn.value);
+    return p.si != null ? p.si : null;
+  });
+  valIn.addEventListener("input", () => {
+    addSi.textContent = fmtSi((() => {
+      const p = _parseParamInput(valIn.value);
+      return p.si != null ? p.si : null;
+    })());
+  });
   const addBtn = document.createElement("button");
   addBtn.className = "mini";
   addBtn.textContent = "＋";
@@ -250,13 +220,13 @@ function renderParamsPane() {
       return;
     }
     if (name in params) { toast("参数 " + name + " 已存在——直接改它的值即可", "warn"); return; }
-    const out = compose(valIn.value, unitIn.value);
-    if (out.err) { toast(out.err, "warn"); return; }
-    mutate(() => { params[name] = out.val; }, "参数 " + name + " 已添加");
+    const p = _parseParamInput(valIn.value);
+    if (p.err) { toast(p.err, "warn"); return; }
+    mutate(() => { params[name] = p.val; }, "参数 " + name + " 已添加");
   });
   add.appendChild(nameIn);
   add.appendChild(valIn);
-  add.appendChild(unitIn);
+  add.appendChild(addSi);
   add.appendChild(addBtn);
   body.appendChild(add);
 }

@@ -17,7 +17,19 @@ let _serverCfg = null;
 let _valTimer = null;
 
 function onFormMutate() {
-  displayCfg = cfg;                       /* 表单值即显示值（表达式槽除外） */
+  /* 表单值即显示值——但只把**改过的路径**抄进 displayCfg，保住其余
+   * resolved 槽（表达式/单位串的显示副本）。修前整份 displayCfg = cfg：
+   * 一次没有实际变化的 blur 也会把 resolved 副本抹成 raw，"0.5[um]" 这类
+   * 值在 3D 与参数 SI 列里就失效了（2026-10-30 真机实证）。 */
+  if (!displayCfg || displayCfg === cfg) {
+    displayCfg = cfg;
+  } else {
+    try {
+      for (const op of diffCfg(_serverCfg || {}, cfg)) {
+        setPath(displayCfg, op.path, op.value);
+      }
+    } catch (e) { displayCfg = cfg; }   /* 兜底：结构突变时退回整份 */
+  }
   updateScene();
   renderTree();
   scheduleValidate();
