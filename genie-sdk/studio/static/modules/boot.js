@@ -1266,7 +1266,7 @@ window.__scene3dCount = () => scene && scene.structureGroup
   ? scene.structureGroup.children.length : -1;
 /* G59 已核实（2026-10-23）：termBusy 是 term.js 的**纯提交闸门**（防连点），
  * 不是忙闲镜像（进度条=会话现值投影，kernel_worker 头注的"废除旁证"
- * 指的是后者）。本导出仅供 e2e 探针（m2_gui_smoke）与 mobile.js 消费。 */
+ * 指的是后者）。本导出仅供 e2e 探针（m2_gui_smoke）消费。 */
 window.__termState = () => ({ busy: termBusy, seq: SessionSync.lineSeq, cfgSeq: SessionSync.cfgSeq });
 window.__termText = () => (document.getElementById("term-out") || {}).textContent || "";
 

@@ -5,8 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>GENIE — GPU-Empowered Nanophotonic Intelligent Engine · powered by Genie FDTD</title>
   <link rel="stylesheet" href="/style.css">
-  <!-- 移动端（<768px）覆盖：2026-10-17 从 style.css 拆出，桌面工作不碰此文件 -->
-  <link rel="stylesheet" href="/mobile.css">
   <!-- 内联 SVG 星芒 favicon（与顶栏 logo 同形同 accent 色，无外部文件依赖；R18 升级为
        logo 同款两档渐变 #1F62B0 → #4E8FD9 —— 用 data: URI 内联，tab 直接显示品牌图标，
        也不引入 /favicon.ico 的 404。 -->
@@ -169,10 +167,6 @@
       <div id="ribbon-meta" class="ribbon-meta" aria-hidden="true"></div>
   </div>
 
-  <!-- 移动模式页签条（<768px 显形；页签由 dock.js 按 MOBILE_PAGES 生成，
-       置顶——选择器在上方是通用习惯；成对面板（编辑/运行）同屏竖排）-->
-  <nav id="mobile-nav" aria-label="面板切换"></nav>
-
   <!-- ── 工作台（树 / 检查器 / scene / 代码）── -->
   <div id="main-layout">
 
@@ -194,18 +188,6 @@
     <!-- Col 3: 3D 场景（2026-10 站长裁决：Plot 升格为同级 Visualize 模块，
          场景区回归纯 3D——view-tabbar/plot-view 已迁 #visualize-panel） -->
     <div id="scene-panel">
-      <!-- 移动模式状态叠层（2026-10 站长裁决：状态卡页取消——状态/进度
-           直接叠在 3D scene 上（大屏语义）。会话投影：phase/进度条/ETA，
-           数据源 = 会话事件流（term.js 转喂），零本地权威。置于 scene-panel
-           内随面板被 dock 收养；空闲无作业整层隐藏（.m-idle）。 -->
-      <div id="m-scene-status">
-        <div class="m-hero">
-          <div class="m-state" id="m-state">就绪</div>
-          <div class="m-phase" id="m-phase">等待作业</div>
-          <div class="m-bar"><i id="m-bar-fill" style="width:0%"></i></div>
-          <div class="m-meta"><span id="m-meta-l"></span><span id="m-meta-r"></span></div>
-        </div>
-      </div>
       <div id="scene-stage">
         <div id="three-container"></div>
       <!-- B3/B4 工作区文件面板（col3 标签卡「文件」）：脚本/savefig 图片/
@@ -405,7 +387,6 @@
   <script src="/modules/script.js"></script>
   <script src="/modules/workspace.js"></script>
   <script src="/modules/term.js"></script>
-  <script src="/modules/mobile.js"></script>
   <script src="/modules/result.js"></script>
   <script src="/modules/dock.js"></script>
   <script src="/modules/matlib.js"></script>

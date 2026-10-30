@@ -1,8 +1,4 @@
-/* style.css — 桌面（≥768px）样式唯一来源。
- * 移动端（<768px）覆盖全部在 mobile.css（index.html 中后加载）。
- * 改桌面不要进 mobile.css；改移动不要进本文件。
- * 例外：移动专用组件的桌面基线（#mobile-nav 默认隐藏、#m-scene-status 默认
- * 隐藏、.m-viz-goedit 默认隐藏）留在这里——它们是"桌面不显示移动件"。 */
+/* style.css — Studio 唯一一份样式（桌面单档；2026-10-30 站长裁：移动端整体删除）。 */
 /* ══ 轻提示（2026-10-21 重刻）══
  * 白卡 + 状态点 + 发丝边 + shadow-2；进场 8px 上浮淡入，出场淡出。
  * 之前是内联样式写死的「白底 + 彩色 1px 描边 + 4px 左边条」，一眼 GitHub。 */
@@ -2742,74 +2738,12 @@ input:focus-visible,textarea:focus-visible { outline: none; }
 }
 .tree-vwin { position: absolute; top: 0; left: 0; right: 0; will-change: transform; }
 
-/* ══ 响应式两档（2026-10 站长裁决：移动端 = dock 退化形态）════════
-   desktop ≥768 全功能（视口宽度只影响默认比例，不再有第二套形态）；
-   mobile <768：dock 退化为单 stack 全屏 + 顶部页签条（拖拽/持久化停用，
-   面板 DOM 原件收养纪律不变）。追加在文件尾 = 同特异性下后写胜出。
-
-   dock 的「紧凑层」（COMPACT_MIN + 断点列宽解锁）在 2026-10 case 收敛时已删：
-   它的存在理由（Tree+Inspector 合堆页签）被 #struct-panel 结构合并取代。
-   文件里其余 ≤1359 的媒体块只是窄窗收窄，不是第二套布局。
-   这里原来的「紧凑层 :root 列宽」是死声明（G74），已随列宽 token 一起删除。 */
-
-/* -- 移动层 -- */
-/* 页签选择器置顶（2026-10 站长裁决：选窗标签放上方；移动模式专用条） */
-#mobile-nav {
-  display: none; align-items: stretch; gap: 2px;
-  min-height: 44px; padding: 0 8px; flex-shrink: 0;
-  background: var(--bg-secondary); border-bottom: 1px solid var(--border-soft);
-  overflow-x: auto; scrollbar-width: none;
-}
-#mobile-nav button {
-  border: none; background: none; cursor: pointer;
-  font-size: var(--fs-sm); color: var(--text-secondary);
-  padding: 10px 14px; min-height: 44px; white-space: nowrap;
-  border-bottom: 2px solid transparent;
-}
-#mobile-nav button.active {
-  color: var(--accent-2); font-weight: 600;
-  border-bottom-color: var(--accent);
-}
-/* r10：3D 页未连接空态覆盖层（mobile 模式、未连接时）。fixed 而非 absolute——
- * 空场景下 #scene-stage 可塌到 ~10px（r6b 实测，同 .scene-tools 处理），
- * absolute 居中会缩成一团。 */
-
-.m-3d-empty {
-  position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
-  z-index: 60;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 12px; text-align: center; padding: 24px 28px; border-radius: 14px;
-  background: rgba(248, 250, 252, 0.92); color: var(--text-secondary, #6B7280);
-  font-size: var(--fs-sm, 14px);
-  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
-}
-.m-3d-empty .m-3d-empty-btn {
-  min-height: 40px; padding: 0 20px; border-radius: 10px; border: none;
-  background: var(--accent, #1F62B0); color: #fff; font-size: var(--fs-sm, 14px);
-  cursor: pointer;
-}
-.m-3d-empty .m-3d-empty-btn:active { opacity: 0.85; }
-
 /* 紧凑层（中屏）：仿真要素横条横滑不换行（≥1024 交给 flex-wrap 成两行）。
  * 2026-10-17 站长审计：原档 768–1359 一律 nowrap + overflow-x:auto，导致
  * 1024/1100 时 Layout 组藏在滚动区外（视觉上等同被裁）。改为 ≤1023 才横滑
  * （平板宽度），1024–1199 明确落成「对象组一行 + 动作组一行」，控件全可见。 */
 @media (min-width: 768px) and (max-width: 1023px) {
   #workspace-bar .obj-toolbar { flex-wrap: nowrap; overflow-x: auto; }
-}
-
-/* ══ 移动模式状态叠层（#m-scene-status，<768px 显形）════════
-   2026-10 站长裁决：状态卡页取消——状态/进度直接叠 3D scene（大屏
-   语义）。空闲无作业整层隐藏（.m-idle 由 mobile.js updateHeroIdle
-   维护），作业激活/失败/停止才浮出。桌面 display:none——非移动件。 */
-#m-scene-status { display: none; }
-
-/* 移动 UI 修复批 r1–r16b 的样式已整体迁入 mobile.css（2026-10-17）。
- * 本文件只留两条桌面基线：.m-viz-goedit 默认隐藏（移动端才显形）、
- * ≥768 的「回底钮 / 历史 chips 只允许移动模式」护栏。 */
-.m-viz-goedit { display: none; }
-@media (min-width: 768px) {
-  .m-term-jump,#term-chips { display: none !important; }
 }
 
 /* ══ 扫参页（G182 P6，2026-10-30）：参数页底部入口 → 中间栏一副手套 ══

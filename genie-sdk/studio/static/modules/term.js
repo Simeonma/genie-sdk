@@ -45,8 +45,6 @@ const SessionSync = {
       setStopVisible(j.busy);
       if (typeof window.__jobPhase === "function")
         window.__jobPhase({ phase: j.phase || "idle", job_id: j.job_id || "" });
-      if (typeof window.__mobilePhase === "function")
-        window.__mobilePhase({ busy: j.busy, phase: j.phase || "idle", job_id: j.job_id || "" });
     }
     for (const l of (j.lines || [])) {
       this.lineSeq = Math.max(this.lineSeq, l.seq);
@@ -64,8 +62,6 @@ const SessionSync = {
          * （防刷屏），只喂 result-chip 进度条（方案 A，2026-10-15）。 */
         if (typeof window.__jobProgress === "function")
           window.__jobProgress(l.data || {});
-        if (typeof window.__mobileProgress === "function")
-          window.__mobileProgress(l.data || {});
         continue;
       }
       if (kind === "sweep-progress") {
@@ -94,8 +90,6 @@ const SessionSync = {
           window.__resultStatus = null;
         }
         if (!window.__resultMode) enterResult(SessionSync._boot);
-        if (typeof window.__mobileJobDone === "function")
-          window.__mobileJobDone(l.data);
         refreshResultChip();
         /* 活动页签的 Plot 重画（新数据到了）。原为 renderPlot(sp)——
          * 该函数从未存在（2026-10 重构走查补漏：__plots 非空 + job-done
@@ -406,10 +400,6 @@ function applyCfgSnapshot(c, resolved, seq, origin, paths) {
   renderTree();
   renderInspector();
   updateScene();
-  /* r12：会话配置到账（恢复/外部编辑）→ 复评 3D 页空态覆盖层
-   * （mobile.js 判定吃 getCfg()，配置非空 = 有场景 = 撤覆盖层） */
-  if (typeof window.__mobileSync3dEmpty === "function")
-    window.__mobileSync3dEmpty();
 }
 
 SessionSync.onSnapshot(applyCfgSnapshot);   /* 投影订阅同步器（收敛③） */
@@ -441,53 +431,12 @@ setInterval(async () => {
   if (dock) dock.addEventListener("click", () => {
     if (!window.getSelection().toString()) inp.focus();
   });
-  /* r12：移动模式输入框自适应高度（min 36px，封顶 4 行 ~96px，超出内部
-   * 滚动）。桌面零改动——只在 body.mobile-mode 下写 inline height。 */
-  const fitInput = () => {
-    if (!document.body.classList.contains("mobile-mode")) { inp.style.height = ""; return; }
-    inp.style.height = "auto";
-    inp.style.height = Math.min(Math.max(inp.scrollHeight, 36), 96) + "px";
-    inp.style.overflowY = inp.scrollHeight > 96 ? "auto" : "hidden";
-  };
-  inp.addEventListener("input", fitInput);
-  window.__termFitInput = fitInput;   /* 回填 chips / 模式切换后复评 */
-  /* r12：横向「历史 chips」条（#term-chips，样式只在移动媒体块显形）。
-   * 数据源 = 既有 termHistory；渲染最近 5 条，点击回填输入框。 */
-  const chipsBar = $("term-chips") || (() => {
-    const row = $("term-in-row"), card = $("term-card");
-    if (!row || !card) return null;
-    const bar = document.createElement("div");
-    bar.id = "term-chips";
-    card.insertBefore(bar, row);
-    return bar;
-  })();
-  function renderTermChips() {
-    if (!chipsBar) return;
-    chipsBar.innerHTML = "";
-    termHistory.slice(-5).forEach((code) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = "m-term-chip";
-      b.textContent = code.length > 24 ? code.slice(0, 24) + "…" : code;
-      b.title = code;
-      b.addEventListener("click", (e) => {
-        e.stopPropagation();   /* dock 点击有聚焦逻辑，不被抢焦点 */
-        inp.value = code;
-        if (typeof window.__termFitInput === "function") window.__termFitInput();
-        inp.focus();
-      });
-      chipsBar.appendChild(b);
-    });
-  }
-  window.__termRenderChips = renderTermChips;
   const submit = () => {
     const code = inp.value;
     if (!code.trim()) return;
     inp.value = "";
-    fitInput();
     termHistIdx = -1; termDraft = "";
     if (termHistory[termHistory.length - 1] !== code) termHistory.push(code);
-    renderTermChips();
     termExec(code);
     inp.focus();
   };

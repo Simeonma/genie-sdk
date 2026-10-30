@@ -28,28 +28,16 @@ const Dock = (function () {
   const TITLE = { "struct-panel": "Objects",
                   "scene-panel": "3D Scene", "visualize-panel": "Visualize",
                   "files-view": "Files", "term-dock": "Terminal", "json-panel": "Script" };
-                 /* 移动批 r1：补缺项——否则移动页签头显示裸 id */
 
-  /* ── 响应式三层（2026-10 站长裁决：移动端 = dock 的退化形态）─────
-   * 两档制（2026-10 case 收敛）：mobile (<768) / desktop (≥768)——compact 层已删
-   * + 按比例默认布局，消横向溢出；mobile (<768) dock 退化为单 stack
-   * 全屏 + 底部导航（拖拽/splitter/布局持久化全部停用，面板 DOM 原件
-   * 收养纪律不变）。MIN 是 let：随层级重算（clampSizes 等闭包引用）。*/
-  const MQ_MOBILE = window.matchMedia("(max-width: 767px)");
-
-  /* 2026-10 站长「case 收敛」：compact 层删除（其存在理由 = Tree+Inspector
-   * 合堆页签，已被 #struct-panel 结构合并取代）。桌面档统一用收窄地板
-   * （原 COMPACT_MIN 值）——窄桌面 800px 也能站住，宽桌面只是余量更大。 */
+  /* ── 布局只有一档（2026-10-30 站长裁：移动端整体删除）──────────────
+   * 桌面形态按视口比例分配；窄窗只影响比例（fitSizes 会按比例收），
+   * 不再有第二套形态/第二套导航。MIN 只读。 */
   const DESKTOP_MIN = { "struct-panel": 310, "scene-panel": 200,
                         "visualize-panel": 160, "term-dock": 80, "json-panel": 200 };
-  const MOBILE_MIN = { "struct-panel": 160, "scene-panel": 80,
-                       "files-view": 80, "visualize-panel": 80, "term-dock": 80, "json-panel": 80 };
-  let MIN = DESKTOP_MIN;
-  function isMobile() { return MQ_MOBILE.matches; }
+  const MIN = DESKTOP_MIN;
 
-  /* 默认布局按视口比例分配（不再锁死 px）：移动/桌面两档。 */
+  /* 默认布局按视口比例分配。 */
   function defaultTree() {
-    if (isMobile()) return mobileTree();
     /* 桌面唯一形态（2026-10 case 收敛）：左 结构｜属性，右 3D/结果/文件
      * + Script，下 Terminal；宽度只影响比例，不再有第二套形态 */
     const w = window.innerWidth, h = window.innerHeight;
@@ -75,56 +63,6 @@ const Dock = (function () {
         ],
       }] });
   }
-  /* 移动布局 = 页（page）制：每个导航项一个页面，成对面板同屏竖排
-   * （2026-10 站长裁决：Tree+Inspector 成对且优先于脚本/终端；
-   * 页签选择器置顶）。页 = 一棵小 dock 子树，复用同一套收养渲染。 */
-  /* 四页制（2026-10 站长裁决：状态卡页取消——状态/进度改叠 3D scene
-   * （#m-scene-status，大屏语义）；五页制的 3D 内嵌/并排裁决③保留。
-   * 尺寸在 mobileTree() 按视口高落 px（分数语义）。 */
-  /* 2026-10-17 四页签对齐：移动导航 = 单一入口（桌面 tab 行在移动端隐藏），
-   * 每个移动页带 ribbon 页映射——设计→design、仿真→fdtd、文件→file；
-   * 结果页无建模工具（ribbon 整条隐藏，见 CSS data-mpage）。 */
-  const MOBILE_PAGES = [
-    { key: "edit", label: "设计", tab: "design", panels: ["scene-panel", "struct-panel"] },
-    { key: "viz", label: "结果", tab: null, panels: ["visualize-panel"] },
-    { key: "run", label: "仿真", tab: "fdtd", panels: ["json-panel", "term-dock"] },
-    { key: "files", label: "文件", tab: "file", panels: ["files-view"] },
-  ];
-  let mobilePage = MOBILE_PAGES.find((p) => p.key === "edit")
-    || MOBILE_PAGES[0];   /* IDE 定位：打开即工作面（编辑页） */
-  function pageTree(page) {
-    if (page.tree) return norm(page.tree);            /* 预览变体的预建树 */
-    if (page.panels.length === 1) return { stack: [page.panels[0]], active: 0 };
-    return { dir: page.dir || "col",
-             /* r5：分数 sizes 原样保留（dock 尺寸语义是 px，此前
-              * Math.round(f*100) 直译成 38/62px 把面板压成空壳），
-              * 渲染后由 fitMobilePages 按容器实高落 px。 */
-             sizes: page.sizes,
-             children: page.panels.map((id) => ({ stack: [id], active: 0 })) };
-  }
-  function mobileTree() {
-    if (mobilePage.key === "edit") {
-      const H = window.innerHeight;
-      const strip = Math.max(180, Math.round(H * 0.38));
-      return { dir: "col", sizes: [strip, H - strip],
-               children: [
-                 { stack: ["scene-panel"], active: 0 },
-                 { stack: ["struct-panel"], active: 0 },
-               ] };
-    }
-    if (mobilePage.key === "run") {
-      const H = window.innerHeight;
-      const scriptH = Math.round(H * 0.32);
-      return { dir: "col", sizes: [scriptH, H - scriptH],
-               children: [{ stack: ["json-panel"], active: 0 },
-                          { stack: ["term-dock"], active: 0 }] };
-    }
-    return pageTree(mobilePage);
-  }
-  function mobilePageFor(id) {
-    return MOBILE_PAGES.find((p) => p.panels.includes(id)) || MOBILE_PAGES[0];
-  }
-
   const isLeaf = (n) => !n.dir;   /* 叶子 = {stack:[...]}；内节点有 dir */
   /* "id" ↔ {stack:[id], active:0} 归一化（含 localStorage 旧格式） */
   function norm(n) {
@@ -148,7 +86,6 @@ const Dock = (function () {
 
   /* ── 持久化 ── */
   function load() {
-    if (isMobile()) return null;   /* 移动模式固定形态，不读桌面布局 */
     try {
       const t = JSON.parse(localStorage.getItem(STORAGE_KEY));
       if (!t || leafSet(t).size !== PANEL_IDS.length) return null;
@@ -156,7 +93,6 @@ const Dock = (function () {
     } catch { return null; }
   }
   function save() {
-    if (isMobile()) return;        /* 移动形态不落盘（不覆盖桌面布局） */
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(tree)); } catch {}
   }
   function leafSet(t) {
@@ -211,7 +147,6 @@ const Dock = (function () {
     root.classList.add("dock-root");
     leafByUid.clear();
     build(node, root);
-    syncMobileNav();
     notifyScene();
   }
 
@@ -240,7 +175,6 @@ const Dock = (function () {
 
   function activateSideEffect(panelId) {
     if (panelId === "files-view" && window.loadWorkspaceFiles) loadWorkspaceFiles();
-    if (typeof window.__mobilePageActive === "function") window.__mobilePageActive(panelId);
   }
   function build(node, host) {
     if (isLeaf(node)) {
@@ -341,7 +275,7 @@ const Dock = (function () {
   let drag = null;   // { panelId, fromLeaf, ghost }
 
   function beginDrag(e, panelId, fromLeaf) {
-    if (drag || isMobile()) return;   /* 移动模式：拖拽停用（底部导航代管） */
+    if (drag) return;
     e.preventDefault();
     const ghost = el("div", "dock-drag-ghost");
     ghost.textContent = TITLE[panelId] || panelId;
@@ -575,37 +509,11 @@ const Dock = (function () {
 
   function renderAll() {
     render(tree, document.getElementById("main-layout"));
-    fitMobilePages();
-  }
-  /* 移动批 r5：页制 col 布局的分数 sizes（0<f<1）落到渲染时的容器实高——
-   * dock 尺寸语义是 px，MOBILE_PAGES 里的 0.38/0.62 直译成 38/62px 会把
-   * 两块面板压成 80px 空壳（编辑页首屏空白的根因之一）。仅移动模式、
-   * 且 sizes 全为分数时改写；桌面路径零触碰。 */
-  function fitMobilePages() {
-    if (!isMobile() || !tree || isLeaf(tree)) return;
-    const host = document.getElementById("main-layout");
-    if (!host || host.clientHeight <= 0) return;
-    const fr = tree.sizes;
-    if (!Array.isArray(fr) || !fr.length || !fr.every((s) => s > 0 && s < 1)) return;
-    const px = fr.map((f) => Math.floor(f * host.clientHeight));
-    px[px.indexOf(Math.max(...px))] += host.clientHeight - px.reduce((a, b) => a + b, 0);
-    tree.sizes = px;
-    const nodeEl = host.querySelector(":scope > .dock-node") || host;
-    const cells = [...nodeEl.children].filter((c) => c.classList.contains("dock-cell"));
-    cells.forEach((c, i) => { if (tree.sizes[i] != null) applySize(c, tree.dir, tree.sizes[i]); });
   }
   /* 把某面板顶到前台（激活其所在叶的对应页签）。Plot 新建时调——
    * Visualize 可能不是当前活动页签，甚至被预设精简掉了：找不到时
    * 合堆进 3D 所在叶（Plot 的语义近邻），再退而求全局第一叶。 */
   function activatePanel(id) {
-    /* 移动模式 = 切页：目标面板属于哪页就整页切换（成对面板同屏） */
-    if (isMobile()) {
-      mobilePage = mobilePageFor(id);
-      tree = mobileTree();
-      renderAll();
-      activateSideEffect(id);
-      return true;
-    }
     let host = null;
     (function walk(n) {
       if (host || isLeaf(n)) { if (!host && isLeaf(n) && n.stack.includes(id)) host = n; return; }
@@ -656,33 +564,22 @@ const Dock = (function () {
         if (isFinite(nr) && nr > 0.05 && nr < 0.95) {
           try { localStorage.setItem(KEY, String(nr)); } catch {}
         }
-        if (window.__mobileSync3d) { /* 比例变了，3D 投影重算由 ro 管 */ }
       };
       window.addEventListener("pointermove", move);
       window.addEventListener("pointerup", up);
     });
   })();
 
-  /* ── 响应式模式切换 + 移动端 chrome ────────────────────────────── */
+  /* ── 进度 chip 归位（唯一形态：tabbar）──────────────────────────── */
   function applyMode() {
-    MIN = isMobile() ? MOBILE_MIN : DESKTOP_MIN;
-    document.body.classList.toggle("mobile-mode", isMobile());
-    /* 进度 chip：移动模式固定到顶栏（第一诉求 = 随处可见），桌面回位 */
     const chip = document.getElementById("result-chip");
     const bar = document.getElementById("view-tabbar");
-    const top = document.querySelector(".topbar-actions");
-    if (chip && isMobile() && chip.parentElement !== top && top) top.prepend(chip);
-    else if (chip && !isMobile() && chip.parentElement !== bar && bar) bar.appendChild(chip);
-  }
-  function onModeChange() {
-    applyMode();
-    tree = isMobile() ? mobileTree() : (load() || defaultTree());
-    renderAll();
+    if (chip && bar && chip.parentElement !== bar) bar.appendChild(chip);
   }
   /* 窗口变窄时按比例缩固定列（消横向溢出——935px 实测缺陷的收口） */
   let fitRaf = 0;
   function fitSizes() {
-    if (isMobile() || !tree || isLeaf(tree)) return;
+    if (!tree || isLeaf(tree)) return;
     const walk = (node, box) => {
       if (isLeaf(node) || !box) return;
       const nodeEl = box.querySelector(":scope > .dock-node");
@@ -704,74 +601,16 @@ const Dock = (function () {
   window.addEventListener("resize", () => {
     clearTimeout(fitRaf);
     fitRaf = setTimeout(fitSizes, 250);
-    /* 保险（2026-10 截图核验发现）：change 事件在外部强制改视口
-     * （CDP emulation 等）时可能丢失——类与实际媒体态不一致就补
-     * 一次 onModeChange，模式永不卡死在旧形态。 */
-    if (document.body.classList.contains("mobile-mode") !== MQ_MOBILE.matches)
-      onModeChange();
   });
-  MQ_MOBILE.addEventListener("change", onModeChange);
 
   /* ── 对外 ── */
   function init() {
-    
     const host = document.getElementById("main-layout");
     if (!host) return;
     applyMode();
-    
-    tree = isMobile() ? mobileTree() : (load() || defaultTree());
-    
+    tree = load() || defaultTree();
     render(tree, host);
-    
     window.addEventListener("beforeunload", save);
-    wireMobileNav();
-    syncMobileNav();   /* 移动批 r1：wireMobileNav 在 render 之后生成页签钮——补一次同步，否则初始页无 .active */
-  }
-  /* 移动页 → ribbon 页同步（2026-10-17）：桌面 tab 行在移动端隐藏，移动导航
-   * 成为单一入口。boot 的页签控制器晚于 Dock.init，首次调用用 setTimeout 兜底。 */
-  function applyRibbonTab(page) {
-    if (!isMobile() || !page || !page.tab) return;
-    const go = () => {
-      if (typeof window.genieSetTab === "function") window.genieSetTab(page.tab);
-    };
-    if (typeof window.genieSetTab === "function") go();
-    else setTimeout(go, 0);
-  }
-  /* 底部→顶部导航（移动模式）：页签条由 MOBILE_PAGES 生成，置顶显示 */
-  function wireMobileNav() {
-    const nav = document.getElementById("mobile-nav");
-    if (!nav) return;
-    nav.innerHTML = "";
-    MOBILE_PAGES.forEach((page) => {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.textContent = page.label;
-      b.dataset.page = page.key;
-      b.addEventListener("click", () => {
-      activatePanel(page.panels[0]);
-      applyRibbonTab(page);
-    });
-      nav.appendChild(b);
-    });
-  }
-  function syncMobileNav() {
-    const nav = document.getElementById("mobile-nav");
-    if (!nav || !isMobile() || !tree) return;
-    const cur = (function activePanelOf(n) {
-      if (n.stack) return n.stack[n.active];      /* 叶 */
-      for (const c of n.children) { const r = activePanelOf(c); if (r) return r; }
-      return null;                                 /* 成对面板页（node 树）取首个活动叶 */
-    })(tree);
-    /* 移动批 r5⑤：当前页 key 写入 body[data-mpage]，CSS 按页隐藏共享件
-     * （如结果页隐藏 #workspace-bar）。样式全在移动媒体块，桌面零影响。 */
-    const mpage = MOBILE_PAGES.find((p) => p.panels.includes(cur));
-    if (mpage) {
-      document.body.dataset.mpage = mpage.key;
-      applyRibbonTab(mpage);
-    }
-    nav.querySelectorAll("button").forEach((b) => {
-      b.classList.toggle("active", b.dataset.page === mobilePage.key);
-    });
   }
   function reset() {
     localStorage.removeItem(STORAGE_KEY);
@@ -795,7 +634,7 @@ const Dock = (function () {
     },
   };
   function preset(name) {
-    if (!PRESETS[name] || isMobile()) return false;   /* 移动模式无预设概念 */
+    if (!PRESETS[name]) return false;
     tree = PRESETS[name]();
     save();
     renderAll();
