@@ -127,8 +127,10 @@ def _env_int(name: str, default: int) -> int:
 
 DEFAULT_TIMEOUT_S = 3_600
 # 单作业卡数上限（R22 G154 站长裁：提为协议常量，fdtd serve
-# demand.MAX_RANKS import 同一值——上限只有一个出处，改一处双方生效）。
-MAX_GPU_PER_RUN = 4
+# demand.MAX_RANKS import 同一值——上限只有一个出处，改一处双方生效。
+# 2026-10-31 站长令 4→8：默认算力 BSCC 单节点 8×V100-SXM2-32GB，
+# 单作业可整节点调度；跨节点不在本常量射程）。
+MAX_GPU_PER_RUN = 8
 MAX_SWEEP_POINTS = _env_int("FDTD_MAX_SWEEP_POINTS", 512)  # sweep 展开点数上限
 MAX_SWEEP_AXES = 32               # sweep 参数轴数上限
 

@@ -31,7 +31,7 @@ demand). Returns the `Simulation` itself (`state == "done"`), ready for
 
 | Param | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `gpu` | int | no | — | **Optional upper bound** on GPUs (1..4). The server picks the actual count `N` from the model's estimated demand and the machine capacity, then caps it by your `max_gpu_per_run` quota and by this value. Omit it unless you want to forbid multi-GPU. Which cards, NV-link pairing and axis splitting are the provider's business |
+| `gpu` | int | no | — | **Optional upper bound** on GPUs (1..8). The server picks the actual count `N` from the model's estimated demand and the machine capacity, then caps it by your `max_gpu_per_run` quota and by this value. Omit it unless you want to forbid multi-GPU. Which cards, NV-link pairing and axis splitting are the provider's business |
 | `timeout_s` | int | no | 3600 | Server-side job timeout (s) |
 | `poll_interval` | float | no | 2.0 | Polling interval (s) |
 | `progress` | callable | no | — | Per-poll callback `progress(status_dict)` |

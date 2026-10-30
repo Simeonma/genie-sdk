@@ -19,7 +19,7 @@ independent `Simulation` per point — nothing has been submitted yet.
 | Param | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `parameters` | list | yes | — | Axis form: `[{"name": "pitch", "linspace": [10e-9, 40e-9, 4]}, …]`; each axis is `{"name": …}` plus exactly one of `values` / `linspace` / `logspace` (violating → `SweepExpandError`); `name` must be a key of the base `parameters` table |
-| `gpus_per_sim` | int | no | 1 | GPU cap per point — passed to each point's `run(gpu=…)` (a real knob); same cap as `run(gpu=…)` itself (1..4, single protocol constant), out-of-range raises `SweepExpandError` at the call point |
+| `gpus_per_sim` | int | no | 1 | GPU cap per point — passed to each point's `run(gpu=…)` (a real knob); same cap as `run(gpu=…)` itself (1..8, single protocol constant), out-of-range raises `SweepExpandError` at the call point |
 | `max_parallel` | int | no | 1 | Concurrent points in flight (1 = strictly sequential; capped by your quota) |
 | `on_failure` | str | no | `"continue"` | `"continue"` (bad points mark `failed`, the rest run) / `"abort"` (first bad point **of any bad kind** — `failed`/`killed`/`archived` — stops scheduling and cancels in-flight points) |
 | `mode` | str | no | `"product"` | `"product"` (Cartesian) / `"zip"` (axes paired element-wise, equal lengths required) |

@@ -154,6 +154,10 @@ class Client:
     def health(self) -> dict:
         return self._req("GET", "/api/health").json()
 
+    def usage(self) -> dict:
+        """GET /api/usage → 本人本月账本（GPU 卡时/笔数/成本/配额）。"""
+        return self._req("GET", "/api/usage").json()
+
     def submit(self, config: dict) -> str:
         """SimConfig JSON → job_id。400=守卫拒、422=形状错、401=key 无效。"""
         r = self._req("POST", "/api/jobs", ok=(200, 202), json_body=config)

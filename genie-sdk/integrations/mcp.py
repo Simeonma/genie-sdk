@@ -41,6 +41,7 @@ import time
 from typing import Any, Callable
 
 from .agent_tools import starter_script
+from ..models import MAX_GPU_PER_RUN
 
 __all__ = ["TOOLS", "TOOL_NAMES", "execute_tool", "build_server", "main",
            "set_session_factory", "SessionUnavailable"]
@@ -191,7 +192,9 @@ TOOLS: list[dict[str, Any]] = [
         "parameters": {
             "type": "object",
             "properties": {
-                "gpu": {"type": "integer", "description": "卡数 1..4"},
+                "gpu": {"type": "integer", "description": (
+                    f"GPU 数上限 1..{MAX_GPU_PER_RUN}（可选；实际给几张"
+                    "由服务端按需求与配额裁定）")},
                 "timeout_s": {"type": "integer", "description": "作业超时（秒）"},
             },
         },

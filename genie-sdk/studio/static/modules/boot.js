@@ -799,6 +799,13 @@ function connDialog(initialView) {
           <label class="gc-label" for="v2-acct-user">Signed in as</label>
           <input id="v2-acct-user" class="gc-input" readonly>
         </div>
+        <!-- 账本区块（记账三件套③，2026-10-31）：本月卡时/笔数/配额；
+             拿不到（老会话进程 / 免登录形态）整块隐去，不留半截。 -->
+        <div class="gc-field" id="v2-acct-usage" style="display:none">
+          <label class="gc-label" for="v2-acct-usage-line">本月 GPU 卡时</label>
+          <div id="v2-acct-usage-line" class="gc-input"
+               style="display:flex;align-items:center"></div>
+        </div>
         <div class="gc-links" style="justify-content:flex-start">
           <a id="v2-acct-cp" class="gc-link">Change password</a>
         </div>
@@ -932,11 +939,35 @@ function connDialog(initialView) {
   const regMsg = msgOf("v2-reg-msg");
   const pwdMsg = msgOf("v2-pwd-msg");
   const recMsg = msgOf("v2-rec-msg");
+  /* 账本区块（记账三件套③）：/api/usage（经 /gw 白名单 → 网关账本）。
+   * 只在 Account 视图每次打开时拉一次——数据低频变化，不做常驻轮询
+   * （R11：不做常驻徽标/仪表盘，常驻即噪音）。 */
+  function fillAcctUsage() {
+    const box = $("v2-acct-usage"), line = $("v2-acct-usage-line");
+    if (!box || !line) return;
+    fetch("/api/usage", { headers: { "X-API-Key":
+      localStorage.getItem("genie_v2_api_key") || "" } })
+      .then(r => r.ok ? r.json() : null)
+      .then(u => {
+        if (!u || typeof u.gpu_hours !== "number") {
+          box.style.display = "none"; return;
+        }
+        const q = u.quota && u.quota.gpu_hours_monthly;
+        const cap = (!q || q >= 999999) ? "不限" : String(q);
+        line.textContent =
+          (u.gpu_hours < 0.01 ? "<0.01" : u.gpu_hours.toFixed(2))
+          + " 卡时 · 配额 " + cap
+          + " · " + (u.count || 0) + " 笔";
+        box.style.display = "";
+      })
+      .catch(() => { box.style.display = "none"; });
+  }
   const showView = (v) => {
     ["login", "register", "passwd", "recover", "account"].forEach((k) => {
       const el = $("v2-view-" + k);
       if (el) el.style.display = k === v ? "block" : "none";
     });
+    if (v === "account") fillAcctUsage();
   };
   fetch("/api/health").then(r => r.json()).then(h => {
     if (h && h.upstream) console.info("[genie] submit upstream:", h.upstream);

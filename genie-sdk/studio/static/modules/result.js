@@ -445,6 +445,21 @@ function refreshResultChip() {
         + (st.grid_shape || []).join("×");
       sp.title = sp.textContent;
       chip.appendChild(sp);
+      /* 本单卡时（记账三件套随行，2026-10-31）：网关终态状态的
+       * gpu_seconds（= 授予卡数 × 墙钟，两腿都写）。取不到就静默不
+       * 显示（老会话进程 / 旧作业），绝不编数字（R11）。 */
+      fetch("/api/jobs/" + encodeURIComponent(st.job_id || ""), { headers: KEYH })
+        .then(r => r.ok ? r.json() : null)
+        .then(j => {
+          const gs = j && Number(j.gpu_seconds);
+          if (gs > 0 && sp.isConnected) {
+            const h = gs / 3600;
+            sp.textContent += " · 本单 "
+              + (h < 0.01 ? "<0.01" : h.toFixed(2)) + " 卡时";
+            sp.title = sp.textContent;
+          }
+        })
+        .catch(() => {});
       const dl = document.createElement("a");
       dl.href = "/api/jobs/" + encodeURIComponent(st.job_id || "") + "/result";
       dl.download = (st.job_id || "results") + "_results.h5";

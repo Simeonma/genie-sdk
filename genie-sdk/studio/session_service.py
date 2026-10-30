@@ -436,9 +436,10 @@ def _backend() -> str:
 
 # 白名单：会话只代拨这几族。别的路径一律 403（不做通用代理）。
 # （api/health：Client.health() 经 /gw 走会话轨时需要。网关 tools 面
-# 已随 G19b 撤除——/api/tools/* 是 Studio 纯本地实现，不经 /gw。）
+# 已随 G19b 撤除——/api/tools/* 是 Studio 纯本地实现，不经 /gw。
+# api/usage：本人本月账本——记账三件套③，2026-10-31。）
 _GW_ALLOW = ("whoami", "api/auth/", "api/jobs", "api/health",
-             "api/config/")
+             "api/config/", "api/usage")
 
 
 # ── 会话代持凭据（G72 终稿：token 只住会话，脚本零凭据）────────────
