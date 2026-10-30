@@ -94,7 +94,11 @@ class Client:
         eff = self.timeout if (timeout is None and not _unlimited) else timeout
         # 会话轨的代理按 X-Upstream-Timeout 控制上游超时（直连时网关
         # 忽略未知头，无害）——否则 /gw 的 120s 缺省会盖掉本地设置。
-        self._s.headers["X-Upstream-Timeout"] = str(eff)
+        # G178 的下载面是"客户端不限时"（eff=None）：头本身必须是**数字**
+        # ——修前 str(None)="None"，代理按畸形请求 422（真机实证：每个点
+        # 的结果下载都失败，点文档只剩 cfg+state，立方读不出结果）。
+        self._s.headers["X-Upstream-Timeout"] = (
+            "86400" if eff is None else str(eff))
         try:
             r = self._s.request(method, self.base_url + path,
                                 json=json_body,
