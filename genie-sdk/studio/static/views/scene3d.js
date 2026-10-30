@@ -1444,6 +1444,7 @@ class Scene3D {
     const aspect = (this.container.clientWidth || 400) / (this.container.clientHeight || 300);
     if (box.isEmpty()) {
       const size = 8e-7;
+      this.camera.zoom = 1;                    /* 见下：复位必须清掉滚轮缩放 */
       this.camera.left = -size * aspect; this.camera.right = size * aspect;
       this.camera.top = size; this.camera.bottom = -size;
       this.camera.near = 1e-9; this.camera.far = 1e-4;
@@ -1498,10 +1499,19 @@ class Scene3D {
         center.z + viewDir.z * viewDist);
     }
     this.camera.lookAt(center);
+    /* 复位 = 角度 + 大小。正交相机滚轮缩放改的是 camera.zoom（视锥上下界
+     * 不变），fitCamera 只重设 left/right/top/bottom——不清 zoom 就变成
+     * "只复位角度、缩放留着"（2026-10-30 站长实测）。透视相机 zoom 恒 1，
+     * 这里一并归位无副作用。 */
+    this.camera.zoom = 1;
     this.camera.updateProjectionMatrix();
-    if (this.controls) this.controls.target.copy(center);
+    if (this.controls) {
+      this.controls.target.copy(center);
+      this.controls.update();
+    }
     /* 取景变了 → 坐标尺的屏幕等大换算与"最近棱"选择都要重算 */
     this._updateRulers();
+    this.markDirty();
   }
 
   /* ── 透视 / 正交切换（2026-10-21）──

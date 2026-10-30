@@ -356,7 +356,6 @@ function _mergeForeignPaths(serverCfg, paths) {
     try { setPath(cfg, p, v); touched = true; } catch { /* 定位不到就跳过 */ }
   }
   if (!touched) return false;
-  displayCfg = cfg;
   FormPanel.setCfg(cfg);
   renderTree();          /* 名字/颜色/几何可能变了；不碰检查器（焦点在里面） */
   updateScene();
@@ -391,6 +390,13 @@ function applyCfgSnapshot(c, resolved, seq, origin, paths) {
   if (origin === "patch" && cfg) {
     _mergeForeignPaths(c, paths);   /* 只并入"不是我改的"那些路径 */
     _serverCfg = snap;              /* 刷新 diff 基准，不重建面板 */
+    /* 保住服务端的 resolved 副本：表单改动会把 displayCfg 打回 raw（表达式
+     * 槽/单位串原样），3D 与参数小注都靠这份"表达式→数值"的显示副本。
+     * 缺 resolved（服务端解析失败）时维持现状。 */
+    if (resolved) {
+      displayCfg = resolved;
+      updateScene();
+    }
     return;
   }
   _serverCfg = snap;
