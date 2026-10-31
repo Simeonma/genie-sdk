@@ -8,7 +8,7 @@ sweep = 编排层：把"跑一个仿真"原语（Simulation.run）用 N 次。
   参数代入 + 表达式求值 → N 份纯数值配置（SweepExpandError 在
   f.sweep() 调用点即抛，对应旧 POST 422 面）；
 - **窗口执行**：每点 = 一个独立 Simulation 实例走 run() 全原语——
-  本地校验、auto-save（逐点 h5 落会话结果目录）、visualize/结果面
+  本地校验、auto-save（逐点 `.gensim` 点文档落扫描文件夹）、visualize/结果面
   随原语免费。max_parallel = 1（缺省）零线程顺序执行；> 1 线程池，
   每线程独占一个实例（run 内部 K4 锁为实例级，无共享状态）；
 - **abort（G89 重写）**：首个坏终态停排新点 + 取消在途——不再有
@@ -367,7 +367,7 @@ class SweepHandle:
     """客户端 sweep 编排：N 个点实例 × run() 原语的窗口执行。
 
     每点是一个独立 Simulation 实例（``h.sims[i]``）——run() 原语的
-    全套语义随点免费：本地校验、auto-save（逐点 h5 落会话结果目录）、
+    全套语义随点免费：本地校验、auto-save（逐点 `.gensim` 点文档）、
     visualize/结果面。生命周期::
 
         pending → running → done | canceled（abort/取消）| failed（全灭）
