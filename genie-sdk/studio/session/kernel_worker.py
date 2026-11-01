@@ -42,7 +42,6 @@ session_state.json 自动重放，父层会在 terminal 注明）。**没有本�
 """
 from __future__ import annotations
 
-import io
 import json
 import os
 import signal
@@ -155,7 +154,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
     sess_url = ""
     sess_key = ""
     first_connect_note = True
-    restored: list = []      # B2：本次新生由落盘重放出来的实例（bind 判据）
+    restored: list = []      # B2：本次新生由落盘重放出来的实例（重放判据）
     real_connect = genie._connect_direct   # 内部直连（公开 connect 已零参化）
     # B2 会话态落盘路径：管理器经 GENIE_STATE_FILE 显式传递（系统文件
     # 住系统空间，2026-10-13 搬家定案）；缺省回退 cwd 仅为独立调试形态
@@ -166,8 +165,8 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
     # 工作区锚（2026-10-20 结果配额修复）：启动即定格为绝对路径——
     # 结果实际由 _auto_save_result 落 **worker cwd** 的 genie_results/
     # （$GENIE_RESULT_DIR 未设时），且用户代码可 os.chdir，故清理目标
-    # 只能锚定启动 cwd，不能锚定 state 目录（旧 bug：目标指向
-    # session/<session_id>/genie_results，该目录从未存在 → 配额从未生效）。
+    # 只能锚定启动 cwd，不能锚定 state 目录（旧 bug：目标指向会话状态目录下的
+    # genie_results，那个目录从未存在 → 配额从未生效）。
     workspace = Path.cwd()
 
     # session_connect 连出来的实例落这里。**build（脚本运行）期间临时改道**

@@ -53,15 +53,6 @@ def write(*, url: str, token: str = "") -> None:
         pass
 
 
-def update(**fields) -> None:
-    """就地更新若干字段（保留 url/token）。"""
-    cur = read() or {}
-    if not cur:
-        return
-    cur.update({k: v for k, v in fields.items() if v is not None})
-    write(url=cur.get("url", ""), token=cur.get("token", ""))
-
-
 def read() -> dict | None:
     """读门牌；不存在/坏文件 → None（调用方按"没有会话"处理）。
 

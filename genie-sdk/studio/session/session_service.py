@@ -2,9 +2,7 @@
 
 一个服务、一份 kernel 管理器、一个 worker、一个输出环。
 
-    host ─┐
-          ├─(HTTP, 仅本机)→ session_service ──→ kernel_worker 子进程
-    studio┘
+    studio ─(同进程调用 / 本机 HTTP)→ session_service ──→ kernel_worker 子进程
 
 **M2/O1**（确定性启动）：本地 ``genie studio`` 自己起这个服务（端口由
 OS 分配、地址与口令经内存 + rendezvous 文件显式传递），**不再"探测 8123
@@ -17,10 +15,10 @@ OS 分配、地址与口令经内存 + rendezvous 文件显式传递），**不�
   - ``key``      = 能不能提交（``/attach`` 幂等换绑，**换 key 不换模型**）。
   一个进程只有一份模型：新模型 = ``/model/new``（丢弃旧的），不是新命名空间。
 
-**唯一网关出口**：``/gw/{path}`` 代所有客户端（studio/host/console）拨后端，
+**唯一网关出口**：``/gw/{path}`` 代所有客户端（studio / console）拨后端，
 带路径白名单。上游不可达的措辞只有这一处实现。
 
-本服务只听 127.0.0.1；身份判断只发生在 host/studio 客户端。可选口令
+本服务只听 127.0.0.1；身份判断只发生在 studio 客户端。可选口令
 （``GENIE_SESSION_TOKEN``）用于本机会话端口——未配置即旧的"本机信任面"。
 """
 from __future__ import annotations

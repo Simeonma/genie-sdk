@@ -21,9 +21,10 @@ v2 的两个工具（``current_script`` / ``publish_script``）已退役：脚�
 
 设计纪律
 --------
-· **会话从哪来**：``discover()`` 读门牌找正在跑的 Studio——由组合根在
-  ``genie/__init__`` 注入（``set_session_factory``），本模块不 import studio
-  （分层契约：integrations 不得依赖 studio）。
+· **会话从哪来**：组合根注入的工厂（``genie/__init__._session_client``）用
+  ``rendezvous.alive()`` 读门牌并探活，接上正在跑的 Studio——本模块不 import
+  studio（分层契约：integrations 不得依赖 studio）。没有活着的 Studio → 工具
+  直说"没有会话"，不把死 client 伪装成传输错误。
 · **工具描述是 prompt**，不是文档：第一句写"什么时候该用我"，参数约束写进
   schema，报错要能自我纠正。
 · 写是**异步**的：``edit_model`` / ``run_script`` 会等到落地再返回，省掉

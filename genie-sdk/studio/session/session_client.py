@@ -18,23 +18,22 @@
 M2/O1+O2（2026-10-22）后的三条界：
   1. **会话地址 = 部署细节**：本模块不再从环境变量猜地址；进程主入口把
      ``SessionClient(url)`` 显式注入 Studio 工厂（``create_app(session=…)``）。
-     环境变量只在独立会话服务这种跨进程形态（console、外部工具）里作为缺省值。
-  2. **三生命周期正交**：工作区（一个进程一片目录，登录不参与）/ token（能不能提交）/
-     一个进程只有一份模型：刷新/重登都保留它，``new_model()`` 才丢弃
-     （请求面既没有 owner 也没有 session_id）。
+     环境变量只在跨进程客户端（console / 外部工具）里作为缺省值。
+  2. **两条生命周期 + 一份模型**：工作区（一个进程一片目录，登录不参与）/
+     token（能不能提交）互不决定；模型一个进程只有一份，刷新/重登都保留它，
+     ``new_model()`` 才丢弃（请求面既没有 owner 也没有 session_id）。
   3. **唯一网关出口**：Studio 不再自己拨号后端。``gateway()`` 把
      /api/auth/*、/api/jobs/* 交给会话服务转发（会话侧有
      路径白名单），于是"上游不可达"只有一种措辞、一个实现。
      /api/tools/*（库清单/材料拟合）自 G19b 起为 Studio 本地实现，
      不经此转发面（G111 清账 R38）。
 
-本模块仍是**唯一一份**拨号/错误翻译实现：host(:8843) 与
-studio(:8777) 都经它说话。
+本模块仍是**唯一一份**拨号/错误翻译实现：Studio 与跨进程客户端
+都经它说话。
 """
 from __future__ import annotations
 
 import os
-import re
 
 from fastapi import FastAPI, HTTPException, Request
 
@@ -57,7 +56,7 @@ class SessionClient:
     """会话服务客户端（唯一一份）。
 
     ``token`` = 本机会话端口的访问口令（O1：会话端口带口令，写进
-    rendezvous 文件；未配置 = 保持旧的"本机信任面"形态，云宿主不受影响）。
+    rendezvous 文件；未配置 = 退回"本机信任面"形态）。
     """
 
     def __init__(self, base_url: str | None = None, *, token: str = "",

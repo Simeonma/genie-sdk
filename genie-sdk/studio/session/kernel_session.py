@@ -599,7 +599,7 @@ class SessionKernel:
                              "paths": ev.get("paths") or []}
                 self._cfg_seq += 1
         elif kind == "ack":
-            # 控制面回执（attach/bind）：不是 op 完成，不动账本——
+            # 控制面回执（attach）：不是 op 完成，不动账本——
             # 换凭据不该把正在跑的 exec 标成空闲（G71 的根因）。
             pass
         elif kind == "done":
