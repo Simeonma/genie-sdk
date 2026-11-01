@@ -118,7 +118,7 @@ def create_app(*, static_dir: str | Path | None = None,
     elif mount_session:
         raise ValueError(
             "create_app(mount_session=True) 需要显式 session：地址来自门牌"
-            " discover() 或 LocalSessionHost（独立会话服务已退役，没有默认地址）")
+            " discover() 或 LocalSessionHost（独立服务已退役，没有默认地址）")
     else:
         sess = None
 

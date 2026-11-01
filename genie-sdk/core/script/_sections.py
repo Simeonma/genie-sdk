@@ -249,7 +249,7 @@ def _gen_materials(list_, W: list, env: dict) -> list[str]:
         elif mt.get("type") == "from_library":
             # Q4=B 裁决（R38）：from_library 渲染分支整体退役。产道已全灭
             # ——GUI 工具条走拟合对话框（G20）、表单编辑分支已删、.gensim
-            # 导入与线格式模型/会话校验全部拒收该节点——退役前只剩渲染
+            # 导入与线格式模型/端口校验全部拒收该节点——退役前只剩渲染
             # golden 在喂它。线格式 LibraryMatSpec 的拒收+指路**仍在**
             # （F2 定案，输入侧防御）；拟合正道 = f.mat.add_from_library
             # 糖 / genie.material.fit_nk（渲染产物形态见手册 10 的合并示例）。

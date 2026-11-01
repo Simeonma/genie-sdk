@@ -13,11 +13,11 @@
   · ``get_starter_script`` / ``list_materials``  样板与材料库
 
 v2 的两个工具（``current_script`` / ``publish_script``）已退役：脚本不是本体，
-"读脚本文本"改成读模型，"推脚本文本"改成把脚本**跑进**会话（``run_script``）。
+"读脚本文本"改成读模型，"推脚本文本"改成把脚本**跑进** worker（``run_script``）。
 （本地 SDK 的 drafts 镜像通道也已整体退役——G53 裁决，2026-10-23。）
 ``check_script``（本地零网络体检）于 2026-10-28 随 G174 退役：自纠 =
 ``run_script(mode="build")`` 读带行号的错误，"看模型不跑" = build +
-``get_model``——会话执行原生覆盖，无需第二个执行引擎。
+``get_model``——worker 执行原生覆盖，无需第二个执行引擎。
 
 设计纪律
 --------
@@ -47,30 +47,30 @@ from ..models import MAX_GPU_PER_RUN
 __all__ = ["TOOLS", "TOOL_NAMES", "execute_tool", "build_server", "main",
            "set_session_factory", "SessionUnavailable"]
 
-# 组合根注入：返回一个"接上正在跑的 Studio"的会话客户端，没有会话时返回 None。
+# 组合根注入：返回一个"接上正在跑的 Studio"的端口客户端，没有活着的 Studio 时返回 None。
 # （为什么不在这里 import studio：integrations 层不得依赖组合层。）
 _session_factory: Callable[[], Any] | None = None
 
 
 def set_session_factory(fn: Callable[[], Any] | None) -> None:
-    """由 ``genie/__init__`` 注入会话发现函数（懒 import，避免拉进 fastapi）。"""
+    """由 ``genie/__init__`` 注入端口发现函数（懒 import，避免拉进 fastapi）。"""
     global _session_factory
     _session_factory = fn
 
 
 class SessionUnavailable(RuntimeError):
-    """没有可连的会话（Studio 没在跑 / 门牌过期）。"""
+    """没有活着的 Studio（没在跑 / 门牌过期）。"""
 
 
 def _session(session: Any = None):
     cli = session
     if cli is None:
         if _session_factory is None:
-            raise SessionUnavailable("没有接线：import genie 后才会注入会话发现")
+            raise SessionUnavailable("没有接线：import genie 后才会注入端口发现")
         cli = _session_factory()
     if cli is None:
         raise SessionUnavailable(
-            "没有在跑的 Studio —— 让用户先 `genie studio`（模型活在那个会话里，"
+            "没有在跑的 Studio —— 让用户先 `genie studio`（模型活在那个 worker 里，"
             "不是另起一份）")
     return cli
 
@@ -126,7 +126,7 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "get_model",
         "description": (
-            "**先调这个**：看一眼会话里现在的模型（线格式 SimConfig）和它忙不忙。"
+            "**先调这个**：看一眼当前模型（线格式 SimConfig）和它忙不忙。"
             "改任何东西之前先读——用户可能刚动过。"
             "给 section 只取一节（materials / geometry / source / monitor / "
             "domain / mesh / run），大模型别整份拉。"
@@ -162,13 +162,13 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "run_script",
         "description": (
-            "把一段 Python 发进会话执行——**只要出现循环、扫参、按数据生成几何，"
-            "就用它**（原子操作表达不了这些）。会话里已绑好 f（当前模型）、genie、"
+            "把一段 Python 发进 worker 执行——**只要出现循环、扫参、按数据生成几何，"
+            "就用它**（原子操作表达不了这些）。worker 里已绑好 f（当前模型）、genie、"
             "connect、run_model：跑了 model 内建循环/参数化就用这些，"
             "不用 import genie、不用 connect。"
             "mode=run（缺省）改 f 就是改模型；mode=build 在新命名空间执行、"
             "成功才整体提交（要么全成要么别动）。"
-            "提交作业用 run_model()，**别用 f.run()**（会把会话模型锁在 done，"
+            "提交作业用 run_model()，**别用 f.run()**（会把当前模型锁在 done，"
             "之后要 reopen() 才能改）。"
             "返回 {ok, output}——ok=false 时 output 是要改的那条错误。"),
         "parameters": {
@@ -186,7 +186,7 @@ TOOLS: list[dict[str, Any]] = [
     {
         "name": "run_model",
         "description": (
-            "提交**当前模型**（不改模型）。要跑的是会话里那份，不是你手里的副本。"
+            "提交**当前模型**（不改模型）。要跑的是 worker 里那份，不是你手里的副本。"
             "每次提交都产生新作业；提交的是临时副本，模型本身保持可编辑。"
             "gpu / timeout_s 可选（缺省用模型 run 节里的）。"
             "返回 {ok, job_id, busy}——**提交失败会报 ok=false**（别把失败当成功），"
@@ -328,7 +328,7 @@ def _do_edit_model(cli, args: dict) -> dict:
     cli.patch(ops)
     out = _wait_cfg(cli, seq, timeout)
     if out.get("cfg_seq") == seq and out.get("busy"):
-        return {"ok": False, "error": f"{timeout:g}s 内没落地（会话还忙）"}
+        return {"ok": False, "error": f"{timeout:g}s 内没落地（执行进程还忙）"}
     if out.get("origin") == "reject" or (
             out.get("cfg_seq") == seq and not out.get("busy")):
         return {"ok": False, "rejected": True,
@@ -407,7 +407,7 @@ def execute_tool(name: str, args: dict, *, session: Any = None) -> dict:
         return _list_materials()
     if name == "login_status":
         return _login_status()
-    # ── 会话面（要连上正在跑的 Studio）────────────────────────────────
+    # ── 端口面（要连上正在跑的 Studio）────────────────────────────────
     try:
         cli = _session(session)
         if name == "get_model":
@@ -446,11 +446,11 @@ def build_server():
 
     srv = FastMCP(name="genie",
                   instructions=(
-                      "GENIE 电磁仿真。**本体是会话里那份模型**（用户在 Studio "
+                      "GENIE 电磁仿真。**本体是 worker 里那份模型**（用户在 Studio "
                       "里看着的就是它），不是脚本文本。工作流：get_model 看现状 → "
                       "能改一处就 edit_model（路径级增量）→ 出现循环/扫参/"
                       "程序化建模才 run_script → run_model 提交 → get_results 取数。"
-                      "不要整份重写模型，也不要自己起新会话。"))
+                      "不要整份重写模型，也不要自己起第二个 Studio。"))
 
     for tool in TOOLS:
         def _make(tname: str):

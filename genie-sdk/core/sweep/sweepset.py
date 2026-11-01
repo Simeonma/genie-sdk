@@ -13,7 +13,7 @@ class SweepSet:
     """磁盘上的一个扫描（G182 P5）：读 ``sweep.json`` + 点文档。
 
     **不打开任何仿真实例**（站长 2026-10-30 裁：读取只要聚合结果）——
-    公开入口 ``genie.open_sweep(dir)``。可用于新会话/另一台机器。
+    公开入口 ``genie.open_sweep(dir)``。可用于另一个 Studio / 另一台机器。
     """
 
     def __init__(self, sweep_dir):
@@ -106,7 +106,7 @@ class SweepSet:
         """把扫描结果推到 Studio 的 Plot 面板（与 ``f.visualize`` 同款）。
 
         推的是合并后的结果（数据多 k 维）——面板把参数轴当普通轴。
-        无会话 = 明确报错（无本地画图退化轨，G148）。
+        没有 Studio = 明确报错（无本地画图退化轨，G148）。
         """
         return _visualize(self, mon, field)
 

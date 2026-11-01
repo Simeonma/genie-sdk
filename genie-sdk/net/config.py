@@ -1,8 +1,8 @@
-"""会话凭据仓（G72 终稿，2026-10-23）——token 唯一的落盘地址。
+"""凭据仓（G72 终稿，2026-10-23）——token 唯一的落盘地址。
 
-设计：token 是**会话与网关之间的事**，不是脚本的配置。本文件是会话机器
+设计：token 是 **worker 与网关之间的事**，不是脚本的配置。本文件是本机
 的内部件（0600），脚本/用户文档都不该直接碰它；``genie login`` 与 Studio
-登录闸（经会话咽喉 ``gateway_forward`` 截获）是仅有的两个写入者。
+登录闸（经 worker 的 ``gateway_forward`` 截获）是仅有的两个写入者。
 
 - 路径 ``~/.genie/credentials.json``（2026-10-23 由 config.json 迁入：
   首次读到旧文件即收养并删除）；
@@ -98,7 +98,7 @@ def gateway_source() -> tuple[str | None, str | None]:
 
     链（高→低）：``GENIE_BACKEND``（部署覆盖）> ``GENIE_URL`` > 凭据仓
     ``gateway`` > ``DEFAULT_GATEWAY``。2026-10-31 收口：``GENIE_BACKEND``
-    原先只在会话侧单独读（`kernel_session.backend()`，该别名同日删除），
+    原先只在 worker 侧单独读（`kernel_session.backend()`，该别名同日删除），
     SDK 侧不认——同一台机器上"SDK 连 A、GUI 连 localhost"。现在两层共用
     这一条链，且都直接调 ``resolve_gateway()``。
 
@@ -122,7 +122,7 @@ def resolve_gateway(explicit: str | None = None) -> str:
     credentials.json ``gateway`` > ``DEFAULT_GATEWAY``。
     链与归一化的唯一实现 = gateway_source()。
 
-    **没有"本机兜底"**（2026-10-31 裁）：曾有一条会话专用的
+    **没有"本机兜底"**（2026-10-31 裁）：曾有一条 worker 专用的
     ``127.0.0.1:9100`` 兜底，那是猜——与 ``DEFAULT_GATEWAY = None``
     的定案（"填一个打不通的地址比不填更糟"）相矛盾，也让同一问题出现
     两种表达。现在两边同一条链、同一种失败：报错并给三条下一步。

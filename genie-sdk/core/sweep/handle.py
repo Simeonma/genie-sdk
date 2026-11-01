@@ -50,7 +50,7 @@ def new_sweep_dir(name, axis_names) -> tuple[Path, str]:
     return d, slug
 
 # ── 活跃句柄登记表（R29 C2，站长裁"模块级登记"）──────────────────────
-# 会话停止/超时的收尸面用：sweep 点实例**不进会话 sink**（不污染模型
+# worker 停止/超时的收尸面用：sweep 点实例**不进 sink**（不污染模型
 # 合并——kernel_worker 工厂注释明示），收尸侧（_cancel_orphan_jobs）
 # 修前扫不到在途点 → 停止后点作业孤儿烧卡（违反 A2「长任务必须能掐」）。
 # WeakSet = 句柄被 GC 自动除名，零泄漏。
@@ -300,7 +300,7 @@ class SweepHandle:
         # （R30 GAP 清理：原"非作业终态异常不上抛"的守卫段在 P1 把
         #  GenieJobError 也落 errors[] 之后成为死码，删——编排语义
         #  "坏点记 failed/canceled 继续，不炸 sweep"由上方 except 面承袭。）
-        # G168/R34：点终态事件（会话面汇总播报的数据源；finally 完成后
+        # G168/R34：点终态事件（worker 面汇总播报的数据源；finally 完成后
         # 本点状态已定格——cancel 覆盖与 abort 级联都在上面发生）。
         # detail = 坏点原因（截断）——点级过程播报降噪后，这是失败原因
         # 唯一的终端出口（诊断性不随降噪丢失）。
@@ -359,7 +359,7 @@ class SweepHandle:
             self.state = SWEEP_TERMINAL_OK
         # G168/R34：扫描终态事件（调用方可能多次 _finalize——cancel 后
         # 重入 wait 再终态；消费侧按 sweep_id 去重）。last_job_id =
-        # 最后一个成功点的作业号——会话面在终态补发单条 job-done
+        # 最后一个成功点的作业号——worker 面在终态补发单条 job-done
         # （结果态切换平价：修前由每点的 job-done 顺带完成，降噪后由
         # 这里一次性接手）。
         last_job = None
@@ -512,7 +512,7 @@ class SweepHandle:
         """把扫描结果推到 Studio 的 Plot 面板（与 ``f.visualize`` 同款）。
 
         推的是合并后的结果（数据多 k 维）——面板把参数轴当普通轴。
-        无会话 = 明确报错（无本地画图退化轨，G148）。
+        没有 Studio = 明确报错（无本地画图退化轨，G148）。
         """
         return _visualize(self, mon, field)
 

@@ -307,7 +307,7 @@ $("download-py").addEventListener("click", () => {
  * = simconfig.json + 工作区快照（脚本+结果），用户感知 = 一个文件
  * 就是一个仿真。服务端 /api/sim/export 打包、/api/sim/import 先验
  * cfg（genie.models 同一双手）再解包；GUI 拿到 cfg 后仍走
- * onFormMutate()（同一防抖通道推进会话 f）+ 工作区面板刷新。
+ * onFormMutate()（同一防抖通道推进 worker 里的 f）+ 工作区面板刷新。
  * importCfgText 保留 = 纯 JSON 校验+推进（e2e 函数面直驱用）。 */
 /* 存储文件名记忆（2026-10 站长定案补全）：localStorage 记上次名字，
  * 下次「存储仿真」默认存回去。路径选择 = File System Access API 的
@@ -421,7 +421,7 @@ function importCfg() {
       await replaceModel(out.cfg, "gensim");   /* 整份替换（不再逐字段推） */
       if (window.loadWorkspaceFiles) loadWorkspaceFiles();
       /* G148（2026-10-27 站长定）：含结果的仿真存档 → 还原**结果态**
-       * （按钮 = Switch to setting；Plot 面板数据源已随包回落会话）。
+       * （按钮 = Switch to setting；Plot 面板数据源已随包回落到结果目录）。
        * 无结果的存档维持编辑态（历史行为）。 */
       if (out.has_results && out.job_id) {
         window.__lastJobId = out.job_id;
@@ -525,7 +525,7 @@ async function openSimulation() {
     if (window.loadWorkspaceFiles) loadWorkspaceFiles();
     setFileWorkspacePath(j.workspace || "");
     if (j.session === "busy") {
-      toast("已打开 " + (j.doc || "") + "；会话正忙，"
+      toast("已打开 " + (j.doc || "") + "；执行进程正忙，"
             + "自动存档将在下个作业前生效", "warn");
     } else {
       toast("已打开 " + j.doc, "ok");
@@ -551,7 +551,7 @@ $("file-open-btn").addEventListener("click", openSimulation);
 $("file-script-btn").addEventListener("click", () => exportScript(true));
 
 /* ── 工作区（G4a 2026-10-30 站长定案）：常显当前路径 + 原生文件夹对话框 ──
- * 机器级持久设置（服务端 ~/.genie/workspace.json）：换根后会话自动重挂，
+ * 机器级持久设置（服务端 ~/.genie/workspace.json）：换根后 worker 自动重挂，
  * 之后的结果/脚本/自动存档 .gensim 都落这里。路径常显（用户不该猜）。 */
 function setFileWorkspacePath(root) {
   const el = $("file-workspace-path");
@@ -580,10 +580,10 @@ async function pickFileWorkspace() {
     if (!r.ok) throw new Error(j.detail || ("HTTP " + r.status));
     setFileWorkspacePath(j.root);
     if (j.session === "busy") {
-      toast("工作区已设为 " + j.root + "；会话正忙——空闲后自动生效"
+      toast("工作区已设为 " + j.root + "；执行进程正忙——空闲后自动生效"
             + "（或重启 Studio）", "warn");
     } else if (j.session === "restarted") {
-      toast("工作区已切换：" + j.root + "（会话已重挂）", "ok");
+      toast("工作区已切换：" + j.root + "（执行进程已重挂）", "ok");
     } else {
       toast("工作区已设为 " + j.root, "ok");
     }
@@ -717,8 +717,8 @@ function ensureConnStyle() {
   document.head.appendChild(st);
 }
 
-/* ── 退出前确认用：会话里到底有没有"值得挽留"的东西 ──
- * 2026-10-21 站长裁决：重新登录 = 新会话 = 空模型，所以退出会丢模型。
+/* ── 退出前确认用：worker 里到底有没有"值得挽留"的东西 ──
+ * 2026-10-21 站长裁决：重新登录 = 丢弃模型 = 空模型，所以退出会丢模型。
  * 域范围、材料、结构、源、监视器任一非空就算"有模型"；全空直接放行，
  * 不拿一个空文档吓唬人。 */
 function hasUnsavedModel() {
@@ -798,7 +798,7 @@ function connDialog(initialView) {
           <input id="v2-acct-user" class="gc-input" readonly>
         </div>
         <!-- 账本区块（记账三件套③，2026-10-31）：本月卡时/笔数/配额；
-             拿不到（老会话进程 / 免登录形态）整块隐去，不留半截。 -->
+             拿不到（老 worker / 免登录形态）整块隐去，不留半截。 -->
         <div class="gc-field" id="v2-acct-usage" style="display:none">
           <label class="gc-label" for="v2-acct-usage-line">本月 GPU 卡时</label>
           <div id="v2-acct-usage-line" class="gc-input"
@@ -807,7 +807,7 @@ function connDialog(initialView) {
         <div class="gc-links" style="justify-content:flex-start">
           <a id="v2-acct-cp" class="gc-link">Change password</a>
         </div>
-        <!-- 退出确认（2026-10-21 站长裁决）：重新登录 = 新会话 = 空模型，
+        <!-- 退出确认（2026-10-21 站长裁决）：重新登录 = 丢弃模型 = 空模型，
              所以退出会丢掉当前模型。英文提示（产品面国际化）。 -->
         <div id="v2-acct-warn" class="gc-warn" style="display:none">
           <div class="gc-warn-t">Your model will not be kept</div>
@@ -1166,7 +1166,7 @@ function connDialog(initialView) {
     if (hit("v2-acct-export")) { doExportBeforeSignout(); return; }
     if (hit("v2-acct-signout")) {
       /* 两段式退出（2026-10-21）：有模型先摆出"不会保留"的英文提示，
-       * 再点一次才真退——重新登录=新会话=空模型是不可逆的。 */
+       * 再点一次才真退——重新登录 = 丢弃模型 = 空模型是不可逆的。 */
       if (hasUnsavedModel() && !_signoutArmed) {
         _signoutArmed = true;
         const w = $("v2-acct-warn");
@@ -1177,7 +1177,7 @@ function connDialog(initialView) {
         if (so) so.textContent = "Sign out anyway";
         return;
       }
-      /* G72：登出同时清本机凭据仓（会话代持的 token）——sendBeacon
+      /* G72：登出同时清本机凭据仓（worker 代持的 token）——sendBeacon
        * 在 unload 后仍能送达；失败不拦登出（大不了仓里 token 留到过期）。
        * G64 站长裁定 2026-10-23：换账号 = 干净进场——脚本与凭据/模型身份
        * 同批清光（编辑器文本不在下一个账号的屏幕上出现）。 */
@@ -1269,9 +1269,9 @@ window.__authGate = false;
     .catch(show);   /* health 都拿不到：保守按需要登录处理 */
 })();
 
-/* ── 登录即绑定会话（2026-10-21 站长裁决；O2 换名 attach）──
- * 以前只有 exec 才会把凭据交给会话，于是"不跑代码 = 没有模型"。
- * 这里在启动时补一次 attach（幂等）：会话随即物化一个**空模型**（无任何
+/* ── 登录即绑定 worker（2026-10-21 站长裁决；O2 换名 attach）──
+ * 以前只有 exec 才会把凭据交给 worker，于是"不跑代码 = 没有模型"。
+ * 这里在启动时补一次 attach（幂等）：worker 随即物化一个**空模型**（无任何
  * 默认值），并回流 cfg → 树/表单/3D 立刻可用；**换 token 不会顶掉已有
  * 模型**（改密码/过期重登后回来，模型还在）。 */
 (function attachSessionOnBoot() {
@@ -1280,13 +1280,13 @@ window.__authGate = false;
     .then(async (r) => {
       if (r.ok) return r.json();
       const j = await r.json().catch(() => ({}));
-      apiFailed("会话连接", r, j);
+      apiFailed("连接执行进程", r, j);
       return null;
     })
-    .catch(() => apiNotice("会话连接失败：本机服务没响应（Studio 还在起？）", "err"));
+    .catch(() => apiNotice("连接执行进程失败：本机服务没响应（Studio 还在起？）", "err"));
 })();
 
-/* 「运行」接线（terminal 战役：整个脚本在会话里执行） */
+/* 「运行」接线（terminal 战役：整个脚本在 worker 里执行） */
 $("run-py").addEventListener("click", runScript);
 /* title 已由 index.html 声明（英文），无需运行期覆盖 */
 
@@ -1294,7 +1294,7 @@ window.getCfg = () => structuredClone(cfg);
 window.__scene3dCount = () => scene && scene.structureGroup
   ? scene.structureGroup.children.length : -1;
 /* G59 已核实（2026-10-23）：termBusy 是 term.js 的**纯提交闸门**（防连点），
- * 不是忙闲镜像（进度条=会话现值投影，kernel_worker 头注的"废除旁证"
+ * 不是忙闲镜像（进度条 = worker 现值投影，kernel_worker 头注的"废除旁证"
  * 指的是后者）。本导出仅供 e2e 探针（m2_gui_smoke）消费。 */
 window.__termState = () => ({ busy: termBusy, seq: SessionSync.lineSeq, cfgSeq: SessionSync.cfgSeq });
 window.__termText = () => (document.getElementById("term-out") || {}).textContent || "";
@@ -1330,9 +1330,9 @@ function bootSyncSession() {
   return fetch("/api/exec/output?since=0")
     .then(async (r) => {
       if (r.ok) return r.json();
-      if (r.status >= 500) {          /* 会话/上游挂了：说一次，别静默 */
+      if (r.status >= 500) {          /* 执行进程/上游挂了：说一次，别静默 */
         const j = await r.json().catch(() => ({}));
-        apiFailed("会话", r, j);
+        apiFailed("执行进程", r, j);
       }
       return null;                    /* 401 = 还没登录，属正常 */
     })
@@ -1363,7 +1363,7 @@ function bootSyncSession() {
   };
   window.__setLoginLabel = setLoginLabel;   /* 登录框 reload 前后共用 */
   const k = genieToken();
-  /* 未登录：不必对齐会话——服务端本来就把执行面挡住了（401 只会在
+  /* 未登录：不必对齐 worker——服务端本来就把执行面挡住了（401 只会在
    * 控制台留一串红字噪音）。登录成功后的 reload 会走下面的分支。 */
   if (!k) return;
   /* /api/auth/* 不经过 fetch 包装（登录族不吃旧 token）→ 显式带头 */

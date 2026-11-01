@@ -890,7 +890,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         return out
     _Client.fetch_result = _fetch_with_note
 
-    # （原"会话形态钉死 publish"的块已随本地 SDK 镜像通道退役而删除——
+    # （原"worker 形态钉死 publish"的块已随本地 SDK 镜像通道退役而删除——
     # integrations/live 与 core 的 publish hook 于 G53 裁决中整体移除，
     # 2026-10-23；drafts 环保留，属云宿主 agent 面板的管道。）
 

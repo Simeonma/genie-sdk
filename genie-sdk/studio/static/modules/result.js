@@ -8,8 +8,8 @@
  * setting)/Agent/左树/中间栏面板本体照常。按钮语义：结果态显示
  * Switch to setting（点了回编辑），编辑态显示 Run（点了开跑）。
  * 左树监视器右键 → 该监视器曲线（宿主 latest.h5 降采样 JSON，
- * /api/result/meta + /api/result/series——G13②：结果=会话状态，从
- * 会话工作区读；host 私藏管道已退役）。徽标点击 = 同 Switch to setting。*/
+ * /api/result/meta + /api/result/series——G13②：结果 = 模型状态，从
+ * worker 工作区读；host 私藏管道已退役）。徽标点击 = 同 Switch to setting。*/
 window.__resultMode = false;
 
 /* 结果态锁：输入件 disabled 防键盘 + 工具栏加对象按钮 disabled；
@@ -447,7 +447,7 @@ function refreshResultChip() {
       chip.appendChild(sp);
       /* 本单卡时（记账三件套随行，2026-10-31）：网关终态状态的
        * gpu_seconds（= 授予卡数 × 墙钟，两腿都写）。取不到就静默不
-       * 显示（老会话进程 / 旧作业），绝不编数字（R11）。 */
+       * 显示（老 worker / 旧作业），绝不编数字（R11）。 */
       fetch("/api/jobs/" + encodeURIComponent(st.job_id || ""), { headers: KEYH })
         .then(r => r.ok ? r.json() : null)
         .then(j => {
@@ -479,13 +479,13 @@ refreshResultChip();
  * 外推（样本跨 ≥5s 才开口，之前显示"测速中…"）；job_id 变了=新作业，
  * 样本清零。收尾无需显式清理——job-done 事件路径的 refreshResultChip
  * 整体覆写 chip 内容，进度形态自然切回摘要+下载。 */
-/* ── 仿真流水进度（2026-10 架构收敛：阶段 = 会话 state 事件的事实）──
+/* ── 仿真流水进度（2026-10 架构收敛：阶段 = worker state 事件的事实）──
  * 提交（上传 payload）→ 排队（云端繁忙）→ 计算（步进%）→ 取回（下载）。
  * 阶段由 worker state 事件 / output 快照驱动（term.js 转喂本入口）；
  * 计算段的百分比/ETA 仍由 job-progress 样本外推（下方 __jobProgress）。
  * 非计算段 = 不定宽滑动条（不知道总量，只让用户知道「活着、在哪步」）。 */
 /* ── 取消按钮（G4b 2026-10-21）：queue/run 态可取消作业 ──
- * 链路：浏览器 → 宿主 POST /api/jobs/{id}/cancel（会话守卫+key 回退）
+ * 链路：浏览器 → 宿主 POST /api/jobs/{id}/cancel（登录闸 + key 回退）
  * → 网关 → 内核 runner.cancel（queued 落 killed / running killpg）。 */
 function _cancelJobButton(jobId) {
   const b = document.createElement("button");

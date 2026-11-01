@@ -87,7 +87,7 @@ function addObject(kind, type) {
   selectObj(kindFull, arr.length - 1);
 }
 
-/** Run 按钮 = 提交**当前会话模型**（POST /api/run）。
+/** Run 按钮 = 提交**当前模型**（POST /api/run）。
  *
  * M3 起这是一等的意图，不是"往终端里打一行 f.run()"：那个写法让按钮的
  * 语义取决于终端命名空间里恰好有个没被换掉的 f（还要操心 f 是否已提交、

@@ -9,7 +9,7 @@
  *   会连原件一起销毁，2026-10-15 实测翻车）。
  *
  * 持久化纪律：布局只是「脸」的摆法（铁律 1 的边界）——存浏览器
- * localStorage（genie.dock.layout.v1），绝不进服务端/会话状态。
+ * localStorage（genie.dock.layout.v1），绝不进服务端/模型状态。
  * 载入时校验（面板集合不齐即弃用回默认），防旧版残留脏数据。
  *
  * 期①：splitter 拖拽调宽高 + 持久化。
@@ -626,7 +626,7 @@ const Dock = (function () {
           dir: "col", sizes: [null, 140],
           children: [{ dir: "row", sizes: [null, 300], children: [["scene-panel", "visualize-panel"], "json-panel"] }, "term-dock"] }] });
     },
-    bigterm() { /* 大 Terminal：会话排障时用 */
+    bigterm() { /* 大 Terminal：排障时用 */
       return norm({ dir: "row", sizes: [490, null, 300],
         children: ["struct-panel", {
           dir: "col", sizes: [null, 480],

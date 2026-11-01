@@ -4,7 +4,7 @@
 
 1. **没有 uvicorn**（没有 socket）：前端把一次请求交进来，这里用 ASGI
    **直调**同一个 ``create_app`` —— 路由、校验、错误措辞一字不差；
-2. **会话跑在同进程**：Pyodide 没有子进程，``make_runtime`` 会选
+2. **worker 跑在同进程**：Pyodide 没有子进程，``make_runtime`` 会选
    ``InprocRuntime``（见 `_runtime.py`）。
 
 于是"网页用户和本机用户跑同一份代码"在入口这一层也成立：两个入口只是

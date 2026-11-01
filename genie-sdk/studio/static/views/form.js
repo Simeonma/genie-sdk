@@ -923,7 +923,7 @@ const FormPanel = {
   /* 材料「显示色」行（2026-10-21）：wire 字段 color 的 GUI 入口。
    * 只影响 3D 视图材质色；未设置时显示"自动"取到的调色板色并可一键回收
    * 到自动配色（删字段 → 前端散列）。颜色改动走 onFormMutate 同一收口：
-   * 3D 重绘 + 树刷新 + 校验 + 会话推送。 */
+   * 3D 重绘 + 树刷新 + 校验 + 模型推送。 */
   _colorRow(mt) {
     const row = this._el("div", "frow color-row");
     row.appendChild(this._el("label", "flabel", "显示色"));

@@ -1,7 +1,7 @@
-/* live.js — SDK → Studio 实时桥（v2 外部会话通道的消费端）。
+/* live.js — SDK → Studio 实时桥（v2 外部脚本通道的消费端）。
  *
  * 数据链：SDK 进程 POST /api/drafts {label, script} → 本桥轮询
- * GET /__drafts?since=seq → 采纳最新脚本文本 → runScript()（GUI 经会话
+ * GET /__drafts?since=seq → 采纳最新脚本文本 → runScript()（GUI 经 worker
  * /api/exec 重新执行派生模型——通道里没有 cfg，脚本是唯一本体）。
  *
  * 采纳纪律（v1 dsh_bridge 三条教训全带上）：

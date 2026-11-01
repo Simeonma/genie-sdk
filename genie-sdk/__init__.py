@@ -6,7 +6,7 @@
   · 云 GUI（Studio）背后是常驻 worker 里的同一个 SDK——**worker 里的 f
     是唯一可编辑的东西**，Terminal/脚本/表单三条变更通道同汇一处（术语见
     genie-sdk/studio/session/MODMAP.md §0）；本包不感知 GUI 形态；
-  · **一个执行引擎（会话 worker）、一种语义（真执行——错了报错带
+  · **一个执行引擎（worker）、一种语义（真执行——错了报错带
     行号自纠）**：G174（2026-10-28 站长三连裁决）退役了 preview 零网络
     预览引擎与 check_script 体检面，"验证"不是用户任务的步骤。
 
@@ -58,10 +58,10 @@ __version__ = "2.1.1"
 # （2026-10-27 G19b 翻转：材质库 HTTP 回退 hook 已退役，材质库纯本地。）
 # 分层守卫 = tests/sdk/test_layering.py。
 def _push_visualize(sim, mon: str, field: str | None = None) -> None:
-    """G148 批 4b 腿 B：外部 SDK 的 ``f.visualize`` → 会话注入端点。
+    """G148 批 4b 腿 B：外部 SDK 的 ``f.visualize`` → 推送端点。
 
     结果 h5 字节随行上传——外部作业的落盘在**用户机器**
-    （``_auto_save_result``），会话工作区读不到，推图即推数。
+    （``_auto_save_result``），worker 工作区读不到，推图即推数。
     没有**活着的** Studio（门牌缺失或进程已退出）= 明确报错指路；
     不做本地画图退化轨（站长定案）。"""
     if getattr(sim, "_job_id", None) is None:
@@ -72,7 +72,7 @@ def _push_visualize(sim, mon: str, field: str | None = None) -> None:
     if card is None:
         raise RuntimeError(
             "visualize: 没有活着的 Studio（门牌缺失或进程已退出）——先"
-            " `genie studio` 开会话（在 Studio 里跑脚本则天然可用）；"
+            " `genie studio` 起 Studio（在 Studio 里跑脚本则天然可用）；"
             "按定案无本地画图退化轨")
     from .studio.session.session_client import SessionClient
     cli = SessionClient(card["url"], token=card.get("token", ""))
@@ -83,7 +83,7 @@ def _push_visualize(sim, mon: str, field: str | None = None) -> None:
 def _push_sweep_visualize(sw, mon: str, field: str | None = None) -> None:
     """G182 P5c：扫描的 ``visualize``——同一个动词、同一条推送路径。
 
-    推的是**合并结果**（数据多 k 维，坐标不复制）；会话面板已有的
+    推的是**合并结果**（数据多 k 维，坐标不复制）；Plot 面板已有的
     轴选择器/滑条把参数轴当普通轴用——画图实现只有一套（G148 定案：
     SDK 面零 matplotlib，交互只住 GUI）。"""
     sid = str(getattr(sw, "id", "") or "")
@@ -94,7 +94,7 @@ def _push_sweep_visualize(sw, mon: str, field: str | None = None) -> None:
     if card is None:
         raise RuntimeError(
             "visualize: 没有活着的 Studio（门牌缺失或进程已退出）——先"
-            " `genie studio` 开会话（在 Studio 里跑脚本则天然可用）；"
+            " `genie studio` 起 Studio（在 Studio 里跑脚本则天然可用）；"
             "按定案无本地画图退化轨")
     from .studio.session.session_client import SessionClient
     cli = SessionClient(card["url"], token=card.get("token", ""))
@@ -114,7 +114,7 @@ def _wire_core_hooks() -> None:
     # 材质库纯本地（genie/core/nkdata 随包分发），材质面不再接线。
     # 2026-10-28 G174：preview 的 connect 交换钩子（_swap_connect）随
     # 零网络预览引擎一并退役。
-    # 2026-10-28 R36：expert_factory 钩子随专家会话面（net/expert.py、
+    # 2026-10-28 R36：expert_factory 钩子随专家面（net/expert.py、
     # f.expert、expert_post）整体退役——问/托不是产品主链的一环
     # （存在权清理，见 WAR_LOG R36；网关 /expert/* 端点的归宿归服务仓）。
 
@@ -126,16 +126,16 @@ def _alive_card() -> dict | None:
     """门牌探活：**唯一实现**在 ``rendezvous.alive()``；这里只兜"studio 缺件"。"""
     try:
         from .studio.session import rendezvous as rv
-    except ImportError:      # 异形安装（studio 缺件）：会话形态不存在
+    except ImportError:      # 异形安装（studio 缺件）：执行面不存在
         return None
     return rv.alive()
 
 
 def _session_client():
-    """MCP/工具面用的"会话把手"：接上**活着的** Studio（没有 → None）。
+    """MCP/工具面用的"端口把手"：接上**活着的** Studio（没有 → None）。
 
     用 ``alive()`` 而不是 ``discover()``：工具面拿到一个已经死掉的 client
-    只会把"没有会话"伪装成"传输错误"。
+    只会把"没有 Studio"伪装成"传输错误"。
 
     懒 import：``import genie`` 不该把 fastapi 拉进来（studio 是可选 extra）。
     注入方向也是组合根的老规矩——``integrations`` 不得依赖 ``studio``。
@@ -186,7 +186,7 @@ def connect(base_url: str | None = None, api_key: str | None = None,
     ——登录截获本来就落盘进凭据仓——却让同一行代码的凭据来源取决于一个
     文件在不在，是"环境决定行为"）。
 
-    （R40/G109 定案：原"无门牌时进程内自起无头会话"引擎整体退役——
+    （R40/G109 定案：原"无门牌时进程内自起无头 worker"引擎整体退役——
     三仓 grep 零消费者实证，同族 G176/G177 随之销账；存在权审查：
     自起服务的两条卖点——"token 不进脚本"在同机同用户下是安全戏、
     "console 可接上"从未生效——均答不出服务的真实用户任务。）
@@ -216,7 +216,7 @@ def connect(base_url: str | None = None, api_key: str | None = None,
 
 def _connect_direct(base_url: str, api_key: str | None = None, *,
                     timeout: float = 30.0) -> Simulation:
-    """内部直连（会话 worker / 测试用）：不经门牌、不走公开参数面。"""
+    """内部直连（worker / 测试用）：不经门牌、不走公开参数面。"""
     from .net import client as _client_mod
     return Simulation(_client_mod.Client(base_url, api_key, timeout=timeout))
 
@@ -224,8 +224,8 @@ def _connect_direct(base_url: str, api_key: str | None = None, *,
 def open(path) -> Simulation:
     """打开一个 ``.gensim`` 仿真文件 → 载入其配置的 Simulation。
 
-    **会话内**（Studio 终端 / agent）：整份替换当前会话模型并返回活实例
-    ——与图形界面「打开仿真」同一语义（2026-10-30 站长定案）。会话外：
+    **worker 内**（Studio 终端 / agent）：整份替换当前模型并返回活实例
+    ——与图形界面「打开仿真」同一语义（2026-10-30 站长定案）。worker 外：
     新建实例载入配置（配好凭据即可直接 ``f.run()``）。两条轨都会把
     ``_doc_path`` 钉到这个文件：之后 ``run()`` 成功**原地更新它**
     （G182：文档是结果产物）。

@@ -1,7 +1,7 @@
-/* modules/term.js — Terminal + 会话同步器（SessionSync/termExec/空闲订阅/busy 排队）
+/* modules/term.js — Terminal + 模型同步器（SessionSync/termExec/空闲订阅/busy 排队）
  * G5 拆分（2026-10-14）：自 app.js 机械切出，零行为变化；
  * 经典 script 按序加载，跨模块引用为运行期全局查找。 */
-/* ══ Terminal（terminal 战役）：会话命令面 ═══════════════════
+/* ══ Terminal（terminal 战役）：worker 命令面 ═══════════════════
  * 三条命令腿同汇 /api/exec：①输入行逐条指令 ②脚本「运行」整体 exec
  * ③工具栏 Run = f.run()。输出唯一滚在这里；cfg 快照驱动
  * 表单/树/3D 刷新。SDK/agent 与 terminal 同一执行层（一步到位）。 */
@@ -29,7 +29,7 @@ function setStopVisible(v) {
   else runBtnRefresh();
 }
 
-/* ══ 会话同步器（2026-10-11 第一性收敛③）：GUI 全部同步状态 =
+/* ══ 模型同步器（2026-10-11 第一性收敛③）：GUI 全部同步状态 =
  * 两个游标（lineSeq=输出行游标 / cfgSeq=cfg 版本游标）。谁落后谁拉；
  * 投影（表单/树/3D/Plot）只订阅 onSnapshot——轮询层只剩「拉增量、
  * 喂同步器」，刷新判据不再散在闭包里。 */
@@ -39,7 +39,7 @@ const SessionSync = {
   onSnapshot(fn) { this._subs.push(fn); },
   ingest(j) {                       /* j = /api/exec/output 增量响应 */
     /* 生命周期快照（2026-10 站长裁决「状态监测架构收敛」）：按钮/停止/
-     * 进度条 = 会话现值的纯投影——termBusy 降级为纯提交闸门（防本页
+     * 进度条 = worker 现值的纯投影——termBusy 降级为纯提交闸门（防本页
      * 双发），显示一律不信它（外部 exec/刷新恢复都靠这里的 server 态）。 */
     if (typeof j.busy === "boolean") {
       setStopVisible(j.busy);
@@ -73,14 +73,14 @@ const SessionSync = {
         continue;
       }
       if (kind === "plot" && l.data) {
-        /* G148 腿 A：会话内 f.visualize(mon, field) → Plot 面板自动
+        /* G148 腿 A：worker 内 f.visualize(mon, field) → Plot 面板自动
          * 开卡（job_id 用实例自己的——外部注入腿带自己的 id）。 */
         if (typeof addPlot === "function")
           addPlot(l.data.mon, l.data.field, l.data.job_id);
         continue;
       }
       if (kind === "job-done" && l.data) {
-        /* G13② 结果事件：会话里任何键盘跑完（或失败了结）的 run 都推到
+        /* G13② 结果事件：worker 里任何键盘跑完（或失败了结）的 run 都推到
          * 本页——记 job_id、清结果缓存、刷新结果卡与已开曲线（结果=投影）。
          * 结果模式切换也挂这里（2026-10 架构收敛：废除 termLastCode
          * 正则旁证——「一次 run 尝试已了结」是事实，与谁发起、哪个页面、
@@ -239,7 +239,7 @@ function termAppend(text, cls) {
 }
 
 /* ── 两个执行入口，一条流程（M3）────────────────────────────────
- * termExec(code)  = 敲代码（mode=run：在当前会话命名空间里执行）
+ * termExec(code)  = 敲代码（mode=run：在当前 worker 命名空间里执行）
  * runScript()     = 脚本运行（mode=build：构造新模型，成功才替换）
  * runModel()      = 提交当前模型（POST /api/run：**不改模型**）
  *
@@ -285,7 +285,7 @@ function termExec(code, opts = {}) {
     code, mode: opts.mode || "run", label: opts.label || "" }));
 }
 
-/** 提交当前会话模型（工具栏 Run）。**不改模型**，也不经终端命名空间。 */
+/** 提交当前模型（工具栏 Run）。**不改模型**，也不经终端命名空间。 */
 function runModel() {
   return _execFlow("run", () => _postJSON("/api/run", {}));
 }
@@ -307,8 +307,8 @@ function _startPolling() {
       return;
     }
     SessionSync.ingest(j);          /* 拉增量、喂同步器——投影自己订阅 */
-    setStopVisible(!!j.busy);       /* 停止钮可见性 = 会话忙闲（轮询响应驱动） */
-    /* 完成判据（O2 收敛为一句话）：**会话不忙了** = 我这条 op 回了 done。
+    setStopVisible(!!j.busy);       /* 停止钮可见性 = worker 忙闲（轮询响应驱动） */
+    /* 完成判据（O2 收敛为一句话）：**worker 不忙了** = 我这条 op 回了 done。
      * busy 由在途 op 账本投影（kernel_session._inflight），不再有
      * "另一条 done 也算我完成"的旁路——那条旁路依赖环里出现 done 条目，
      * 而它从来没出现过（死代码，G71 顺手删除）。 */
@@ -386,7 +386,7 @@ function applyCfgSnapshot(c, resolved, seq, origin, paths) {
   }
   /* 回声抑制仅当本地已有编辑缓冲才成立：刚加载的页面 cfg 还是 null，
    * origin=patch 的首拍快照是初始模型而非回声——须走下方整份应用，
-   * 否则刷新后界面永远空模型（会话模型其实是好的）。 */
+   * 否则刷新后界面永远空模型（worker 里的模型其实是好的）。 */
   if (origin === "patch" && cfg) {
     _mergeForeignPaths(c, paths);   /* 只并入"不是我改的"那些路径 */
     _serverCfg = snap;              /* 刷新 diff 基准，不重建面板 */
@@ -410,7 +410,7 @@ function applyCfgSnapshot(c, resolved, seq, origin, paths) {
 
 SessionSync.onSnapshot(applyCfgSnapshot);   /* 投影订阅同步器（收敛③） */
 
-/* ── 空闲持续订阅（G13①）：GUI 是会话的投影，不是"执行期才睁眼的
+/* ── 空闲持续订阅（G13①）：GUI 是 worker 的投影，不是"执行期才睁眼的
  * 观察者"。exec 期间 termExec 的 350ms 轮询在跑；空闲期本 2s 节拍
  * 接力——同一 since 增量机制，两种节奏。外部键盘（console/另一窗口）
  * 的编辑与输出由此流进本页（含输入 echo）。────────────────────── */
@@ -420,9 +420,9 @@ setInterval(async () => {
   try {
     const r = await fetch("/api/exec/output?since=" + SessionSync.lineSeq);
     if (!r.ok) {
-      if (r.status >= 500) {               /* 会话掉了：说一次（6s 去重） */
+      if (r.status >= 500) {               /* worker 掉了：说一次（6s 去重） */
         const j = await r.json().catch(() => ({}));
-        apiFailed("会话", r, j);
+        apiFailed("执行进程", r, j);
       }
       return;                              /* 401 = 未登录，正常静默 */
     }
@@ -471,9 +471,9 @@ $("term-stop").addEventListener("click", (e) => {
     .catch(() => {});   /* 网络失败静默：下一轮询 tick 仍可再点 */
 });
 
-/* 清理重启会话（R31 站长裁：停止治不了时的进程级兜底）：杀 worker
+/* 重启 worker（R31 站长裁：停止治不了时的进程级兜底）：杀 worker
  * 重起——只清执行态（在途作废、宿主干净），模型与终端历史保留。
- * 服务端经环滚出"会话已清理重启"提示；busy 翻 false 后两钮随轮询自隐。 */
+ * 服务端经环滚出"执行进程已清理重启"提示；busy 翻 false 后两钮随轮询自隐。 */
 if (termResetBtn) termResetBtn.addEventListener("click", (e) => {
   e.stopPropagation();
   fetch("/api/exec/reset", { method: "POST" })

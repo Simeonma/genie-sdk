@@ -3,11 +3,11 @@
  * 经典 script 按序加载，跨模块引用为运行期全局查找。 */
 /* GENIE Studio v2 — 显示型工作台（terminal 战役修订，2026-10-10 定案）。
  *
- * 唯一仿真主体 = 会话 SimConfig（会话进程里的 f，真 SDK + 登录 key）。
+ * 唯一仿真主体 = SimConfig（worker 里的 f，真 SDK + 登录 key）。
  * 三条编辑通道同汇执行层 /api/exec：①下方 Terminal 逐条指令 ②脚本
  * 编辑器「运行」整体 exec（脚本文本只是程序，运行才生效）③工具栏
  * Run = f.run()。表单/树/3D/Plot 全是 f 的只读投影：exec 后 cfg 快照
- * 回流刷新全视图；表单字段级修改防抖 400ms 经 load_config 推回会话。
+ * 回流刷新全视图；表单字段级修改防抖 400ms 经 model/patch 推回 worker。
  * 脚本文本永不跟随 cfg（它是程序，不是状态）。
  *
  * 渲染机器直接复用 v1 资产：form.js（FormPanel）、scene3d/scene2d、

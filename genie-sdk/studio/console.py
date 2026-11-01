@@ -43,7 +43,7 @@ def _poll_output(cli: SessionClient, cursor: int) -> tuple[int, bool]:
 
 
 def _run_block(cli: SessionClient, block: str, cursor: int) -> int:
-    """整段提交到会话并跟随输出到终态（busy False）。"""
+    """整段提交到 worker 并跟随输出到终态（busy False）。"""
     cli.exec(block, mode="run", label="console")
     stopped = {"v": False}
 
@@ -51,7 +51,7 @@ def _run_block(cli: SessionClient, block: str, cursor: int) -> int:
         if not stopped["v"]:
             stopped["v"] = True
             cli.stop()
-            print("\n^C（已发停止——会话仍在）")
+            print("\n^C（已发停止——worker 仍在）")
 
     old = signal.signal(signal.SIGINT, _on_int)
     try:
@@ -65,7 +65,7 @@ def _run_block(cli: SessionClient, block: str, cursor: int) -> int:
 
 
 def run_console(client: SessionClient | None = None) -> int:
-    """终端 REPL 主循环（会话已由调用方确保在跑）。"""
+    """终端 REPL 主循环（worker 已由调用方确保在跑）。"""
     cli = client or SessionClient()
     cursor = 0
     # 对齐当前环位（不重放历史——那是 GUI 终端窗口的职责）
@@ -74,7 +74,7 @@ def run_console(client: SessionClient | None = None) -> int:
         for ln in out.get("lines") or []:
             cursor = max(cursor, ln.get("seq", 0))
     except Exception as e:  # noqa: BLE001 —— 连不上就直说，别进假 REPL
-        print(f"✗ 会话不可达：{e}")
+        print(f"✗ 连不上 Studio：{e}")
         return 1
 
     print(f"GENIE console → {cli.base_url}（一个进程一份 f；"
@@ -112,7 +112,7 @@ def run_console(client: SessionClient | None = None) -> int:
         except Exception as e:      # noqa: BLE001 —— R41/S4：4xx/链路错误
             # 不得冲出 REPL：修前一次 422 就让整个终端带裸栈退出，用户连
             # 改的机会都没有。报一句人话，继续留在循环里——console 的契约
-            # 是"会话仍在，可继续敲"。
+            # 是"worker 仍在，可继续敲"。
             status = getattr(e, "status_code", None)
             detail = getattr(e, "detail", None) or str(e)
             print(f"✗ {'HTTP ' + str(status) + ' ' if status else ''}{detail}")

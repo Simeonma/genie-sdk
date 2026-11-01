@@ -57,9 +57,9 @@ def _next_free_port(host: str, start: int) -> int:
 
 
 def _start_local_session() -> tuple[object, str, str]:
-    """起本地会话（OS 分配端口 + 本机口令）→ (server, url, token)。
+    """起本地端口（OS 分配端口 + 本机口令）→ (server, url, token)。
 
-    **不做存活探测、不复用**：复用会把上一个后端/上一个凭据的旧会话
+    **不做存活探测、不复用**：复用会把上一个后端/上一个凭据的旧 worker
     带进来，正是"模型莫名其妙存在/消失"的根源（M2/O1）。
     """
     try:
@@ -73,7 +73,7 @@ def _start_local_session() -> tuple[object, str, str]:
     try:
         server, port = serve(0, token=token)
     except Exception as e:  # noqa: BLE001
-        raise SystemExit(f"✗ 本地会话启动失败：{e}")
+        raise SystemExit(f"✗ 本地端口启动失败：{e}")
     return server, f"http://127.0.0.1:{port}", token
 
 
@@ -97,13 +97,13 @@ def cmd_studio(args: argparse.Namespace) -> int:
     require_auth = not (args.open
                         or os.environ.get("GENIE_STUDIO_OPEN") == "1")
 
-    # 同进程：会话对象与 GUI 在同一个进程里，**没有 HTTP 跳、没有第二个
+    # 同进程：端口对象与 GUI 在同一个进程里，**没有 HTTP 跳、没有第二个
     # 端口**（O3）。给跨进程客户端（console）留的门 = /session，带口令。
     token = secrets.token_urlsafe(24)
     ss.set_token(token)
     host, share = LocalSessionHost(), True
     rv.write(url=gui_url + "/session", token=token)
-    print(f"· 会话与 GUI 同进程（跨进程客户端见 {gui_url}/session）")
+    print(f"· 执行进程与 GUI 同进程（跨进程客户端见 {gui_url}/session）")
 
     print(f"· GENIE 启动中 → {gui_url}   （Ctrl-C 退出）")
     if not args.no_browser:
@@ -133,16 +133,16 @@ def cmd_console(args: argparse.Namespace) -> int:
     server = None
     cli = None
     if not url:
-        cli = SessionClient.discover()      # 读门牌：GUI 正在用的那个会话
+        cli = SessionClient.discover()      # 读门牌：GUI 正在用的那个端口
     if cli is None and url:
         cli = SessionClient(url, token=token)
     if cli is not None:
-        print(f"· 连接会话（{cli.base_url}）")
+        print(f"· 连接 Studio（{cli.base_url}）")
     else:
         server, url, token = _start_local_session()
         rv.write(url=url, token=token)
         cli = SessionClient(url, token=token)
-        print(f"· 本机会话已启动（{url}）")
+        print(f"· 本地端口已启动（{url}）")
     try:
         return run_console(cli)
     finally:
@@ -192,8 +192,8 @@ def cmd_workspace(args: argparse.Namespace) -> int:
     """``genie workspace [PATH]``：查看 / 设置当前工作区（G4a 2026-10-30）。
 
     无参 = 显示当前工作区与来源（env/设置/缺省）+ 最近列表；带参 = 设为
-    当前工作区（目录不存在则创建，校验可写）。机器级持久：之后所有会话、
-    结果、脚本、自动存档的 .gensim 都跟着它走（已开的 Studio 需重启会话
+    当前工作区（目录不存在则创建，校验可写）。机器级持久：之后所有 Studio、
+    结果、脚本、自动存档的 .gensim 都跟着它走（已开的 Studio 需重启
     才换根——GUI 的 Workspace… 按钮会自动重挂）。"""
     from genie.studio.views import workspace_setting as ws
 
@@ -219,7 +219,7 @@ def cmd_workspace(args: argparse.Namespace) -> int:
     print("· 之后的结果/脚本/自动存档 .gensim 都落在这里")
     if ws.source() == "env":
         print("⚠ 但本机设了 GENIE_SCRIPTS_DIR，环境变量仍优先——实际生效的是它")
-    print("· 已开着的 Studio 需重启会话（File → Workspace… 会自动重挂）")
+    print("· 已开着的 Studio 需重启（File → Workspace… 会自动重挂）")
     return 0
 
 
@@ -286,7 +286,7 @@ def main(argv: list[str] | None = None) -> int:
         prog="genie", description="GENIE——GPU 电磁仿真软件"
         "（界面+配置器+后处理器；内核在服务端）")
     sub = ap.add_subparsers(dest="cmd")   # 裸敲 genie = studio（一键形态）
-    st = sub.add_parser("studio", help="本地拉起整套软件（会话 + GUI）")
+    st = sub.add_parser("studio", help="本地拉起整套软件（worker + GUI）")
     st.add_argument("--no-browser", action="store_true",
                     help="不自动打开浏览器")
     st.add_argument("--port", type=int, default=None,
@@ -296,7 +296,7 @@ def main(argv: list[str] | None = None) -> int:
     st.set_defaults(fn=cmd_studio)
     co = sub.add_parser("console", help="shell 里的终端客户端（与 GUI 平等）")
     co.add_argument("--attach", default="",
-                    help="连一个已在跑的会话（缺省读本机门牌）")
+                    help="连一个已在跑的 Studio（缺省读门牌）")
     co.set_defaults(fn=cmd_console)
     cn = sub.add_parser(
         "connect", help="写本机网关与凭据配置（一次即可，之后 connect() 无参即通）")

@@ -138,7 +138,7 @@ const ICON_PATHS = {
   file_py: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 1.5 H9.5 L12.5 4.5 V14.5 H3.5 Z" fill="#F8FAFC" stroke="#94A3B8" stroke-width="1.1"/><path d="M9.5 1.5 V4.5 H12.5 Z" fill="#1F62B0" stroke="#1F62B0" stroke-width="1.1"/><path d="M5.7 7.4 L4.1 9.0 L5.7 10.6 M7.3 7.4 L8.9 9.0 L7.3 10.6" stroke="#1F62B0" stroke-width="1.2"/></svg>',
   /* file_cfg：琥珀折角 .json 配置文档，双滑杆徽记（导入/导出状态共用） */
   file_cfg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 1.5 H9.5 L12.5 4.5 V14.5 H3.5 Z" fill="#F8FAFC" stroke="#94A3B8" stroke-width="1.1"/><path d="M9.5 1.5 V4.5 H12.5 Z" fill="#B45309" stroke="#B45309" stroke-width="1.1"/><path d="M5.0 7.3 H11.0 M5.0 10.7 H11.0" stroke="#B45309" stroke-width="1.2"/><circle cx="9.4" cy="7.3" r="1.2" fill="#F8FAFC" stroke="#B45309" stroke-width="1.2"/><circle cx="6.6" cy="10.7" r="1.2" fill="#F8FAFC" stroke="#B45309" stroke-width="1.2"/></svg>',
-  /* file_log：绿折角 .txt 记录文档，文本行徽记（导出会话记录） */
+  /* file_log：绿折角 .txt 记录文档，文本行徽记（导出终端记录） */
   file_log: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 1.5 H9.5 L12.5 4.5 V14.5 H3.5 Z" fill="#F8FAFC" stroke="#94A3B8" stroke-width="1.1"/><path d="M9.5 1.5 V4.5 H12.5 Z" fill="#15803D" stroke="#15803D" stroke-width="1.1"/><path d="M5.3 7.2 H10.7 M5.3 9.6 H10.7 M5.3 12.0 H8.3" stroke="#15803D" stroke-width="1.2"/></svg>',
 };
 

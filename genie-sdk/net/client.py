@@ -51,7 +51,7 @@ def format_detail(d: Any) -> str:
 
 
 class Client:
-    """极薄 HTTP 会话封装（传输实现可换：本机 requests / 网页 fetch）。所有方法可被测试替身覆盖（SDK 测试与
+    """极薄 HTTP 客户端封装（传输实现可换：本机 requests / 网页 fetch）。所有方法可被测试替身覆盖（SDK 测试与
     前端代码生成器的 round-trip 测试都靠这一点注入假传输层）。"""
 
     def __init__(self, base_url: str, api_key: str | None = None,
@@ -80,7 +80,7 @@ class Client:
             # P1 用户名+key 双输入：服务器校验与 key 条目 name 配对
             self._s.headers["X-Username"] = username
         if extra_headers:
-            # 会话轨（G72）：经 /gw 代理时带 X-Session-Token 等本机口令。
+            # 经本地端口转发（G72）：经 /gw 代理时带 X-Session-Token 等本机口令。
             self._s.headers.update(extra_headers)
 
     # ---- 基石 ----
@@ -92,7 +92,7 @@ class Client:
         # _unlimited（G178）：下载面传 timeout=None 意为"不限"——与缺省
         # "未传"（回落常规超时）用显式哨兵区分，requests 收到 None 即不限。
         eff = self.timeout if (timeout is None and not _unlimited) else timeout
-        # 会话轨的代理按 X-Upstream-Timeout 控制上游超时（直连时网关
+        # 代理轨按 X-Upstream-Timeout 控制上游超时（直连时网关
         # 忽略未知头，无害）——否则 /gw 的 120s 缺省会盖掉本地设置。
         # G178 的下载面是"客户端不限时"（eff=None）：头本身必须是**数字**
         # ——修前 str(None)="None"，代理按畸形请求 422（真机实证：每个点
@@ -122,7 +122,7 @@ class Client:
 
     def login(self, username: str, password: str) -> str:
         """账号密码登录：POST /api/auth/login {username,password} →
-        {token}；token 即后续请求的 X-API-Key（会话期绑定本 client）。
+        {token}；token 即后续请求的 X-API-Key（绑定本 client 期间）。
         返回 token，便于调用方持久化。凭据错误（401）照常抛
         GenieHTTPError，不吞服务器信息。"""
         tok = self._req(
@@ -138,9 +138,9 @@ class Client:
         return tok
 
     def set_key(self, api_key: str | None, username: str | None = None) -> None:
-        """换发凭据（**不换会话、不丢模型**）。
+        """换发凭据（**不丢模型**）。
 
-        会话的授权寿命与模型寿命正交（M2/O2）：token 轮换、改密码、过期后
+        授权的寿命与模型的寿命正交（M2/O2）：token 轮换、改密码、过期后
         重新登录，都只更新这一层头，实例与配置原样保留。空 key = 摘掉头
         （未登录/已退出的诚实形态，而不是发一个空头）。
         """

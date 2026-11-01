@@ -215,7 +215,7 @@ class Simulation:
         self._result_local_path: str | None = None   # 旧 h5 落盘（只读兼容）
         self._result_doc: str | None = None          # G182：结果文档路径
         # G182 P2：run 成功写文档的位置——打开过的文档 → 原地更新；
-        # 未设 → <workspace>/runs/<job>.gensim。会话 worker 用 env
+        # 未设 → <workspace>/runs/<job>.gensim。worker 用 env
         # GENIE_DOC_PATH 注入；genie.open 打开文档时设置。
         self._doc_path: str | None = None
         # K4（R18，站长裁 A）：提交路径锁——并发 run() 的"双查 _job_id
@@ -443,10 +443,10 @@ class Simulation:
 
     def visualize(self, mon: str, field: str | None = None) -> None:
         """把该监视器推到 Studio 的 Plot 交互面板（G148 定案：交互只住
-        GUI——SDK 面零 matplotlib）。两条触发腿：**会话内脚本**（Studio
-        编辑器/终端——worker 给实例注入会话版 visualize，emit ``plot``
+        GUI——SDK 面零 matplotlib）。两条触发腿：**worker 内脚本**（Studio
+        编辑器/终端——worker 给实例注入执行版 visualize，emit ``plot``
         事件，本方法被实例属性遮蔽）；**外部 SDK 进程**（组合根 hook →
-        会话注入端点，G148 批 4b）。未接线（无会话）= 明确报错指路。
+        推送端点，G148 批 4b）。未接线（没有 Studio）= 明确报错指路。
         自由画图不是产品面：拿 ``results()`` 的 ndarray 自己写 Python。"""
         hook = hooks.get("visualize")
         if hook is None:
@@ -543,7 +543,7 @@ class Simulation:
         展开，这层纯本地校验**在 sweep() 调用点即做**——坏规格当场
         SweepExpandError，不留到提交边界之后（历史：修前已退役的
         preview 面曾把 sweep 整个换成宽容占位，连本地校验也吞掉，
-        坏轴名要到会话执行才炸）。"""
+        坏轴名要到 worker 执行才炸）。"""
         from ...models import SweepSpec, MAX_GPU_PER_RUN
         from ...models.sweep_expand import (SweepExpandError,
                                            validate_sweep_config)

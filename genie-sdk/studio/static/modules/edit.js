@@ -33,7 +33,7 @@ function onFormMutate() {
   updateScene();
   renderTree();
   scheduleValidate();
-  scheduleCfgPush();   /* 表单字段级修改 → 会话 f（terminal 战役：单一真源） */
+  scheduleCfgPush();   /* 表单字段级修改 → worker 里的 f（terminal 战役：唯一可编辑） */
 }
 
 /** 两份模型求路径级差异 → [{path, value}]（value=null 表示删除）。
@@ -68,7 +68,7 @@ function diffCfg(base, next) {
   return ops;
 }
 
-/* 表单 → 会话 f 推送（防抖 400ms；服务端权威，客户端只发增量） */
+/* 表单 → worker 里的 f 推送（防抖 400ms；服务端权威，客户端只发增量） */
 let _cfgPushTimer = null;
 let _pendingExec = null;   /* busy 期提交的待执行命令（单槽排队）*/
 
@@ -82,7 +82,7 @@ async function pushCfg() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ops }) });
     if (!r.ok) {
-      /* 表单改动没进会话 = 用户以为改了、其实没改（最坏的一类静默）。
+      /* 表单改动没进 worker = 用户以为改了、其实没改（最坏的一类静默）。
        * 走统一出口，6s 去重（连打字段不会刷屏）。 */
       const j = await r.json().catch(() => ({}));
       apiFailed("保存修改", r, j);

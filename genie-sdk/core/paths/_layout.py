@@ -4,7 +4,7 @@
 - ``sweeps_dir``：参数扫描的根（每次扫描一个子文件夹）。
 
 显式 ``GENIE_RESULT_DIR`` 是**唯一的输出覆盖**（部署/CI/测试）；
-``GENIE_SWEEPS_DIR`` 由会话 spawn 时注入（``<工作区根>/sweeps``），
+``GENIE_SWEEPS_DIR`` 由 worker spawn 时注入（``<工作区根>/sweeps``），
 两者都不是"按人分目录"的残留——owner 层已删。
 """
 from __future__ import annotations
@@ -33,7 +33,7 @@ def sweeps_dir() -> Path:
 
     每个扫描一个子文件夹（``<name>-<时间戳>/``），里面 ``sweep.json``
     索引 + 每点一份 ``<name>-0001.gensim``。解析：
-    ``GENIE_SWEEPS_DIR``（会话显式注入）→ ``GENIE_RESULT_DIR``/sweeps
+    ``GENIE_SWEEPS_DIR``（worker 显式注入）→ ``GENIE_RESULT_DIR``/sweeps
     （部署/CI 基）→ 工作区根。
     """
     env = os.environ.get("GENIE_SWEEPS_DIR")

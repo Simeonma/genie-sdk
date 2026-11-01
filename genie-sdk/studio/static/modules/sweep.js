@@ -10,7 +10,7 @@
  *          原语）；进度吃既有 `sweep-progress` 事件（term.js 转喂
  *          __sweepProgress，本页在它旁边再吃一份）。
  *   Plot → POST /api/sweep/plot → worker 把最近一次扫描的**合并结果**
- *          （数据多 k 维）落会话结果目录并发 `plot` 事件——面板零改动：
+ *          （数据多 k 维）落结果目录并发 `plot` 事件——面板零改动：
  *          参数轴就是轴分配表里的普通一行（freqs × 第一个参数 = 二维图，
  *          其余参数 = 切片/滑条）。
  *

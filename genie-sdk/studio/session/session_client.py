@@ -43,7 +43,7 @@ from fastapi import FastAPI, HTTPException, Request
 
 
 def session_url() -> str:
-    """**没有默认端口地址**——独立会话服务（旧 :8123）已随 G63 退役。
+    """**没有默认端口地址**——旧的独立服务（:8123）已随 G63 退役。
 
     这个函数故意改成"响亮失败"：以前它硬编码 `127.0.0.1:8123`，而那个端口
     早就没人听，于是所有忘了注入地址的调用方都会静默去拨一个空端口（宿主
@@ -52,7 +52,7 @@ def session_url() -> str:
     """
     raise RuntimeError(
         "没有 /session 地址：用 SessionClient.discover() 读门牌，或显式传 base_url"
-        "（独立会话服务已退役，不再有 127.0.0.1:8123 这个默认值）")
+        "（独立服务已退役，不再有 127.0.0.1:8123 这个默认值）")
 
 
 class SessionClient:

@@ -18,7 +18,7 @@ from ..results import AXIS_KEYS
 MANIFEST_NAME = "sweep.json"
 
 # ── 事件钩子（G168/R34，站长裁"汇总为王，点级降噪"）──────────────────
-# 会话面注入的**观测面**（与 simulate.hooks 同款注入模式）：
+# worker 面注入的**观测面**（与 simulate.hooks 同款注入模式）：
 #   每点终态 {"type":"point", sweep_id, idx, state, job_id, total, rollup}
 #   扫描终态 {"type":"sweep_done", sweep_id, state, rollup, total}
 # None（缺省）= 零开销直通——独立 SDK 使用者无感。回调异常吞掉
@@ -146,7 +146,7 @@ def _visualize(obj, mon: str, field: str | None = None):
     """扫描看图：与 ``f.visualize`` 同一个动词、同一个 Plot 面板。
 
     G182 P5c：推的是合并结果（数据多 k 维）——面板已有的轴选择器/
-    滑条把参数轴当普通轴用，画图实现只有一套。无会话 → 明确报错
+    滑条把参数轴当普通轴用，画图实现只有一套。没有 Studio → 明确报错
     （SDK 面零 matplotlib，G148 定案）。
     """
     hook = hooks.get("visualize_sweep")
