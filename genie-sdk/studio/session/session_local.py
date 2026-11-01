@@ -1,24 +1,24 @@
 """genie/studio/session_local.py — 会话的**同进程**适配器（O3）。
 
-一个模型一个 actor（`SessionKernel`），它的"地址"是部署细节：
+一份模型一个 actor（`SessionKernel`），它的"地址"是部署细节：
 
 - **同进程**（本地默认）：`LocalSessionHost` 直接调 `session_service` 的
   函数——零 HTTP、零端口、零序列化。Studio 与它的会话之间没有"边"，
   因为不存在任何需要跨的边界（同机、同用户、同信任域、同生命周期）。
-- **跨进程**（云宿主 / `genie console` / 外部工具）：
+- **跨进程**（`genie console` / 外部工具）：
   `session_client.SessionClient` 走 `/session/*`（挂在 Studio 上的同一套
   路由，带本机口令）——**独立会话服务已退役**（G63：会话与 GUI 同进程）。
 
 两个适配器实现同一张方法表，所以门面（`register_session_routes` /
 `register_result_routes` / `gateway`）对"会话在哪"完全无知。
 
-适配器只搬运会话标识（`session_id`）与凭据（`key`）：工作区由进程决定，
-没有"属于谁"这一维（2026-11-01 删掉 owner 层）。
+**身份维度为零**（2026-11-01）：没有 owner（工作区由进程决定）、没有
+session_id（一个进程一份模型，新模型 = ``new_model()``）。适配器只搬运
+凭据（`key`）。
 """
 from __future__ import annotations
 
 from . import session_service as _svc
-from .session_client import DEFAULT_SESSION
 
 
 class LocalSessionHost:
@@ -33,81 +33,67 @@ class LocalSessionHost:
     # 唯一真源 = session_service 的 *_action 函数；本适配器只做参数搬运，
     # 带凭据换绑/归一的判断一律不住这里。锁 = test_session_reception。）
 
-    def exec(self, code: str, *,
-             session_id: str = DEFAULT_SESSION, mode: str = "run",
+    def exec(self, code: str, *, mode: str = "run",
              label: str = "", key: str = "") -> dict:
         return {"id": _svc.exec_action(
-            session_id=session_id, code=code,
-            mode=mode, label=label, key=key)}
+            code=code, mode=mode, label=label, key=key)}
 
-    def run(self, *, session_id: str = DEFAULT_SESSION,
-            gpu: int | None = None, timeout_s: int | None = None,
-            key: str = "") -> dict:
+    def run(self, *, gpu: int | None = None,
+            timeout_s: int | None = None, key: str = "") -> dict:
         return {"id": _svc.run_action(
-            session_id=session_id,
             gpu=gpu, timeout_s=timeout_s, key=key)}
 
-    def sweep(self, axes: list, *,
-              session_id: str = DEFAULT_SESSION, max_parallel: int = 1,
+    def sweep(self, axes: list, *, max_parallel: int = 1,
               on_failure: str = "continue", name: str = "",
               key: str = "") -> dict:
         return {"id": _svc.sweep_action(
-            session_id=session_id, axes=axes,
-            max_parallel=max_parallel, on_failure=on_failure, name=name,
-            key=key)}
+            axes=axes, max_parallel=max_parallel,
+            on_failure=on_failure, name=name, key=key)}
 
     def sweep_plot(self, mon: str, *, field: str = "",
-                   session_id: str = DEFAULT_SESSION, key: str = "") -> dict:
-        return {"id": _svc.sweep_plot_action(
-            session_id=session_id, mon=mon, field=field,
-            key=key)}
+                   key: str = "") -> dict:
+        return {"id": _svc.sweep_plot_action(mon=mon, field=field, key=key)}
 
-    def patch(self, ops: list, *,
-              session_id: str = DEFAULT_SESSION, key: str = "") -> dict:
-        return {"id": _svc.patch_action(
-            session_id=session_id, ops=ops, key=key)}
+    def patch(self, ops: list, *, key: str = "") -> dict:
+        return {"id": _svc.patch_action(ops=ops, key=key)}
 
-    def replace(self, model: dict, *,
-                session_id: str = DEFAULT_SESSION, key: str = "") -> dict:
-        return {"id": _svc.replace_action(
-            session_id=session_id, model=model, key=key)}
+    def replace(self, model: dict, *, key: str = "") -> dict:
+        return {"id": _svc.replace_action(model=model, key=key)}
 
-    def output(self, *, session_id: str = DEFAULT_SESSION,
-               since: int = 0) -> dict:
-        k = _svc.get_kernel(session_id)
+    def new_model(self) -> dict:
+        """丢弃当前模型（下一个请求从空开始）。"""
+        return _svc.new_model()
+
+    def output(self, *, since: int = 0) -> dict:
+        k = _svc.get_kernel()
         k.ensure()             # 读即唤起：Studio 重启后已开页面靠这条恢复
         return k.output(since)
 
-    def stop(self, *, session_id: str = DEFAULT_SESSION) -> dict:
-        return {"stopped": _svc.get_kernel(session_id).stop()}
+    def stop(self) -> dict:
+        return {"stopped": _svc.get_kernel().stop()}
 
-    def reset(self, *, session_id: str = DEFAULT_SESSION) -> dict:
+    def reset(self) -> dict:
         """清理重启（R31）：与 SessionClient.reset 同一鸭子面——本地
         部署的 /api/exec/reset 走这里（修前 cli 无此方法 → 500）。"""
-        return _svc.get_kernel(session_id).reset()
+        return _svc.get_kernel().reset()
 
-    def respawn_for_paths(self, *,
-                          session_id: str = DEFAULT_SESSION) -> dict:
+    def respawn_for_paths(self) -> dict:
         """切工作区后重挂会话（G4a）：与 SessionKernel 同名方法同鸭子面。"""
-        return _svc.get_kernel(session_id).respawn_for_paths()
+        return _svc.get_kernel().respawn_for_paths()
 
-    def attach(self, *, session_id: str = DEFAULT_SESSION,
-               key: str = "") -> dict:
-        return _svc.get_kernel(session_id).attach(key)
+    def attach(self, *, key: str = "") -> dict:
+        return _svc.get_kernel().attach(key)
 
-    def result_meta(self, *, job_id: str,
-                    session_id: str = DEFAULT_SESSION) -> dict:
-        return _svc.result_meta(job_id=job_id, session_id=session_id)
+    def result_meta(self, *, job_id: str) -> dict:
+        return _svc.result_meta(job_id=job_id)
 
     def result_series(self, *, job_id: str, mon: str, field: str,
-                      session_id: str = DEFAULT_SESSION,
                       maxpoints: int = 1200,
                       axes: str = "", slices: str = "") -> dict:
         # G148 批 3：axes/slices 选轴视图透传（G115 双写面的既声明代价
         # ——改 /result/series 签名须同轮改本镜像，e2e 亲验抓出）。
         return _svc.result_series(job_id=job_id, mon=mon, field=field,
                                   maxpoints=maxpoints,
-                                  session_id=session_id,
                                   axes=axes, slices=slices)
 
     def health(self) -> dict:

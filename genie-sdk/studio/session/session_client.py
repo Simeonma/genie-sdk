@@ -20,16 +20,15 @@ M2/O1+O2（2026-10-22）后的三条界：
      ``SessionClient(url)`` 显式注入 Studio 工厂（``create_app(session=…)``）。
      环境变量只在独立会话服务这种跨进程形态（console、外部工具）里作为缺省值。
   2. **三生命周期正交**：工作区（一个进程一片目录，登录不参与）/ token（能不能提交）/
-     session_id（哪一份模型）互不决定对方。换 token 只走 ``attach``，
-     **不换模型**；换 session_id = 新会话 = 新模型（由前端用户在登录时生成）。
-     请求面没有这些身份字段（2026-11-01 删掉 owner 层）。
+     一个进程只有一份模型：刷新/重登都保留它，``new_model()`` 才丢弃
+     （请求面既没有 owner 也没有 session_id）。
   3. **唯一网关出口**：Studio 不再自己拨号后端。``gateway()`` 把
      /api/auth/*、/api/jobs/* 交给会话服务转发（会话侧有
      路径白名单），于是"上游不可达"只有一种措辞、一个实现。
      /api/tools/*（库清单/材料拟合）自 G19b 起为 Studio 本地实现，
      不经此转发面（G111 清账 R38）。
 
-本模块仍是**唯一一份**拨号/错误翻译/session_id 白名单实现：host(:8843) 与
+本模块仍是**唯一一份**拨号/错误翻译实现：host(:8843) 与
 studio(:8777) 都经它说话。
 """
 from __future__ import annotations
@@ -39,20 +38,6 @@ import re
 
 from fastapi import FastAPI, HTTPException, Request
 
-# session_id 白名单：[\w\-]{1,64}（它当目录名用：session/<session_id>/），
-# 路径穿越/空串/点号/非 ASCII 一律拒（re.ASCII：\w 裸用连中文都放行，
-# B3 调研裁决②钉死）。
-SESSION_ID_RE = re.compile(r"[\w\-]{1,64}", re.ASCII)
-
-DEFAULT_SESSION = "default"
-
-
-def check_session_id(session_id: str) -> str:
-    """session_id 白名单校验（目录名；不合规 422）。"""
-    if not SESSION_ID_RE.fullmatch(session_id or ""):
-        raise HTTPException(status_code=422,
-                            detail="session_id 须为字母/数字/_/-（1-64 字符）")
-    return session_id
 
 
 def session_url() -> str:
@@ -76,13 +61,10 @@ class SessionClient:
     """
 
     def __init__(self, base_url: str | None = None, *, token: str = "",
-                 timeout: float = 8.0, session_id: str = ""):
+                 timeout: float = 8.0):
         self.base_url = (base_url or session_url()).rstrip("/")
         self.token = token or os.environ.get("GENIE_SESSION_TOKEN", "")
         self.timeout = timeout
-        # 缺省 session_id：``discover()`` 会把门牌里的值填进来，于是跨进程
-        # 调用方（console / agent 脚本）不必每次重抄。
-        self.session_id = session_id
 
     @classmethod
     def discover(cls) -> "SessionClient | None":
@@ -97,11 +79,7 @@ class SessionClient:
         card = rv.read() or {}
         if not card.get("url"):
             return None
-        return cls(card["url"], token=card.get("token", ""),
-                   session_id=card.get("session_id", ""))
-
-    def _sid(self, session_id: str) -> str:
-        return session_id or self.session_id or DEFAULT_SESSION
+        return cls(card["url"], token=card.get("token", ""))
 
     # ---- 传输 ----
 
@@ -146,39 +124,35 @@ class SessionClient:
 
     # ---- 会话面 ----
 
-    def exec(self, code: str, *, session_id: str = "",
+    def exec(self, code: str, *,
              mode: str = "run", label: str = "", key: str = "") -> dict:
         """``mode``：run=在当前命名空间执行（终端）；build=构造新模型（脚本）。"""
         return self._json("POST", "/exec", json_body={
-            "code": code, "mode": mode, "label": label,
-            "session_id": self._sid(session_id), "key": key})
+            "code": code, "mode": mode, "label": label, "key": key})
 
-    def run(self, *, session_id: str = "",
+    def run(self, *,
             gpu: int | None = None, timeout_s: int | None = None,
             key: str = "") -> dict:
         """提交当前模型（不改模型）。"""
         return self._json("POST", "/run", json_body={
-            "gpu": gpu, "timeout_s": timeout_s, "key": key,
-            "session_id": self._sid(session_id)})
+            "gpu": gpu, "timeout_s": timeout_s, "key": key})
 
-    def sweep(self, axes: list, *, session_id: str = "",
+    def sweep(self, axes: list, *,
               max_parallel: int = 1, on_failure: str = "continue",
               name: str = "", key: str = "") -> dict:
         """跑一次参数扫描（扫参页 Run）——与 ``run`` 同一模式。"""
         return self._json("POST", "/sweep", json_body={
             "axes": list(axes or []), "max_parallel": max_parallel,
-            "on_failure": on_failure, "name": name, "key": key,
-            "session_id": self._sid(session_id)})
+            "on_failure": on_failure, "name": name, "key": key})
 
     def sweep_plot(self, mon: str, *, field: str = "",
-                   session_id: str = "", key: str = "") -> dict:
+                   key: str = "") -> dict:
         """把最近一次扫描的结果推到 Plot 面板。"""
         return self._json("POST", "/sweep/plot", json_body={
-            "mon": mon, "field": field, "key": key,
-            "session_id": self._sid(session_id)})
+            "mon": mon, "field": field, "key": key})
 
     def patch(self, ops: list, *,
-              session_id: str = "", key: str = "") -> dict:
+              key: str = "") -> dict:
         """模型路径级增量：一条 op = ``{path, value, verb?}``。
 
         ``verb`` ∈ ``set``（缺省）/ ``append``（往数组尾加一个）/ ``remove``
@@ -186,61 +160,55 @@ class SessionClient:
         模型一个字节不动，会话回声 ``origin=reject``。
         """
         return self._json("POST", "/model/patch", json_body={
-            "ops": list(ops or []), "key": key,
-            "session_id": self._sid(session_id)})
+            "ops": list(ops or []), "key": key})
 
     def replace(self, model: dict, *,
-                session_id: str = "", key: str = "") -> dict:
+                key: str = "") -> dict:
         """整份模型替换。"""
         return self._json("POST", "/model/replace", json_body={
-            "model": model, "key": key,
-            "session_id": self._sid(session_id)})
+            "model": model, "key": key})
 
-    def output(self, *, session_id: str = "",
-               since: int = 0) -> dict:
-        return self._json("GET", "/output", params={
-            "since": since, "session_id": self._sid(session_id)})
+    def new_model(self) -> dict:
+        """丢弃当前模型（2026-11-01：取代"换 session_id"）。"""
+        return self._json("POST", "/model/new")
 
-    def stop(self, *, session_id: str = "") -> dict:
-        return self._json("POST", "/stop", params={
-            "session_id": self._sid(session_id)})
+    def output(self, *, since: int = 0) -> dict:
+        return self._json("GET", "/output", params={"since": since})
 
-    def reset(self, *, session_id: str = "") -> dict:
+    def stop(self) -> dict:
+        return self._json("POST", "/stop")
+
+    def reset(self) -> dict:
         """清理并重启会话进程（R31：stop 治不了时的进程级兜底）。"""
-        return self._json("POST", "/reset", params={
-            "session_id": self._sid(session_id)})
+        return self._json("POST", "/reset")
 
-    def attach(self, *, session_id: str = "",
-               key: str = "") -> dict:
+    def attach(self, *, key: str = "") -> dict:
         """凭据换绑（幂等）：**换 key 不换模型**。首次调用即建空模型。"""
-        return self._json("POST", "/attach", json_body={
-            "key": key, "session_id": self._sid(session_id)})
+        return self._json("POST", "/attach", json_body={"key": key})
 
-    def result_meta(self, *, session_id: str = "", job_id: str) -> dict:
+    def result_meta(self, *, job_id: str) -> dict:
         """结果结构清单。**job_id 必填**（G58/G66 定案 2026-10-29：
         服务端不猜"最近一次"）。"""
         return self._json("GET", "/result/meta", params={
-            "job_id": job_id, "session_id": self._sid(session_id)})
+            "job_id": job_id})
 
     def result_series(self, *, job_id: str, mon: str,
-                      field: str, session_id: str = "",
+                      field: str,
                       maxpoints: int = 1200,
                       axes: str = "", slices: str = "") -> dict:
         return self._json("GET", "/result/series", params={
             "job_id": job_id, "mon": mon, "field": field,
             "maxpoints": maxpoints,
-            "session_id": self._sid(session_id),
             "axes": axes, "slices": slices})
 
-    def result_inject(self, *, session_id: str = "",
+    def result_inject(self, *,
                       job_id: str, mon: str, field: str = "",
                       data: bytes) -> dict:
         """外部结果注入（G148 批 4b 腿 B）：h5 字节上传 + plot 事件
         （外部 SDK 的 f.visualize 走这里——直连会话端口，不经 studio）。"""
         return self._json("POST", "/result/inject", data=bytes(data),
                           content_type="application/octet-stream", params={
-                              "job_id": job_id, "mon": mon, "field": field,
-                              "session_id": self._sid(session_id)})
+                              "job_id": job_id, "mon": mon, "field": field})
 
     def health(self) -> dict:
         return self._json("GET", "/health")
@@ -277,21 +245,13 @@ def _key_of(exec_credentials_of, req: Request) -> str:
     return str(exec_credentials_of(req) or "")
 
 
-def _sid_of(req: Request) -> str:
-    """session_id 取用：读 X-Session-Id 头（缺省 = 单会话）。"""
-    return check_session_id(req.headers.get("X-Session-Id")
-                            or DEFAULT_SESSION)
-
-
 def register_session_routes(
         app: FastAPI, *, exec_credentials_of=None,
-        client: SessionClient | None = None, on_attach=None) -> None:
-    """注册 /api/exec 四端点 + /api/session/attach（会话转发）。
+        client: SessionClient | None = None) -> None:
+    """注册 /api/exec 四端点 + /api/session/attach + /api/model/new。
 
-    ``on_attach(session_id)``：attach 成功后回调（Studio 用它把"当前活跃
-    会话"写进门牌，让 ``genie console`` 能接上同一个模型）。
-
-    请求面只有"哪一份模型"（session_id）——工作区由进程决定，没有 owner 字段。
+    请求面只有"要做什么"，没有身份字段：工作区由进程决定（无 owner），
+    模型也只有一份（无 session_id）。**新模型 = POST /api/model/new**。
 
     鉴权交调用方的会话守卫/本地信任面——本函数不做认证。
     须在静态兜底路由之前调用（GET 路由落在兜底之后会被吞成 404，A1 教训）。
@@ -320,7 +280,7 @@ def register_session_routes(
         mode = "build" if body.get("reset") else str(body.get("mode") or "run")
         key = _key_of(exec_credentials_of, req)
         out = await run_in_threadpool(
-            cli.exec, code, session_id=_sid_of(req),
+            cli.exec, code,
             mode=mode, label=label, key=key)
         return {"id": out["id"]}
 
@@ -335,7 +295,7 @@ def register_session_routes(
             body = {}
         key = _key_of(exec_credentials_of, req)
         out = await run_in_threadpool(
-            cli.run, session_id=_sid_of(req),
+            cli.run,
             gpu=body.get("gpu"), timeout_s=body.get("timeout_s"), key=key)
         return {"id": out["id"]}
 
@@ -350,7 +310,7 @@ def register_session_routes(
                                        "{name, values|linspace|logspace}）")
         key = _key_of(exec_credentials_of, req)
         out = await run_in_threadpool(
-            cli.sweep, axes, session_id=_sid_of(req),
+            cli.sweep, axes,
             max_parallel=int(body.get("max_parallel") or 1),
             on_failure=str(body.get("on_failure") or "continue"),
             name=str(body.get("name") or ""), key=key)
@@ -366,7 +326,7 @@ def register_session_routes(
         key = _key_of(exec_credentials_of, req)
         out = await run_in_threadpool(
             cli.sweep_plot, mon, field=str(body.get("field") or ""),
-            session_id=_sid_of(req), key=key)
+            key=key)
         return {"id": out["id"]}
 
     @app.post("/api/model/patch")
@@ -385,7 +345,7 @@ def register_session_routes(
         key = _key_of(exec_credentials_of, req)
         out = await run_in_threadpool(
             cli.patch, ops,
-            session_id=_sid_of(req), key=key)
+            key=key)
         return {"id": out["id"]}
 
     @app.post("/api/model/replace")
@@ -398,50 +358,48 @@ def register_session_routes(
         key = _key_of(exec_credentials_of, req)
         out = await run_in_threadpool(
             cli.replace, model,
-            session_id=_sid_of(req), key=key)
+            key=key)
         return {"id": out["id"]}
 
     async def _attach(req: Request) -> dict:
         """凭据换绑 + 首次物化（幂等）。
 
-        O2 语义：**换 key 不换模型**。所以 token 轮换/改密/过期后重登，
-        模型原样保留；要新模型走新的 session_id（前端在登录时生成）。
-        未登录（取不到 key）时不建模型——没凭据的会话没有意义。
+        **换 key 不换模型**：token 轮换/改密/过期后重登，模型原样保留；
+        要新模型走 ``POST /api/model/new``。未登录（取不到 key）时不建模型
+        ——没凭据的会话没有意义。
         """
         key = _key_of(exec_credentials_of, req)
-        sid = _sid_of(req)
-        out = await run_in_threadpool(cli.attach,
-                                      session_id=sid, key=key)
-        if on_attach is not None:
-            try:
-                on_attach(sid)
-            except Exception:  # noqa: BLE001 —— 记门牌失败不拦登录
-                pass
-        return {"ok": True, "session_id": sid, "attached": out}
+        out = await run_in_threadpool(cli.attach, key=key)
+        return {"ok": True, "attached": out}
 
     @app.post("/api/session/attach")
     async def api_session_attach(req: Request) -> dict:
         return await _attach(req)
 
+    @app.post("/api/model/new")
+    async def api_model_new() -> dict:
+        """丢弃当前模型 → 下一个请求从空模型开始（GUI 退出/换账号时调）。"""
+        return await run_in_threadpool(cli.new_model)
+
     @app.get("/api/exec/output")
     async def api_exec_output(req: Request, since: int = 0) -> dict:
         """Terminal 输出增量拉取 + 会话忙闲 + cfg 快照回流。"""
         return await run_in_threadpool(
-            cli.output, session_id=_sid_of(req), since=since)
+            cli.output, since=since)
 
     @app.post("/api/exec/stop")
     async def api_exec_stop(req: Request) -> dict:
         """停止当前执行（A2「长任务必须能掐」）：经会话 /stop 向
         worker 发 SIGINT（exec 掐断+孤儿作业清理；空闲忽略）。"""
         return await run_in_threadpool(
-            cli.stop, session_id=_sid_of(req))
+            cli.stop)
 
     @app.post("/api/exec/reset")
     async def api_exec_reset(req: Request) -> dict:
         """清理并重启会话进程（R31 站长裁：死循环/宿主污染停不掉时的
         进程级兜底——杀 worker 重起，只清执行态，模型与历史保留）。"""
         return await run_in_threadpool(
-            cli.reset, session_id=_sid_of(req))
+            cli.reset)
 
 
 def register_result_routes(app, *,
@@ -460,7 +418,7 @@ def register_result_routes(app, *,
         （G58/G66 定案 2026-10-29）。"""
         return await run_in_threadpool(
             cli.result_meta,
-            session_id=_sid_of(req), job_id=job_id)
+            job_id=job_id)
 
     @app.get("/api/result/series")
     async def api_result_series(req: Request, job_id: str, mon: str,
@@ -469,6 +427,6 @@ def register_result_routes(app, *,
                                 slices: str = "") -> dict:
         return await run_in_threadpool(
             cli.result_series,
-            session_id=_sid_of(req), job_id=job_id,
+            job_id=job_id,
             mon=mon, field=field, maxpoints=maxpoints,
             axes=axes, slices=slices)

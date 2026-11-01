@@ -28,10 +28,9 @@ import time
 from .session.session_client import SessionClient
 
 
-def _poll_output(cli: SessionClient, cursor: int, *,
-                 session_id: str) -> tuple[int, bool]:
+def _poll_output(cli: SessionClient, cursor: int) -> tuple[int, bool]:
     """增量打印输出环新行，返回 (新 cursor, busy)。"""
-    out = cli.output(session_id=session_id, since=cursor)
+    out = cli.output(since=cursor)
     for ln in out.get("lines") or []:
         text = ln.get("text") or ""
         if ln.get("kind") == "error":
@@ -43,24 +42,21 @@ def _poll_output(cli: SessionClient, cursor: int, *,
     return cursor, bool(out.get("busy"))
 
 
-def _run_block(cli: SessionClient, block: str, cursor: int, *,
-               session_id: str) -> int:
+def _run_block(cli: SessionClient, block: str, cursor: int) -> int:
     """整段提交到会话并跟随输出到终态（busy False）。"""
-    cli.exec(block, session_id=session_id, mode="run",
-             label="console")
+    cli.exec(block, mode="run", label="console")
     stopped = {"v": False}
 
     def _on_int(signum, frame):
         if not stopped["v"]:
             stopped["v"] = True
-            cli.stop(session_id=session_id)
+            cli.stop()
             print("\n^C（已发停止——会话仍在）")
 
     old = signal.signal(signal.SIGINT, _on_int)
     try:
         while True:
-            cursor, busy = _poll_output(cli, cursor,
-                                        session_id=session_id)
+            cursor, busy = _poll_output(cli, cursor)
             if not busy:
                 return cursor
             time.sleep(0.15)
@@ -68,22 +64,21 @@ def _run_block(cli: SessionClient, block: str, cursor: int, *,
         signal.signal(signal.SIGINT, old)
 
 
-def run_console(client: SessionClient | None = None, *,
-                session_id: str = "default") -> int:
+def run_console(client: SessionClient | None = None) -> int:
     """终端 REPL 主循环（会话已由调用方确保在跑）。"""
     cli = client or SessionClient()
     cursor = 0
     # 对齐当前环位（不重放历史——那是 GUI 终端窗口的职责）
     try:
-        out = cli.output(session_id=session_id, since=0)
+        out = cli.output(since=0)
         for ln in out.get("lines") or []:
             cursor = max(cursor, ln.get("seq", 0))
     except Exception as e:  # noqa: BLE001 —— 连不上就直说，别进假 REPL
         print(f"✗ 会话不可达：{e}")
         return 1
 
-    print(f"GENIE console → {cli.base_url}   session={session_id}"
-          "   （f 常驻；exit/Ctrl-D 退出，Ctrl-C 停止远端执行）")
+    print(f"GENIE console → {cli.base_url}（一个进程一份 f；"
+          "exit/Ctrl-D 退出，Ctrl-C 停止远端执行）")
     buf: list[str] = []
     while True:
         try:
@@ -113,12 +108,11 @@ def run_console(client: SessionClient | None = None, *,
         if block.strip() in ("exit", "quit", "exit()", "quit()"):
             return 0
         try:
-            cursor = _run_block(cli, block, cursor,
-                                session_id=session_id)
+            cursor = _run_block(cli, block, cursor)
         except Exception as e:      # noqa: BLE001 —— R41/S4：4xx/链路错误
-            # 不得冲出 REPL：修前一次 422（如 --session "bad id!"）就让
-            # 整个终端带裸栈退出，用户连改的机会都没有。报一句人话，
-            # 继续留在循环里——console 的契约是"会话仍在，可继续敲"。
+            # 不得冲出 REPL：修前一次 422 就让整个终端带裸栈退出，用户连
+            # 改的机会都没有。报一句人话，继续留在循环里——console 的契约
+            # 是"会话仍在，可继续敲"。
             status = getattr(e, "status_code", None)
             detail = getattr(e, "detail", None) or str(e)
             print(f"✗ {'HTTP ' + str(status) + ' ' if status else ''}{detail}")

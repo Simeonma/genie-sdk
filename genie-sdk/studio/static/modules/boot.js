@@ -6,8 +6,7 @@
  * 服务端 require_signin 中间件要求本地能力接口带 X-API-Key；界面里几十处
  * fetch 不逐个改，这里统一补头（只补同源 /api/*，/api/auth/* 登录族除外——
  * 它们本身不需要 token，登录流程也不该被旧 token 干扰）。
- * O2：同时补 X-Session-Id（哪一份模型）——身份/凭据/会话三件事分开，
- * 调用点无需知道，也就不会漏。 */
+ * 模型只有一份（2026-11-01 删 session_id）：不再补 X-Session-Id。 */
 (function patchFetchForAuth() {
   const orig = window.fetch;
   window.fetch = function (input, init) {
@@ -17,12 +16,10 @@
       if (sameOrigin && url.indexOf("/api/") >= 0
           && url.indexOf("/api/auth/") < 0) {
         const tok = genieToken();
-        const sid = genieSid();
         const opts = Object.assign({}, init || {});
         const h = opts.headers;
         const set = (obj) => {
           if (tok) obj["X-API-Key"] = tok;
-          if (sid) obj["X-Session-Id"] = sid;
           return obj;
         };
         if (h && typeof h.Headers === "undefined" && !(h instanceof Headers)) {
@@ -30,7 +27,6 @@
         } else {
           const hh = new Headers(h || {});
           if (tok) hh.set("X-API-Key", tok);
-          if (sid) hh.set("X-Session-Id", sid);
           opts.headers = hh;
         }
         return orig.call(window, input, opts);
@@ -986,9 +982,8 @@ function connDialog(initialView) {
       if (r.ok && j.token) {
         localStorage.setItem("genie_v2_api_key", j.token);
         localStorage.setItem("genie_v2_username", u);
-        /* O2：确定"哪一份模型"。同账号再登录（改密码/过期后重登）沿用它
-         * → 模型保住；换账号或从未登录过 → 新 id → 新模型。 */
-        genieClaimSession(u);
+        /* 换账号才丢模型：同账号再登录（改密码/过期后重登）保留当前模型。 */
+        if (genieClaimUser(u)) genieNewModel();
         close(); location.reload();
         return true;
       }
@@ -1187,10 +1182,11 @@ function connDialog(initialView) {
        * G64 站长裁定 2026-10-23：换账号 = 干净进场——脚本与凭据/模型身份
        * 同批清光（编辑器文本不在下一个账号的屏幕上出现）。 */
       try { navigator.sendBeacon("/api/identity/clear"); } catch (e) {}
+      genieNewModel();         /* 退出 = 丢弃模型（下次登录一定从空开始） */
       localStorage.removeItem("genie_v2_api_key");
       localStorage.removeItem("genie_v2_username");
       localStorage.removeItem("genie_v2_script");
-      genieDropSession();      /* O2：退出 = 模型身份作废（下次登录新模型） */
+      genieForgetUser();
       close(); location.reload();
       return;
     }

@@ -1,69 +1,51 @@
-/* modules/api.js — 会话身份 + 统一的失败措辞（M2/O2）
+/* modules/api.js — 身份/凭据 + 统一的失败措辞（M2/O2；2026-11-01 删 session_id）
  *
  * 三件事在这里，且只在这里：
- *  1. **三生命周期分开存**：token（能不能提交）/ session_id（哪一份模型）/
- *     用户名（隔离到哪个目录）。旧代码把三者压在 token 上，于是"改密码"
- *     或"7 天过期"会连带模型消失。
+ *  1. **凭据与"模型属于谁"分开存**：token（能不能提交）/ 用户名（换账号 =
+ *     丢模型）。**模型只有一份**——没有 session_id 可存、可传（一个进程
+ *     一份模型；新模型 = 调一次 `/api/model/new`）。
  *  2. **一个失败出口**：`apiFailText()` 把 401/503/502 翻成人话，
  *     `apiNotice()` 做去重提示。旧代码有 6 处各自处理"会话不可用"，
  *     用户能看到 4 种不同表现（静默/一行红字/503/兜底）。
- *  3. **请求头统一注入**：X-API-Key 与 X-Session-Id 由 boot.js 的 fetch
- *     包装统一加，调用点不再手写（手写就会漏）。
+ *  3. **请求头统一注入**：X-API-Key 由 boot.js 的 fetch 包装统一加，
+ *     调用点不再手写（手写就会漏）。
  */
 "use strict";
 
-const SESSION_SID_KEY = "genie_v2_session_id";     /* 哪一份模型 */
-const SESSION_USER_KEY = "genie_v2_session_user";  /* session 属于谁 */
+const SESSION_USER_KEY = "genie_v2_session_user";  /* 当前模型属于谁 */
 const SESSION_TOKEN_KEY = "genie_v2_api_key";      /* 能不能提交 */
 
 function genieToken() {
   try { return localStorage.getItem(SESSION_TOKEN_KEY) || ""; } catch { return ""; }
 }
 
-function genieSid() {
-  try { return localStorage.getItem(SESSION_SID_KEY) || "default"; } catch { return "default"; }
-}
-
-/** 新建一个会话 id（= 新模型）。只生成，不落盘——由调用方决定去留。 */
-function genieNewSid() {
-  const c = (typeof crypto !== "undefined" && crypto.randomUUID)
-    ? crypto.randomUUID() : (Date.now().toString(36) + Math.random().toString(36).slice(2));
-  return String(c).replace(/[^\w\-]/g, "").slice(0, 64) || "default";
+/** 丢弃当前模型（服务端动作）：退出登录 / 换账号时调。fire-and-forget。 */
+function genieNewModel() {
+  try {
+    return fetch("/api/model/new", { method: "POST" });
+  } catch { return Promise.resolve(null); }
 }
 
 /**
- * 登录成功后确定本浏览器的 session_id。
+ * 登录成功后记录"模型属于谁"，返回**是否换了账号**。
  *
- * 规则（O2 的三生命周期正交）：
- *  - 没有 id，或**换了账号** → 新 id（新模型）；
- *  - 同一个账号再次登录（改密码、token 过期、手滑退出又登回）→ **沿用**
- *    id，模型保住；
- *  - 显式"退出登录"会把 id 删掉 → 下次登录必然是新的。
+ * 规则：同账号再登录（改密码/token 过期重登）→ 保留模型；换账号 → 调用方
+ * 调 `genieNewModel()` 丢弃旧模型（不再是"生成一个新 session_id"）。
  */
-function genieClaimSession(username) {
-  let sid = "";
-  try { sid = localStorage.getItem(SESSION_SID_KEY) || ""; } catch {}
+function genieClaimUser(username) {
   let owner = "";
   try { owner = localStorage.getItem(SESSION_USER_KEY) || ""; } catch {}
-  if (!sid || (owner && username && owner !== username)) {
-    sid = genieNewSid();
-  }
-  try {
-    localStorage.setItem(SESSION_SID_KEY, sid);
-    if (username) localStorage.setItem(SESSION_USER_KEY, username);
-  } catch {}
-  return sid;
+  const changed = !!(owner && username && owner !== username);
+  try { if (username) localStorage.setItem(SESSION_USER_KEY, username); } catch {}
+  return changed;
 }
 
-/** 退出登录：模型身份一并作废（下次登录 = 新模型）。 */
-function genieDropSession() {
-  try {
-    localStorage.removeItem(SESSION_SID_KEY);
-    localStorage.removeItem(SESSION_USER_KEY);
-  } catch {}
+/** 退出登录：忘掉归属（模型由调用方先调 `genieNewModel()` 丢弃）。 */
+function genieForgetUser() {
+  try { localStorage.removeItem(SESSION_USER_KEY); } catch {}
 }
 
-/** token 失效（401/吊销/过期）：只清凭据，**保留 session_id**——
+/** token 失效（401/吊销/过期）：只清凭据，**保留模型**——
  *  重新登录同一个账号应当回到同一个模型。 */
 function genieDropToken() {
   try {

@@ -97,10 +97,6 @@ def cmd_studio(args: argparse.Namespace) -> int:
     require_auth = not (args.open
                         or os.environ.get("GENIE_STUDIO_OPEN") == "1")
 
-    def _on_attach(session_id: str) -> None:
-        """把"当前活跃会话"记进门牌（console 据此接上同一个模型）。"""
-        rv.update(session_id=session_id)
-
     # 同进程：会话对象与 GUI 在同一个进程里，**没有 HTTP 跳、没有第二个
     # 端口**（O3）。给跨进程客户端（console）留的门 = /session，带口令。
     token = secrets.token_urlsafe(24)
@@ -118,8 +114,7 @@ def cmd_studio(args: argparse.Namespace) -> int:
     app = create_app(session=host,
                      mount_session=True,
                      share_session=share,
-                     require_auth=require_auth,
-                     on_attach=_on_attach)
+                     require_auth=require_auth)
     try:
         uvicorn.run(app, host="127.0.0.1", port=gui_port, log_level="warning")
     finally:
@@ -135,7 +130,6 @@ def cmd_console(args: argparse.Namespace) -> int:
 
     url = (args.attach or "").rstrip("/")
     token = os.environ.get("GENIE_SESSION_TOKEN", "")
-    sid = (args.session or "").strip()
     server = None
     cli = None
     if not url:
@@ -143,17 +137,14 @@ def cmd_console(args: argparse.Namespace) -> int:
     if cli is None and url:
         cli = SessionClient(url, token=token)
     if cli is not None:
-        print(f"· 连接会话（{cli.base_url}）"
-              + (f" · session={cli.session_id or 'default'}"))
+        print(f"· 连接会话（{cli.base_url}）")
     else:
         server, url, token = _start_local_session()
         rv.write(url=url, token=token)
         cli = SessionClient(url, token=token)
         print(f"· 本机会话已启动（{url}）")
     try:
-        return run_console(
-            cli,
-            session_id=(sid or cli.session_id or "default"))
+        return run_console(cli)
     finally:
         if server is not None:
             rv.clear()
@@ -306,8 +297,6 @@ def main(argv: list[str] | None = None) -> int:
     co = sub.add_parser("console", help="shell 里的终端客户端（与 GUI 平等）")
     co.add_argument("--attach", default="",
                     help="连一个已在跑的会话（缺省读本机门牌）")
-    co.add_argument("--session", default="",
-                    help="会话 id（缺省读门牌里 GUI 正在用的那个）")
     co.set_defaults(fn=cmd_console)
     cn = sub.add_parser(
         "connect", help="写本机网关与凭据配置（一次即可，之后 connect() 无参即通）")

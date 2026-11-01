@@ -31,13 +31,16 @@ def path() -> Path:
                 or (Path.home() / ".genie" / "studio.json"))
 
 
-def write(*, url: str, token: str = "", session_id: str = "") -> None:
-    """写门牌（best-effort：写不进去不影响服务本身）。"""
+def write(*, url: str, token: str = "") -> None:
+    """写门牌（best-effort：写不进去不影响服务本身）。
+
+    只描述"服务在哪、口令是什么"——模型只有一份，没什么可指的
+    （2026-11-01 删掉 session_id / owner 两个字段）。
+    """
     p = path()
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         body = {"url": url.rstrip("/"), "token": token,
-                "session_id": session_id,
                 "pid": os.getpid(), "started_at": time.time()}
         tmp = p.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
@@ -51,13 +54,12 @@ def write(*, url: str, token: str = "", session_id: str = "") -> None:
 
 
 def update(**fields) -> None:
-    """就地更新若干字段（会话中途换 session_id 时用）。"""
+    """就地更新若干字段（保留 url/token）。"""
     cur = read() or {}
     if not cur:
         return
     cur.update({k: v for k, v in fields.items() if v is not None})
-    write(url=cur.get("url", ""), token=cur.get("token", ""),
-          session_id=cur.get("session_id", ""))
+    write(url=cur.get("url", ""), token=cur.get("token", ""))
 
 
 def read() -> dict | None:

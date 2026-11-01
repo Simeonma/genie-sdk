@@ -152,34 +152,23 @@ def series(source: Path, mon: str, field: str, maxpoints: int = 1200,
             "tag": view.get("tag", "")}   # R25 缺口 9：透传 GUI
 
 
-def results_dir(base: Path, session_id: str | None = None) -> Path:
-    """结果目录：``<base>/genie_results/<session_id>/``（一律带一层）。
-
-    分层的理由：结果 = 会话状态。两个 session 的结果混在一个目录里，
-    按 mtime 回退取"最新"会把别人的文件当成自己的（G58/G66 定案后
-    已删 latest_result——结果一律按显式 job_id 取，不猜）。
-
-    2026-11-01 删掉"default 平铺"例外（站长裁：不留旧布局兼容）。
-    """
-    # 字面 "default" 而非 import DEFAULT_SESSION：本模块被 worker 子进程
-    # 使用，不该为常量把 fastapi 拉进执行面。
-    return base / "genie_results" / (session_id or "default")
+def results_dir(base: Path) -> Path:
+    """结果目录：``<base>/genie_results``（一个进程一份模型，不再分层）。"""
+    return base / "genie_results"
 
 
-def result_path(base: Path, job_id: str,
-                session_id: str | None = None) -> Path:
+def result_path(base: Path, job_id: str) -> Path:
     """工作区根 → 该作业的 h5 路径（job_id 白名单：字母数字-_）。"""
     import re
     if not re.fullmatch(r"[\w\-]{1,128}", job_id or ""):
         raise ValueError("job_id 非法（字母/数字/_/-，≤128）")
-    return results_dir(base, session_id) / f"{job_id}_results.h5"
+    return results_dir(base) / f"{job_id}_results.h5"
 
 
-def locate(base: Path, job_id: str, session_id: str | None = None,
-           *, prefer=()) -> Path | None:
+def locate(base: Path, job_id: str, *, prefer=()) -> Path | None:
     """``job_id`` → 结果来源（G182 P3 定位器）。
 
-    顺序：**会话当前文档**（``prefer``：打开的文档或 ``<session>.gensim``，
+    顺序：**当前文档**（``prefer``：打开的文档或 ``genie.gensim``，
     且 ``state.json.job_id`` 必须相符）→ 旧 h5 只读回退。不扫 ``runs/``
     / ``sweeps/``——那些产物由各自入口显式给文档（SDK 直跑/扫参页）。
     都没有 → None（调用方 404，话说清"可能已被后续运行覆盖"）。
@@ -197,7 +186,7 @@ def locate(base: Path, job_id: str, session_id: str | None = None,
                 return p
         except Exception:   # noqa: BLE001 —— 坏文档不拦回退
             continue
-    hp = result_path(base, job_id, session_id)
+    hp = result_path(base, job_id)
     return hp if hp.is_file() else None
 
 

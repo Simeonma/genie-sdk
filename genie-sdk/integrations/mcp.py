@@ -46,7 +46,7 @@ from ..models import MAX_GPU_PER_RUN
 __all__ = ["TOOLS", "TOOL_NAMES", "execute_tool", "build_server", "main",
            "set_session_factory", "SessionUnavailable"]
 
-# 组合根注入：返回一个"已绑定 session_id 的会话客户端"，没有会话时返回 None。
+# 组合根注入：返回一个"接上正在跑的 Studio"的会话客户端，没有会话时返回 None。
 # （为什么不在这里 import studio：integrations 层不得依赖组合层。）
 _session_factory: Callable[[], Any] | None = None
 
@@ -129,7 +129,7 @@ TOOLS: list[dict[str, Any]] = [
             "改任何东西之前先读——用户可能刚动过。"
             "给 section 只取一节（materials / geometry / source / monitor / "
             "domain / mesh / run），大模型别整份拉。"
-            "返回 {ok, has_model, model, busy, phase, job_id, session_id}。"
+            "返回 {ok, has_model, model, busy, phase, job_id}。"
             "字段语义见随包手册（manual/commands/ 参考页）。"),
         "parameters": {
             "type": "object",
@@ -313,7 +313,7 @@ def _do_get_model(cli, args: dict) -> dict:
         cfg = {section: (cfg or {}).get(section)} if cfg else None
     return {"ok": True, "has_model": bool(cfg), "model": cfg,
             "busy": bool(out.get("busy")), "phase": out.get("phase"),
-            "job_id": out.get("job_id"), "session_id": out.get("session_id")}
+            "job_id": out.get("job_id")}
 
 
 def _do_edit_model(cli, args: dict) -> dict:

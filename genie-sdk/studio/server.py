@@ -96,7 +96,6 @@ def create_app(*, static_dir: str | Path | None = None,
                session: SessionClient | None = None,
                mount_session: bool = False,
                share_session: bool = False,
-               on_attach=None,
                require_auth: bool = False) -> FastAPI:
     """Studio app 工厂。
 
@@ -208,7 +207,7 @@ def create_app(*, static_dir: str | Path | None = None,
     if mount_session:
         register_session_routes(app,
                                 exec_credentials_of=key_of,
-                                client=sess, on_attach=on_attach)
+                                client=sess)
         register_result_routes(app, client=sess)
 
         async def _gw_fwd(req: Request, up: str, *, timeout: float) -> Response:
@@ -470,12 +469,8 @@ def create_app(*, static_dir: str | Path | None = None,
             raise HTTPException(status_code=422, detail=str(e))
         outcome = "remote"
         if sess is not None and hasattr(sess, "respawn_for_paths"):
-            from .session.session_client import DEFAULT_SESSION, check_session_id
             try:
-                r = await run_in_threadpool(
-                    sess.respawn_for_paths,
-                    session_id=check_session_id(
-                        req.headers.get("X-Session-Id") or DEFAULT_SESSION))
+                r = await run_in_threadpool(sess.respawn_for_paths)
                 outcome = "busy" if r.get("busy") else "restarted"
             except Exception:   # noqa: BLE001 —— 会话侧故障不拦设置生效
                 outcome = "remote"
@@ -507,17 +502,12 @@ def create_app(*, static_dir: str | Path | None = None,
         p = Path(path).expanduser()
         if not p.is_file():
             raise HTTPException(status_code=422, detail=f"文件不存在：{p}")
-        from .session.session_client import DEFAULT_SESSION, check_session_id
-        sid = check_session_id(req.headers.get("X-Session-Id")
-                               or DEFAULT_SESSION)
         from .session.kernel_session import set_doc_path
-        await run_in_threadpool(set_doc_path, sid, str(p))
+        await run_in_threadpool(set_doc_path, str(p))
         sess_state = "remote"
         if sess is not None and hasattr(sess, "respawn_for_paths"):
             try:
-                r = await run_in_threadpool(
-                    sess.respawn_for_paths,
-                    session_id=sid)
+                r = await run_in_threadpool(sess.respawn_for_paths)
                 sess_state = "busy" if r.get("busy") else "restarted"
             except Exception:   # noqa: BLE001 —— 会话侧故障不拦打开
                 sess_state = "remote"
@@ -621,15 +611,13 @@ def create_app(*, static_dir: str | Path | None = None,
             from genie.studio.views import results_view
             from genie.core.archive import simfile as _simfile
             from .session.kernel_session import doc_path
-            from .session.session_client import DEFAULT_SESSION
-            sid = req.headers.get("X-Session-Id") or DEFAULT_SESSION
             try:
-                prefer = [doc_path(sid)]
+                prefer = [doc_path()]
             except Exception:   # noqa: BLE001
                 prefer = []
             try:
                 src = results_view.locate(workspace_root(), job_id,
-                                          sid, prefer=prefer)
+                                          prefer=prefer)
             except ValueError:
                 src = None
             if src is not None and src.is_file():
@@ -728,8 +716,6 @@ def create_app(*, static_dir: str | Path | None = None,
                         status_code=422,
                         detail="容器含 results/ 但缺 state.json（job_id）")
                 from genie.studio.views import results_view
-                from .session.session_client import DEFAULT_SESSION
-                sid = req.headers.get("X-Session-Id") or DEFAULT_SESSION
                 for n in names:
                     if n == "simconfig.json" or n == "state.json" or not n:
                         continue
@@ -746,7 +732,7 @@ def create_app(*, static_dir: str | Path | None = None,
                         try:
                             rp = results_view.result_path(
                                 workspace_root(),
-                                result_job, sid)
+                                result_job)
                         except ValueError as e:
                             raise HTTPException(status_code=422, detail=str(e))
                         rp.parent.mkdir(parents=True, exist_ok=True)

@@ -1,6 +1,6 @@
 """会话唯一家（2026-10-11 站长裁决，第一性收敛；2026-10-22 M2/O1+O2 收敛）。
 
-一个服务、按 session_id 一份 kernel 管理器、一个 worker、一个输出环。
+一个服务、一份 kernel 管理器、一个 worker、一个输出环。
 
     host ─┐
           ├─(HTTP, 仅本机)→ session_service ──→ kernel_worker 子进程
@@ -12,12 +12,10 @@ OS 分配、地址与口令经内存 + rendezvous 文件显式传递），**不�
 其妙存在/消失"的根源。跨进程形态（``genie console``、外部工具）仍走本
 服务的端口。
 
-**M2/O2**（三生命周期正交）：
+**两条生命周期正交（2026-11-01：owner 与 session_id 两层都删了）**：
   - ``workspace``  = 工作区根（一个进程一片目录，登录账号不参与）；
-  - ``key``      = 能不能提交（``/attach`` 幂等换绑，**换 key 不换模型**）；
-  - ``session_id`` = 哪一份模型（目录 session/<session_id>/）。
-  三者互不决定：token 轮换/改密/过期重登只碰 key；新模型 = 新 session_id。
-  （2026-11-01 删掉 owner 层：文件放哪儿与谁登录无关。）
+  - ``key``      = 能不能提交（``/attach`` 幂等换绑，**换 key 不换模型**）。
+  一个进程只有一份模型：新模型 = ``/model/new``（丢弃旧的），不是新命名空间。
 
 **唯一网关出口**：``/gw/{path}`` 代所有客户端（studio/host/console）拨后端，
 带路径白名单。上游不可达的措辞只有这一处实现。
@@ -34,12 +32,10 @@ import threading
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
-# session_id 白名单 = 全仓唯一一份（genie.studio.session.session_client）
-from .session_client import DEFAULT_SESSION, check_session_id
 from ...core.paths import workspace_root
 from ...net.config import resolve_gateway
 
-_kernels: dict[str, object] = {}   # session_id → SessionKernel
+_kernel: object | None = None      # 一个进程一份模型（2026-11-01 删 session 维度）
 _lock = threading.Lock()
 _TOKEN = ""            # 会话端口口令（serve()/set_token() 注入；空 = 不校验）
 
@@ -50,19 +46,29 @@ def set_token(token: str) -> None:
     _TOKEN = token or ""
 
 
-def get_kernel(session_id: str = DEFAULT_SESSION):
-    """按 session_id 取/建 kernel（缺省建：一会话一 worker）。
+def get_kernel():
+    """取/建当前模型（懒建：第一次请求时 spawn worker）。
 
-    会话没有"属于谁"这一维——工作目录由工作区根决定，登录只管能不能提交
-    （2026-11-01 删掉 owner 层）。测试可 monkeypatch 本函数注入假 kernel。
+    没有"属于谁"、也没有"哪一份"——一个进程只有一份模型；要新的就
+    ``new_model()``。测试可 monkeypatch 本函数注入假 kernel。
     """
-    sid = check_session_id(session_id or DEFAULT_SESSION)
+    global _kernel
     with _lock:
-        k = _kernels.get(sid)
-        if k is None:
+        if _kernel is None:
             from genie.studio.session.kernel_session import SessionKernel
-            k = _kernels[sid] = SessionKernel(session_id=sid)
-        return k
+            _kernel = SessionKernel()
+        return _kernel
+
+
+def new_model() -> dict:
+    """丢弃当前模型 → 下一个请求从空模型开始（"换模型"的唯一动作）。"""
+    global _kernel
+    with _lock:
+        k = _kernel
+        _kernel = None
+    if k is None:
+        return {"ok": True, "dropped_inflight": False}
+    return k.discard()
 
 
 app = FastAPI(title="genie-session", docs_url=None, redoc_url=None)
@@ -92,7 +98,6 @@ class ExecIn(BaseModel):
     mode: str = "run"        # M3：run=在当前命名空间执行 / build=构造新模型
     key: str = ""
     label: str = ""    # 执行来源标注（GUI 透传，如「选中 L2-2」）→ 环 input.mark
-    session_id: str = DEFAULT_SESSION   # O2：哪一份模型
 
 
 class RunIn(BaseModel):
@@ -100,7 +105,6 @@ class RunIn(BaseModel):
     gpu: int | None = None
     timeout_s: int | None = None
     key: str = ""
-    session_id: str = DEFAULT_SESSION
 
 
 class SweepIn(BaseModel):
@@ -110,7 +114,6 @@ class SweepIn(BaseModel):
     on_failure: str = "continue"
     name: str = ""
     key: str = ""
-    session_id: str = DEFAULT_SESSION
 
 
 class SweepPlotIn(BaseModel):
@@ -118,27 +121,23 @@ class SweepPlotIn(BaseModel):
     mon: str = ""
     field: str = ""
     key: str = ""
-    session_id: str = DEFAULT_SESSION
 
 
 class PatchIn(BaseModel):
     """模型路径级增量（M3b）。``ops`` = [{path, value}]，路径点分、下标即段。"""
     ops: list = []
     key: str = ""
-    session_id: str = DEFAULT_SESSION
 
 
 class ReplaceIn(BaseModel):
     """整份模型替换（导入/搬运）。"""
     model: dict = {}
     key: str = ""
-    session_id: str = DEFAULT_SESSION
 
 
 class AttachIn(BaseModel):
     key: str = ""
     url: str = ""      # 旧 wire 兼容：后端归会话 env，此字段忽略
-    session_id: str = DEFAULT_SESSION
 
 
 # ── 写路径接待正典（G115 收拢 2026-10-29）─────────────────────────
@@ -148,54 +147,54 @@ class AttachIn(BaseModel):
 # 再抄第二份（含 session_client 的 /api/exec 转发层；锁 =
 # tests/sdk/test_session_reception.py）。归一口径：mode 只认 "build"，
 # 其余一律 "run"。
-def exec_action(*, session_id: str, code: str,
+def exec_action(*, code: str,
                 mode: str = "run", label: str = "", key: str = "") -> str:
     mode = "build" if mode == "build" else "run"
-    k = get_kernel(session_id)
+    k = get_kernel()
     if key:
         k.attach(key)          # 幂等：换 key 不换模型
     return k.submit(code, mode=mode, label=label)
 
 
-def run_action(*, session_id: str, gpu=None,
+def run_action(*, gpu=None,
                timeout_s=None, key: str = "") -> str:
-    k = get_kernel(session_id)
+    k = get_kernel()
     if key:
         k.attach(key)
     return k.run(gpu=gpu, timeout_s=timeout_s)
 
 
-def sweep_action(*, session_id: str, axes: list,
+def sweep_action(*, axes: list,
                  max_parallel: int = 1, on_failure: str = "continue",
                  name: str = "", key: str = "") -> str:
     """扫参页 Run（G182 P6）：worker 展开 + 逐点 run + 等终态。"""
-    k = get_kernel(session_id)
+    k = get_kernel()
     if key:
         k.attach(key)
     return k.sweep(axes, max_parallel=max_parallel,
                    on_failure=on_failure, name=name)
 
 
-def sweep_plot_action(*, session_id: str, mon: str,
+def sweep_plot_action(*, mon: str,
                       field: str = "", key: str = "") -> str:
     """扫参页 Plot：最近一次扫描的结果 → Plot 面板（同一事件路）。"""
-    k = get_kernel(session_id)
+    k = get_kernel()
     if key:
         k.attach(key)
     return k.sweep_plot(mon, field)
 
 
-def patch_action(*, session_id: str, ops: list,
+def patch_action(*, ops: list,
                  key: str = "") -> str:
-    k = get_kernel(session_id)
+    k = get_kernel()
     if key:
         k.attach(key)
     return k.patch(ops)
 
 
-def replace_action(*, session_id: str, model: dict,
+def replace_action(*, model: dict,
                    key: str = "") -> str:
-    k = get_kernel(session_id)
+    k = get_kernel()
     if key:
         k.attach(key)
     return k.replace(model)
@@ -205,8 +204,7 @@ def replace_action(*, session_id: str, model: dict,
 def exec_(body: ExecIn) -> dict:
     if not body.code.strip():
         raise HTTPException(status_code=422, detail="code 必填")
-    return {"id": exec_action(session_id=body.session_id,
-                              code=body.code, mode=body.mode,
+    return {"id": exec_action(code=body.code, mode=body.mode,
                               label=body.label, key=body.key)}
 
 
@@ -216,8 +214,8 @@ def sweep_(body: SweepIn) -> dict:
     if not body.axes:
         raise HTTPException(status_code=422, detail="axes 须非空列表（每条轴 "
                                                     "{name, values|linspace|logspace}）")
-    return {"id": sweep_action(session_id=body.session_id,
-                               axes=body.axes, max_parallel=body.max_parallel,
+    return {"id": sweep_action(axes=body.axes,
+                               max_parallel=body.max_parallel,
                                on_failure=body.on_failure, name=body.name,
                                key=body.key)}
 
@@ -227,16 +225,14 @@ def sweep_plot_(body: SweepPlotIn) -> dict:
     """把最近一次扫描的结果推到 Plot 面板（与单跑 visualize 同一路）。"""
     if not body.mon.strip():
         raise HTTPException(status_code=422, detail="mon 必填")
-    return {"id": sweep_plot_action(session_id=body.session_id,
-                                    mon=body.mon, field=body.field,
+    return {"id": sweep_plot_action(mon=body.mon, field=body.field,
                                     key=body.key)}
 
 
 @app.post("/run")
 def run_(body: RunIn) -> dict:
     """提交当前模型（**不改模型**）。GUI 的 Run 按钮走这里。"""
-    return {"id": run_action(session_id=body.session_id,
-                             gpu=body.gpu, timeout_s=body.timeout_s,
+    return {"id": run_action(gpu=body.gpu, timeout_s=body.timeout_s,
                              key=body.key)}
 
 
@@ -245,8 +241,7 @@ def model_patch(body: PatchIn) -> dict:
     """模型路径级增量——表单/树/工具条的一次改动（M3b）。"""
     if not body.ops:
         raise HTTPException(status_code=422, detail="ops 不能为空")
-    return {"id": patch_action(session_id=body.session_id,
-                               ops=body.ops, key=body.key)}
+    return {"id": patch_action(ops=body.ops, key=body.key)}
 
 
 @app.post("/model/replace")
@@ -254,39 +249,48 @@ def model_replace(body: ReplaceIn) -> dict:
     """整份模型替换（导入 .gensim / 搬运）。"""
     if not isinstance(body.model, dict) or not body.model:
         raise HTTPException(status_code=422, detail="model 须为非空 dict")
-    return {"id": replace_action(session_id=body.session_id,
-                                 model=body.model, key=body.key)}
+    return {"id": replace_action(model=body.model, key=body.key)}
+
+
+@app.post("/model/new")
+def model_new() -> dict:
+    """丢弃当前模型（2026-11-01：取代"换 session_id"）。
+
+    杀 worker、清快照/输出环/文档指针；下一个请求从空模型开始。GUI 在
+    退出登录 / 换账号时调它——"换模型"是一个动作，不是一个新的命名空间。
+    """
+    return new_model()
 
 
 @app.get("/output")
-def output(since: int = 0, session_id: str = DEFAULT_SESSION) -> dict:
+def output(since: int = 0) -> dict:
     """读取增量 + 快照。**读即唤起**（见 SessionKernel.ensure docstring）：
     Studio 重启后已开页面只靠这条轮询就能恢复，不必手动刷新。"""
-    k = get_kernel(session_id)
+    k = get_kernel()
     k.ensure()
     return k.output(since)
 
 
 @app.post("/stop")
-def stop(session_id: str = DEFAULT_SESSION) -> dict:
+def stop() -> dict:
     """停止当前执行（A2「长任务必须能掐」）：SIGINT 掐 exec（空闲
     忽略）——worker 的 ⏹/清理输出走既有环，done 收尾照发。"""
-    return {"stopped": get_kernel(session_id).stop()}
+    return {"stopped": get_kernel().stop()}
 
 
 @app.post("/reset")
-def session_reset(session_id: str = DEFAULT_SESSION) -> dict:
+def session_reset() -> dict:
     """清理并重启会话进程（R31 站长裁：stop 治不了时的进程级兜底——
     死循环卡 exec、脚本污染宿主，CTRL_BREAK 投递不进就杀进程重起）。
     **只清执行态**：在途 op 作废、新进程宿主干净；模型状态与终端
     输出历史保留（worker 重放 session_state.json / 环落盘）。"""
-    return get_kernel(session_id).reset()
+    return get_kernel().reset()
 
 
 # ── 凭据换绑（O2 核心）：换 key 不换模型 ─────────────────────────
 @app.post("/attach")
 def attach(body: AttachIn) -> dict:
-    k = get_kernel(body.session_id)
+    k = get_kernel()
     return k.attach(body.key)
 
 
@@ -295,23 +299,22 @@ def attach(body: AttachIn) -> dict:
 # 定位：会话当前文档（打开的 .gensim / <session>.gensim，state.job_id 相符）
 # → 旧 h5 只读回退（历史作业 / result/inject）。不扫 runs/sweeps。
 
-def _result_prefer(session_id: str) -> list:
-    """会话当前文档候选（G182 P3）：文档是结果的主来源。"""
+def _result_prefer() -> list:
+    """当前文档候选（G182 P3）：文档是结果的主来源。"""
     from .kernel_session import doc_path
     try:
-        return [doc_path(session_id)]
+        return [doc_path()]
     except Exception:   # noqa: BLE001 —— 文档指针坏不拦旧 h5 回退
         return []
 
 
 @app.get("/result/meta")
-def result_meta(job_id: str = "",
-                session_id: str = DEFAULT_SESSION) -> dict:
+def result_meta(job_id: str = "") -> dict:
     """结果结构清单。**job_id 必填**（G58/G66 定案 2026-10-29：不猜）。
 
     修前缺省 = ``latest_result()`` 按文件 mtime 猜"最近一次"——那是替用户
-    判断"你想看哪个"，与"不做保姆"哲学冲突，且多 session/多作业下会张冠
-    李戴。现在缺 job_id 直接 422 指路。"""
+    判断"你想看哪个"，与"不做保姆"哲学冲突，且多作业下会张冠李戴。
+    现在缺 job_id 直接 422 指路。"""
     from pathlib import Path
     from genie.studio.views import results_view
     if not job_id:
@@ -321,14 +324,13 @@ def result_meta(job_id: str = "",
                    "（或 job-done 事件）里拿，服务端不替你猜'最近一次'")
     d = Path(workspace_root())
     try:
-        p = results_view.locate(d, job_id, session_id,
-                                prefer=_result_prefer(session_id))
+        p = results_view.locate(d, job_id, prefer=_result_prefer())
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     if p is None or not p.is_file():
         raise HTTPException(
             status_code=404,
-            detail="作业结果不在本会话当前文档里（可能已被后续运行覆盖）"
+            detail="作业结果不在当前文档里（可能已被后续运行覆盖）"
                    "——旧结果文件也没有；重跑一次即可得到新结果")
     return results_view.meta(p)
 
@@ -336,7 +338,6 @@ def result_meta(job_id: str = "",
 @app.get("/result/series")
 def result_series(job_id: str, mon: str, field: str,
                   maxpoints: int = 1200,
-                  session_id: str = DEFAULT_SESSION,
                   axes: str = "", slices: str = "") -> dict:
     """1D 曲线（缺省峰值列折叠）或选轴 1D/2D 视图（G148 批 2：
     axes="x,y" / slices="z:1,time:0"）。"""
@@ -344,8 +345,7 @@ def result_series(job_id: str, mon: str, field: str,
     from genie.studio.views import results_view
     try:
         p = results_view.locate(Path(workspace_root()), job_id,
-                                session_id,
-                                prefer=_result_prefer(session_id))
+                                prefer=_result_prefer())
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     if p is None or not p.is_file():
@@ -363,7 +363,6 @@ def result_series(job_id: str, mon: str, field: str,
 
 @app.post("/result/inject")
 async def result_inject(request: Request,
-                        session_id: str = DEFAULT_SESSION,
                         job_id: str = "", mon: str = "",
                         field: str = "") -> dict:
     """外部结果注入（G148 批 4b 腿 B）：body = results h5 字节 →
@@ -375,8 +374,7 @@ async def result_inject(request: Request,
     if not job_id or not mon:
         raise HTTPException(status_code=422, detail="job_id/mon 必填")
     try:
-        p = results_view.result_path(Path(workspace_root()),
-                                     job_id, session_id)
+        p = results_view.result_path(Path(workspace_root()), job_id)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
     body = await request.body()
@@ -386,7 +384,7 @@ async def result_inject(request: Request,
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(body)
     os.chmod(p, 0o600)
-    get_kernel(session_id).emit_external(
+    get_kernel().emit_external(
         "plot", {"job_id": job_id, "mon": mon, "field": field or None})
     return {"ok": True, "job_id": job_id}
 
@@ -568,7 +566,7 @@ def health() -> dict:
     import genie
     return {"ok": True, "service": "genie-session", "upstream": resolve_gateway(),
             "sdk_version": genie.__version__,
-            "sessions": len(_kernels)}
+            "has_model": _kernel is not None}
 
 
 # ── 启动 ────────────────────────────────────────────────────────
