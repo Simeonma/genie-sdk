@@ -11,9 +11,9 @@
    Studio 的 Workspace… 按钮写它）；
 3. 缺省 ``~/data/genie/scripts``。
 
-**SDK 直跑也认这个根**：``f.run()`` 的结果落在
-``<root>/genie_results/``（给了 owner 则是 ``<root>/<owner>/genie_results/``，
-Studio 会话用后者）；显式 ``GENIE_RESULT_DIR`` 仍然最高优先。
+**SDK 直跑也认这个根**：``f.run()`` 的结果落在 ``<root>/genie_results/``，
+会话内落同一个地方（``GENIE_RESULT_DIR`` 注入）。**一个进程一片目录**——
+登录账号不决定文件放哪儿（2026-11-01 删掉 owner 层）。
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ import os
 from pathlib import Path
 
 __all__ = ["settings_path", "default_root", "env_root", "workspace_root",
-           "source", "result_dir", "runs_dir"]
+           "source", "result_dir", "runs_dir", "sweeps_dir"]
 
 
 def settings_path() -> Path:
@@ -73,33 +73,30 @@ def source() -> str:
     return "setting" if _setting_root() else "default"
 
 
-def result_dir(owner: str | None = None) -> Path:
-    """结果目录：``<root>/[<owner>/]genie_results``。
+def result_dir() -> Path:
+    """结果目录：``<root>/genie_results``。
 
     **G182 起仅作历史 h5 的只读位置**（新产物是文档）；保留此函数供
     旧路径回退与测试。
     """
-    root = workspace_root()
-    return (root / owner / "genie_results") if owner else (root / "genie_results")
+    return workspace_root() / "genie_results"
 
 
-def runs_dir(owner: str | None = None) -> Path:
+def runs_dir() -> Path:
     """单跑文档目录（G182 P2）：
 
     - 显式 ``GENIE_RESULT_DIR`` **优先**（部署/CI 的目录覆盖；修前它决定
       h5 落点，现在决定文档落点，语义延续）；
-    - 否则 ``<workspace>/[<owner>/]runs``（一次执行一份文档）。
+    - 否则 ``<workspace>/runs``（一次执行一份文档）。
     """
     env = os.environ.get("GENIE_RESULT_DIR")
     if env:
-        d = Path(env)
-        return (d / owner / "runs") if owner else d
-    root = workspace_root()
-    return (root / owner / "runs") if owner else (root / "runs")
+        return Path(env)
+    return workspace_root() / "runs"
 
 
-def sweeps_dir(owner: str | None = None) -> Path:
-    """参数扫描目录（G182 P4）：``<workspace>/[<owner>/]sweeps``。
+def sweeps_dir() -> Path:
+    """参数扫描目录（G182 P4）：``<workspace>/sweeps``。
 
     每个扫描一个子文件夹（``<name>-<时间戳>/``），里面 ``sweep.json``
     索引 + 每点一份 ``<name>-0001.gensim``。解析：
@@ -111,6 +108,5 @@ def sweeps_dir(owner: str | None = None) -> Path:
         return Path(env)
     res = os.environ.get("GENIE_RESULT_DIR")
     if res:
-        return Path(res) / ("sweeps" if not owner else f"{owner}/sweeps")
-    root = workspace_root()
-    return (root / owner / "sweeps") if owner else (root / "sweeps")
+        return Path(res) / "sweeps"
+    return workspace_root() / "sweeps"

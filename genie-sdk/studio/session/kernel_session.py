@@ -3,25 +3,23 @@
 持有常驻 worker 进程（kernel_worker.py）：spawn/重生、凭据换绑、exec
 提交、输出环缓冲（GUI 按 since 增量拉）、最新 cfg 快照。
 
-**三生命周期正交（M2/O2，2026-10-22）**——这是本模块最重要的一条纪律：
+**三生命周期正交（M2/O2，2026-10-22；2026-11-01 去掉 owner 层）**：
 
-- ``owner``      → 工作目录与结果隔离（``workspace 根/<owner>/``，0700）；
-                   2026-11-01 起是**会话进程属性**（入口注入一次），不是请求字段；
-- ``key``        → 能不能提交（``attach()`` 幂等换绑，**换 key 不换模型**）；
-- ``session_id`` → 哪一份模型（``session/<owner>/<session_id>/``）。
+- ``workspace``   → 工作区根（``core.paths.workspace_root()``）：一个进程一片
+                    目录，**不按登录账号分层**（登录只管能不能提交）；
+- ``key``         → 能不能提交（``attach()`` 幂等换绑，**换 key 不换模型**）；
+- ``session_id``  → 哪一份模型（``session/<session_id>/``）。
 
 于是：刷新页面（同 session_id、同 key）保留模型；**改密码 / token 过期重登
 （同 session_id、换 key）也保留模型**（只是重新授权）；重新登录生成新
 session_id 才是新模型。旧实现在 ``bind()`` 里比对凭据并删快照
 （``_drop_stale_state``）——那让 token 的寿命决定了模型的寿命，已删。
 
-B1（2026-11-01 收窄）：owner 是进程属性，所以"按人隔离"= 一进程一 owner，
-不再是"一条请求一个 owner"。注册表在上层 session_service，一 session_id
-一实例一环——owner 只出现在目录路径里。线程模型：读 worker stdout 的 pump
-线程 + 提交走锁——FastAPI 侧永不阻塞。
+注册表在上层 session_service，一 session_id 一实例一环。线程模型：读 worker
+stdout 的 pump 线程 + 提交走锁——FastAPI 侧永不阻塞。
 
 B2 会话落盘：输出环全量追加流（log.jsonl，本类写/读）与会话 f 快照
-（session_state.json，worker 写）按 (owner, session_id) 落系统空间——
+（session_state.json，worker 写）按 session_id 落系统空间——
 worker 重生 / 服务重启不再「世界消失」。**落盘不含任何凭据**（见下）。
 """
 from __future__ import annotations
@@ -41,64 +39,59 @@ from ...core.paths import workspace_root
 _WORKER = Path(__file__).with_name("kernel_worker.py").resolve()
 MAX_LINES = 4000          # 输出环上限（超出丢最旧——terminal 滚动语义）
 _RING_CAP_BYTES = 1 << 20  # 环文件（=运行日志）限量：1MB，重启时截尾
-_KEEP_SESSIONS = 8         # 每 owner 保留的会话目录数（GC 上限）
+_KEEP_SESSIONS = 8         # 保留的会话目录数（GC 上限）
 _GC_MIN_AGE_S = 7 * 86400  # 且只清 7 天以前创建的（新会话不动）
 
 
 def _session_root() -> Path:
     """系统空间根（2026-10-13 站长裁决搬家）：会话恢复快照与运行日志
-    住这里，**不进用户工作区**（scripts/<owner>/ 只剩用户自己的文件——
+    住这里，**不进用户工作区**（工作区只剩用户自己的文件——
     文件面板所见即所得，无需过滤规则）。解析：GENIE_SESSION_STATE_DIR
     → 缺省 ~/data/genie/session。"""
     return Path(os.environ.get("GENIE_SESSION_STATE_DIR")
                 or Path.home() / "data/genie/session")
 
 
-def _session_dir(owner: str, session_id: str) -> Path:
-    """会话目录：``session/<owner>/<session_id>/``。
+def _session_dir(session_id: str) -> Path:
+    """会话目录：``session/<session_id>/``。
 
-    **兼容例外**（O2）：``session_id == "default"`` 用平铺的
-    ``session/<owner>/``——这是 O2 之前唯一的布局，也是云宿主/旧客户端的
-    缺省会话。于是"升级不动存量"：存量模型原地被 default 会话继续用，
-    GUI 的具名会话则各占一层目录。
+    **兼容例外**（O2）：``session_id == "default"`` 用平铺的 ``session/``
+    ——这是 O2 之前唯一的布局，也是旧客户端的缺省会话。于是"升级不动存量"：
+    存量模型原地被 default 会话继续用，GUI 的具名会话则各占一层目录。
     """
-    root = _session_root() / owner
+    root = _session_root()
     return root if session_id in ("", DEFAULT_SESSION) else root / session_id
 
 
-def owner_dir(owner: str) -> Path:
-    """per-owner 工作目录（worker cwd = 脚本 savefig/open 相对路径产物
-    的落点）：根/<owner>/，0700——按登录身份隔离工作区。
+def scripts_dir() -> Path:
+    """工作区根（worker cwd = 脚本 savefig/open 相对路径产物的落点），0700。
 
-    **唯一一份**（2026-11-01 收口）：`server._owner_scripts_dir` 此前是
-    同路径、同 mkdir、同 0700 的第二份实现——两处改一处必漂。现在 server
-    侧只做 owner 校验，目录本身一律经本函数。
-
-    **跨会话共享**（用户自己的文件在换模型后还在）：只有结果按会话分层。
+    **唯一建目录处**（2026-11-01：owner 层删除时合并了 ``owner_dir``）。
+    一个进程一片目录——登录账号不决定文件放哪儿（它只决定能提交什么）。
     """
-    d = workspace_root() / owner
+    d = workspace_root()
     d.mkdir(parents=True, exist_ok=True)
     os.chmod(d, 0o700)      # mkdir 的 mode 受 umask 影响，落位后显式收紧
     return d
 
 
-def results_dir(owner: str, session_id: str) -> Path:
+def results_dir(session_id: str) -> Path:
     """本会话的结果目录（= worker 的 GENIE_RESULT_DIR，也是 GUI 读取点）。
 
     同样有 default 例外（平铺），理由同 ``_session_dir``。
     """
-    d = owner_dir(owner) / "genie_results"
+    d = scripts_dir() / "genie_results"
     return d if session_id in ("", DEFAULT_SESSION) else d / session_id
 
 
-def doc_path(owner: str, session_id: str) -> Path:
+def doc_path(session_id: str) -> Path:
     """本会话自动存档的文档路径（G4a 2026-10-30）。
 
     优先读会话目录的 ``doc.json``（GUI **Open 打开的 .gensim**——跑完把
-    结果写回这个文件）；没有则 = owner 工作区的 ``<session>.gensim``
+    结果写回这个文件）；没有则 = 工作区的 ``<session>.gensim``
     （本站默认文档，用户从未打开过文件时的落点）。
     """
-    p = _session_dir(owner, session_id) / "doc.json"
+    p = _session_dir(session_id) / "doc.json"
     try:
         v = str(json.loads(p.read_text(encoding="utf-8")).get("path")
                 or "").strip()
@@ -106,17 +99,17 @@ def doc_path(owner: str, session_id: str) -> Path:
         v = ""
     if v:
         return Path(v)
-    return owner_dir(owner) / f"{session_id or DEFAULT_SESSION}.gensim"
+    return scripts_dir() / f"{session_id or DEFAULT_SESSION}.gensim"
 
 
-def set_doc_path(owner: str, session_id: str, path: str | None) -> Path | None:
+def set_doc_path(session_id: str, path: str | None) -> Path | None:
     """钉本会话的文档（``None``/空串 = 清回默认）。
 
     只写会话状态目录（系统空间，不进工作区）；worker 重挂时由
     ``_respawn`` 读进 ``GENIE_DOC_PATH``——Open 打开文件后**跑完自动写回
     那个文件**靠的就是这条。
     """
-    d = _session_dir(owner, session_id)
+    d = _session_dir(session_id)
     p = d / "doc.json"
     if not path:
         try:
@@ -134,7 +127,7 @@ def set_doc_path(owner: str, session_id: str, path: str | None) -> Path | None:
 
 
 class SessionKernel:
-    """一 (owner, session_id) 一份会话管理器（spawn/重生 worker、输出环、凭据）。
+    """一 session 一份会话管理器（spawn/重生 worker、输出环、凭据）。
 
     B2 落盘边界（铁律 1）：**落盘是恢复快照，不是第二份可编辑设计状态**
     ——唯一可编辑真源永远是会话进程内的 f；log.jsonl / session_state.json
@@ -142,9 +135,7 @@ class SessionKernel:
     静默双中心同步，任何复刻一律拒绝）。
     """
 
-    def __init__(self, owner: str,
-                 session_id: str = "default") -> None:
-        self._owner = owner    # 归属身份（会话进程属性；白名单由入口把关）
+    def __init__(self, session_id: str = "default") -> None:
         self._session_id = session_id
         self._rt = None
         self._lock = threading.Lock()          # 保护 lines/cfg/busy/seq
@@ -169,8 +160,8 @@ class SessionKernel:
         # B2 会话落盘（目录 0700，文件 0600 各写点收紧）：
         #   log.jsonl          —— 输出环 JSONL 追加流（本类写，构造时读回）
         #   session_state.json —— 会话 f 快照（worker 原子写，不含凭据）
-        _d = owner_dir(owner)
-        _s = _session_dir(owner, session_id)
+        _d = scripts_dir()
+        _s = _session_dir(session_id)
         _s.mkdir(parents=True, exist_ok=True)
         os.chmod(_s, 0o700)
         self._ring_path = _s / "log.jsonl"
@@ -181,10 +172,6 @@ class SessionKernel:
         self._restore_ring()                   # seq 续接：起点 = 文件最大 seq
 
     # ---- 身份 ----
-
-    @property
-    def owner(self) -> str:
-        return self._owner
 
     @property
     def session_id(self) -> str:
@@ -417,7 +404,7 @@ class SessionKernel:
     # ---- 目录生命周期（O2：一 session 一目录）----
 
     def _migrate_legacy(self) -> None:
-        """把平铺旧布局（``session/<owner>/session_state.json``）搬进**第一个**
+        """把平铺旧布局（``session/session_state.json``）搬进**第一个**
         具名会话目录。
 
         只对具名会话（非 default）生效：default 会话本身就住在平铺路径上，
@@ -427,7 +414,7 @@ class SessionKernel:
         """
         if self._session_id in ("", DEFAULT_SESSION):
             return
-        legacy = _session_root() / self._owner
+        legacy = _session_root()
         if not legacy.is_dir() or self._state_path.exists():
             return
         for name in ("session_state.json", "log.jsonl"):
@@ -435,16 +422,16 @@ class SessionKernel:
             if not src.is_file():
                 continue
             try:
-                src.replace(_session_dir(self._owner, self._session_id) / name)
+                src.replace(_session_dir(self._session_id) / name)
             except OSError:
                 pass
 
     def _gc_sessions(self) -> None:
-        """每 owner 保留最近的 _KEEP_SESSIONS 个会话目录，且只清 7 天前的。
+        """保留最近的 _KEEP_SESSIONS 个会话目录，且只清 7 天前的。
 
         best-effort：清不掉（占用/权限）就不清，绝不拦住会话启动。
         """
-        root = _session_root() / self._owner
+        root = _session_root()
         try:
             dirs = sorted((p for p in root.iterdir() if p.is_dir()),
                           key=lambda p: p.stat().st_mtime, reverse=True)
@@ -543,19 +530,19 @@ class SessionKernel:
                # cwd 是用户工作区，不再从 cwd 猜系统路径）
                "GENIE_STATE_FILE": str(self._state_path),
                # O2：结果按会话分层（两个模型的结果不互相污染 latest）
-               "GENIE_RESULT_DIR": str(results_dir(self._owner, self._session_id)),
+               "GENIE_RESULT_DIR": str(results_dir(self._session_id)),
                # G4a（2026-10-30）：跑完自动存档的文档路径（绝对）。
                # 优先 = 用户 Open 打开的 .gensim（session doc.json），
                # 否则本会话默认 <session>.gensim；换工作区/换文档都靠重挂
                # 让这个 env 生效。
-               "GENIE_DOC_PATH": str(doc_path(self._owner, self._session_id)),
+               "GENIE_DOC_PATH": str(doc_path(self._session_id)),
                # G182 P4：扫描文件夹根（会话显式注入，避免把结果目录当基）
-               "GENIE_SWEEPS_DIR": str(owner_dir(self._owner) / "sweeps"),
+               "GENIE_SWEEPS_DIR": str(scripts_dir() / "sweeps"),
                # 后端是部署属性：worker 从环境读，不从请求读
                "GENIE_BACKEND": resolve_gateway()}
-        # cwd = 本 owner 的脚本工作区（workspace 根/<owner>/，spawn 时落
-        # 位 0700）——脚本内 savefig/open 的相对路径产物与 .py 同处一区
-        cwd = owner_dir(self._owner)
+        # cwd = 本进程的工作区根（spawn 时落位 0700）——脚本内 savefig/open
+        # 的相对路径产物与 .py 同处一区
+        cwd = scripts_dir()
         # 进程 + 管道 + 两个读线程都在 runtime 里（本机 = spawn 子进程；
         # 网页 = 同进程调 serve()，见 _runtime 与 LEDGER G80）。
         self._rt = make_runtime(

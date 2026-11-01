@@ -30,7 +30,7 @@ def _slug(text: str) -> str:
 
 
 def new_sweep_dir(name, axis_names) -> tuple[Path, str]:
-    """建一个扫描文件夹：``<workspace>[/owner]/sweeps/<slug>-<时间戳>/``。
+    """建一个扫描文件夹：``<workspace>/sweeps/<slug>-<时间戳>/``。
 
     返回 ``(目录, slug)``；同名同秒冲突加 ``-2/-3…``。文件夹在**开始前**
     就建好（``sweep.json`` 先登记全部 pending 点——文档本身点在终态才写，

@@ -503,7 +503,7 @@ class Simulation:
         - ``on_failure``：``continue``（缺省，坏点记 failed 继续）/
           ``abort``（首坏点停排新点 + 取消在途——G89 重写语义）。
         - ``name``：扫描名（缺省 = 单轴名或 "sweep"）；文件夹 =
-          ``<workspace>[/owner]/sweeps/<name>-<时间戳>/``，内含
+          ``<workspace>/sweeps/<name>-<时间戳>/``，内含
           ``sweep.json`` 索引 + 每点 ``<name>-0001.gensim``（失败点也写）。
         聚合/逐点句柄见 SweepHandle（``download()`` 已退役——文件夹即产物）。
         基底配置 = 当前实例收集的配置；与 run() 不同，sweep 不占用本实例

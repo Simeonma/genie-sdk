@@ -13,12 +13,11 @@ OS 分配、地址与口令经内存 + rendezvous 文件显式传递），**不�
 服务的端口。
 
 **M2/O2**（三生命周期正交）：
-  - ``owner``    = 隔离到哪个目录（工作区根/<owner>/）——**进程属性**：
-                   由入口 ``serve(owner=…)`` / ``set_owner()`` 注入一次，
-                   **不是请求字段**（2026-11-01 矩阵 A4a/A4b 收口）；
+  - ``workspace``  = 工作区根（一个进程一片目录，登录账号不参与）；
   - ``key``      = 能不能提交（``/attach`` 幂等换绑，**换 key 不换模型**）；
-  - ``session_id`` = 哪一份模型（目录 session/<owner>/<session_id>/）。
+  - ``session_id`` = 哪一份模型（目录 session/<session_id>/）。
   三者互不决定：token 轮换/改密/过期重登只碰 key；新模型 = 新 session_id。
+  （2026-11-01 删掉 owner 层：文件放哪儿与谁登录无关。）
 
 **唯一网关出口**：``/gw/{path}`` 代所有客户端（studio/host/console）拨后端，
 带路径白名单。上游不可达的措辞只有这一处实现。
@@ -35,15 +34,14 @@ import threading
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
-# owner / session_id 白名单 = 全仓唯一一份（genie.studio.session.session_client）
-from .session_client import DEFAULT_SESSION, check_owner, check_session_id
+# session_id 白名单 = 全仓唯一一份（genie.studio.session.session_client）
+from .session_client import DEFAULT_SESSION, check_session_id
 from ...core.paths import workspace_root
 from ...net.config import resolve_gateway
 
-_kernels: dict[str, object] = {}   # session_id → SessionKernel（owner 是进程属性）
+_kernels: dict[str, object] = {}   # session_id → SessionKernel
 _lock = threading.Lock()
 _TOKEN = ""            # 会话端口口令（serve()/set_token() 注入；空 = 不校验）
-_OWNER = ""            # 会话 owner（serve()/set_owner() 注入；空 = 装配错误）
 
 
 def set_token(token: str) -> None:
@@ -52,49 +50,18 @@ def set_token(token: str) -> None:
     _TOKEN = token or ""
 
 
-def set_owner(owner: str) -> str:
-    """设定**本会话进程的** owner（唯一写入点；请求面不携带这个字段）。
-
-    owner 是目录名口径（工作区根/<owner>/），所以在这里过一次
-    ``check_owner``——路由不再收这个字段，别处也就没有校验的机会了。
-
-    **一进程一个值**：已注入后换值 = 换进程（已有的 kernel/worker/目录都
-    挂在旧值上）。这里选择响亮失败，而不是悄悄换掉一半。
-    """
-    global _OWNER
-    new = check_owner(owner or "")
-    if _OWNER and new != _OWNER:
-        raise RuntimeError(
-            f"会话 owner 已注入（{_OWNER}）——它是进程属性，换它 = 换进程"
-            "（重启会话，或改 GENIE_SCRIPTS_OWNER 后重开）")
-    _OWNER = new
-    return _OWNER
-
-
-def owner() -> str:
-    """本会话的 owner（只读）。
-
-    未注入 = 装配错误，**不兜默认值**：一兜底，"我的东西落在哪"就又变成
-    猜（A4a 的结论是缺省值该有 0 个，不是 1 个）。
-    """
-    if not _OWNER:
-        raise RuntimeError(
-            "会话 owner 未注入：入口须先 serve(owner=…) 或 set_owner(…)")
-    return _OWNER
-
-
 def get_kernel(session_id: str = DEFAULT_SESSION):
     """按 session_id 取/建 kernel（缺省建：一会话一 worker）。
 
-    owner 不参与寻址——它是进程属性（``owner()``），注册表因此只有一维。
-    测试可 monkeypatch 本函数注入假 kernel。
+    会话没有"属于谁"这一维——工作目录由工作区根决定，登录只管能不能提交
+    （2026-11-01 删掉 owner 层）。测试可 monkeypatch 本函数注入假 kernel。
     """
     sid = check_session_id(session_id or DEFAULT_SESSION)
     with _lock:
         k = _kernels.get(sid)
         if k is None:
             from genie.studio.session.kernel_session import SessionKernel
-            k = _kernels[sid] = SessionKernel(owner=owner(), session_id=sid)
+            k = _kernels[sid] = SessionKernel(session_id=sid)
         return k
 
 
@@ -324,7 +291,7 @@ def attach(body: AttachIn) -> dict:
 
 
 # ── 结果读取（G13②：结果 = 会话状态；G182 P3：主来源 = 会话当前文档）──
-# 纯函数逻辑 = results_view（可单测）；此处只做 404 与 owner 取用。
+# 纯函数逻辑 = results_view（可单测）；此处只做 404 与路径取用。
 # 定位：会话当前文档（打开的 .gensim / <session>.gensim，state.job_id 相符）
 # → 旧 h5 只读回退（历史作业 / result/inject）。不扫 runs/sweeps。
 
@@ -332,7 +299,7 @@ def _result_prefer(session_id: str) -> list:
     """会话当前文档候选（G182 P3）：文档是结果的主来源。"""
     from .kernel_session import doc_path
     try:
-        return [doc_path(owner(), session_id)]
+        return [doc_path(session_id)]
     except Exception:   # noqa: BLE001 —— 文档指针坏不拦旧 h5 回退
         return []
 
@@ -352,8 +319,7 @@ def result_meta(job_id: str = "",
             status_code=422,
             detail="job_id 必填——结果按作业 id 取；id 从 get_model / 作业日志"
                    "（或 job-done 事件）里拿，服务端不替你猜'最近一次'")
-    own = owner()
-    d = Path(workspace_root()) / own
+    d = Path(workspace_root())
     try:
         p = results_view.locate(d, job_id, session_id,
                                 prefer=_result_prefer(session_id))
@@ -376,9 +342,8 @@ def result_series(job_id: str, mon: str, field: str,
     axes="x,y" / slices="z:1,time:0"）。"""
     from pathlib import Path
     from genie.studio.views import results_view
-    own = owner()
     try:
-        p = results_view.locate(Path(workspace_root()) / own, job_id,
+        p = results_view.locate(Path(workspace_root()), job_id,
                                 session_id,
                                 prefer=_result_prefer(session_id))
     except ValueError as e:
@@ -402,17 +367,15 @@ async def result_inject(request: Request,
                         job_id: str = "", mon: str = "",
                         field: str = "") -> dict:
     """外部结果注入（G148 批 4b 腿 B）：body = results h5 字节 →
-    落会话工作区结果目录 + ``plot`` 事件入输出环（GUI Plot 面板
+    落工作区结果目录 + ``plot`` 事件入输出环（GUI Plot 面板
     自动开卡）。为什么上传字节：外部 SDK 作业的落盘在**用户机器**
     （``_auto_save_result``），会话工作区读不到——推图即推数。"""
     from pathlib import Path
     from genie.studio.views import results_view
-    # owner 是会话属性（`owner()`），不来自请求——路径里没有第二个可写的输入。
-    own = owner()
     if not job_id or not mon:
         raise HTTPException(status_code=422, detail="job_id/mon 必填")
     try:
-        p = results_view.result_path(Path(workspace_root()) / own,
+        p = results_view.result_path(Path(workspace_root()),
                                      job_id, session_id)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
@@ -611,15 +574,12 @@ def health() -> dict:
 # ── 启动 ────────────────────────────────────────────────────────
 
 
-def serve(port: int = 0, *, owner: str, host: str = "127.0.0.1",
+def serve(port: int = 0, *, host: str = "127.0.0.1",
           token: str = ""):
     """后台线程起本服务 → (uvicorn.Server, 实际端口)。
 
     ``port=0`` 让 OS 分配（O1：不猜端口、不抢端口）。返回实际端口供调用方
     显式注入客户端——地址不再经环境变量泄漏进语义。
-
-    ``owner`` 是**本会话的归属目录**（唯一注入点）：必填，在这里过白名单。
-    同进程形态（本地 Studio）由入口先 ``set_owner()``，不走本函数。
     """
     import time
 
@@ -628,7 +588,6 @@ def serve(port: int = 0, *, owner: str, host: str = "127.0.0.1",
     global _TOKEN
     if token:
         _TOKEN = token
-    set_owner(owner)
     enable_cred_broker()        # serve() 只被本机入口调用（console/studio）
     workspace_root().mkdir(parents=True, exist_ok=True)
     server = uvicorn.Server(uvicorn.Config(

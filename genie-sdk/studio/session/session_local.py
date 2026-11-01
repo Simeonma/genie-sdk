@@ -12,9 +12,8 @@
 两个适配器实现同一张方法表，所以门面（`register_session_routes` /
 `register_result_routes` / `gateway`）对"会话在哪"完全无知。
 
-**owner 不在这张方法表上**（2026-11-01 A4a/A4b 收口）：它是会话进程的属性，
-由入口 `serve(owner=…)` / `set_owner()` 注入一次；适配器只搬运会话标识
-（`session_id`）与凭据（`key`）。
+适配器只搬运会话标识（`session_id`）与凭据（`key`）：工作区由进程决定，
+没有"属于谁"这一维（2026-11-01 删掉 owner 层）。
 """
 from __future__ import annotations
 

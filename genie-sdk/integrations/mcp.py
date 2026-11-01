@@ -47,8 +47,7 @@ __all__ = ["TOOLS", "TOOL_NAMES", "execute_tool", "build_server", "main",
            "set_session_factory", "SessionUnavailable"]
 
 # 组合根注入：返回一个"已绑定 session_id 的会话客户端"，没有会话时返回 None。
-# （为什么不在这里 import studio：integrations 层不得依赖组合层。owner 不在
-# 这条面上——它是会话进程属性，2026-11-01 A4a/A4b。）
+# （为什么不在这里 import studio：integrations 层不得依赖组合层。）
 _session_factory: Callable[[], Any] | None = None
 
 

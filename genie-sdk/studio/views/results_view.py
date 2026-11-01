@@ -152,8 +152,8 @@ def series(source: Path, mon: str, field: str, maxpoints: int = 1200,
             "tag": view.get("tag", "")}   # R25 缺口 9：透传 GUI
 
 
-def results_dir(owner_dir: Path, session_id: str | None = None) -> Path:
-    """结果目录：``<owner>/genie_results/``，O2 起再按 session 分一层。
+def results_dir(base: Path, session_id: str | None = None) -> Path:
+    """结果目录：``<base>/genie_results/``，O2 起再按 session 分一层。
 
     分层的理由：结果 = 会话状态。两个 session 的结果混在一个目录里，
     按 mtime 回退取"最新"会把别人的文件当成自己的（G58/G66 定案后
@@ -162,7 +162,7 @@ def results_dir(owner_dir: Path, session_id: str | None = None) -> Path:
     例外：``None`` / ``""`` / ``"default"`` 保持**平铺**（O2 之前的布局，
     也是旧客户端的缺省会话）——升级不动存量，旧调用零改动。
     """
-    d = owner_dir / "genie_results"
+    d = base / "genie_results"
     # 字面 "default" 而非 import DEFAULT_SESSION：本模块被 worker 子进程
     # 使用，不该为常量把 fastapi 拉进执行面。
     if session_id in (None, "", "default"):
@@ -170,16 +170,16 @@ def results_dir(owner_dir: Path, session_id: str | None = None) -> Path:
     return d / session_id
 
 
-def result_path(owner_dir: Path, job_id: str,
+def result_path(base: Path, job_id: str,
                 session_id: str | None = None) -> Path:
-    """owner 工作区 → 该作业的 h5 路径（job_id 白名单：字母数字-_）。"""
+    """工作区根 → 该作业的 h5 路径（job_id 白名单：字母数字-_）。"""
     import re
     if not re.fullmatch(r"[\w\-]{1,128}", job_id or ""):
         raise ValueError("job_id 非法（字母/数字/_/-，≤128）")
-    return results_dir(owner_dir, session_id) / f"{job_id}_results.h5"
+    return results_dir(base, session_id) / f"{job_id}_results.h5"
 
 
-def locate(owner_dir: Path, job_id: str, session_id: str | None = None,
+def locate(base: Path, job_id: str, session_id: str | None = None,
            *, prefer=()) -> Path | None:
     """``job_id`` → 结果来源（G182 P3 定位器）。
 
@@ -201,7 +201,7 @@ def locate(owner_dir: Path, job_id: str, session_id: str | None = None,
                 return p
         except Exception:   # noqa: BLE001 —— 坏文档不拦回退
             continue
-    hp = result_path(owner_dir, job_id, session_id)
+    hp = result_path(base, job_id, session_id)
     return hp if hp.is_file() else None
 
 

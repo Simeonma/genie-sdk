@@ -44,7 +44,7 @@ from genie.models import LIBRARY_FIT_DEFAULTS
 # 此前是 `core.paths` ← `workspace_setting.current_root` ← `kernel_session.
 # workspace_root` 三层零逻辑别名，server 从最外层取。现在直接取叶子。
 from genie.core.paths import workspace_root
-from .session.kernel_session import owner_dir
+from .session.kernel_session import scripts_dir
 from .session.session_client import (SessionClient, register_result_routes,
                                          register_session_routes)
 
@@ -93,7 +93,6 @@ _DEFAULT_RING = DraftRing()
 
 
 def create_app(*, static_dir: str | Path | None = None,
-               owner_fn=None,
                session: SessionClient | None = None,
                mount_session: bool = False,
                share_session: bool = False,
@@ -114,11 +113,6 @@ def create_app(*, static_dir: str | Path | None = None,
     可显式退回"本机免登录"形态（调试/纯本地离线场景）。
     """
     static = Path(static_dir) if static_dir else _STUDIO
-    # owner_of：Studio **自己**拼路径用（文件面板 / 结果 / 文档指针），与
-    # 会话的 owner 同源（同一个 resolve_owner），但不经请求面——会话 owner
-    # 由入口注入一次（2026-11-01 A4a/A4b 收口）。owner_fn 只给测试注入。
-    from .session.session_client import resolve_owner
-    owner_of = owner_fn or (lambda request: resolve_owner())
     key_of = req_key
     if session is not None:
         sess = session
@@ -376,26 +370,20 @@ def create_app(*, static_dir: str | Path | None = None,
         app.mount("/session", _session_service.app)
 
     # ── 脚本工作区 ────────────────────────────────────────────────
-    # 脚本落在 workspace_root()/<owner>/；认证交本地信任面；owner 用作
-    # 目录名，白名单 = session_client.check_owner。
+    # 脚本落在工作区根（一个进程一片目录，**没有按用户分层**——登录只管
+    # 能不能提交，2026-11-01）；认证交本地信任面。
     import re as _re
 
-    from genie.studio.session.session_client import check_owner
-
-    def _owner_scripts_dir(req: Request) -> Path:
-        """本请求的 owner 脚本目录 = **当前**工作区根/<owner>/（懒落位 0700）。
+    def _scripts_dir() -> Path:
+        """当前工作区根（懒落位 0700）。
 
         工作区根**每次请求重解析**（G4a 2026-10-30）：`genie workspace` /
         Workspace… 按钮切换后，文件面板/导入/结果必须立刻跟到新根——修前
         在这里把根钉死在进程启动时，换根要重启 Studio 才生效。
 
-        目录本身**只经 ``kernel_session.owner_dir`` 一处创建**（2026-11-01
-        收口：此前这里有一份同路径、同 mkdir、同 0700 的第二份实现）。
-        本函数只多做一件它该做的事：owner 白名单校验。
+        目录本身**只经 ``kernel_session.scripts_dir`` 一处创建**。
         """
-        owner = owner_of(req)
-        check_owner(owner)
-        return owner_dir(owner)
+        return scripts_dir()
 
     # B3 工作区放宽面（调研裁决）：基名 [\w\-]{1,64}（re.ASCII）+ 扩展名
     # 白名单。scripts 三端点与工作区端点族共用同一守卫——名字白名单防
@@ -407,17 +395,17 @@ def create_app(*, static_dir: str | Path | None = None,
     # 流式）。csv 归数据类（表数据可以很大，下载口径与 npz/h5 同）。
     _TEXT_EXTS = ("py", "json", "txt")
 
-    def _workspace_file(owner_dir: Path, name: str,
+    def _workspace_file(base: Path, name: str,
                         exts: tuple[str, ...] = _WORKSPACE_EXTS,
                         detail: str | None = None) -> Path:
         """共享名守卫 + 路径拼装：基名+扩展名白名单（fullmatch，路径
-        穿越/子目录/隐藏文件一律 422）→ owner_dir/name。"""
+        穿越/子目录/隐藏文件一律 422）→ base/name。"""
         pat = r"[\w\-]{1,64}\.(?:%s)" % "|".join(exts)
         if not _re.fullmatch(pat, str(name or ""), _re.ASCII):
             raise HTTPException(status_code=422, detail=detail or (
                 "文件名不合规：基名限字母/数字/_/-（1-64 字符），"
                 "扩展名限 " + "/".join("." + e for e in exts)))
-        return owner_dir / name
+        return base / name
 
     def _workspace_kind(name: str) -> str:
         """kind 分类（files 列表用）：script/image/data/other。"""
@@ -438,7 +426,7 @@ def create_app(*, static_dir: str | Path | None = None,
 
     @app.get("/api/scripts/read")
     async def scripts_read(req: Request, name: str) -> dict:
-        p = _workspace_file(_owner_scripts_dir(req), name, ("py",),
+        p = _workspace_file(_scripts_dir(), name, ("py",),
                             detail="文件名须为 xxx.py（字母/数字/_/-）")
         if not p.is_file():
             raise HTTPException(status_code=404, detail="脚本不存在")
@@ -523,7 +511,7 @@ def create_app(*, static_dir: str | Path | None = None,
         sid = check_session_id(req.headers.get("X-Session-Id")
                                or DEFAULT_SESSION)
         from .session.kernel_session import set_doc_path
-        await run_in_threadpool(set_doc_path, owner_of(req), sid, str(p))
+        await run_in_threadpool(set_doc_path, sid, str(p))
         sess_state = "remote"
         if sess is not None and hasattr(sess, "respawn_for_paths"):
             try:
@@ -541,13 +529,13 @@ def create_app(*, static_dir: str | Path | None = None,
         return out
 
     # ── 工作区文件面板（B3/B4）：脚本 + savefig 图片 + 数据文件统一列、
-    # 看、传、下。与 /api/scripts 同款认证；owner 一律 owner_fn(req)。
+    # 看、传、下。与 /api/scripts 同款认证；目录 = 当前工作区根。
     # 只列根一层不递归（目录树/配额明确越界不做）。.py 删除也放行——
     # 产品裁决：工作区文件用户全权。
     @app.get("/api/workspace/files")
     async def workspace_files(req: Request) -> dict:
         files = []
-        for p in sorted(_owner_scripts_dir(req).iterdir(), key=lambda x: x.name):
+        for p in sorted(_scripts_dir().iterdir(), key=lambda x: x.name):
             if not p.is_file() or p.name.startswith(".") \
                     or p.name.endswith(".part"):   # 上传半截临时件不见客
                 continue
@@ -559,7 +547,7 @@ def create_app(*, static_dir: str | Path | None = None,
     def workspace_raw(req: Request, name: str) -> FileResponse:
         """文件取用：图片 media_type 内联预览；其余（含 .py——编辑走
         /api/scripts）Content-Disposition attachment 只下载不预览。"""
-        p = _workspace_file(_owner_scripts_dir(req), name)
+        p = _workspace_file(_scripts_dir(), name)
         if not p.is_file():
             raise HTTPException(status_code=404, detail="文件不存在")
         media = _RAW_MEDIA.get(p.suffix.lower(), "application/octet-stream")
@@ -573,7 +561,7 @@ def create_app(*, static_dir: str | Path | None = None,
         """B4 上传：multipart 流式落盘（1MiB 块，省内存），可选 name 覆盖
         文件名。超限 413；半途失败/超限不留 .part 半截。文本类 256KiB、
         二进制/数据 512MiB（与 save 通道同一白名单口径）。"""
-        p = _workspace_file(_owner_scripts_dir(req),
+        p = _workspace_file(_scripts_dir(),
                             name or file.filename or "")
         cap = _MAX_SCRIPT if p.suffix.lower().lstrip(".") in _TEXT_EXTS \
             else _MAX_BINARY
@@ -603,7 +591,7 @@ def create_app(*, static_dir: str | Path | None = None,
         """删除工作区文件（.py 也可删，删前无脑执行——产品裁决：工作区
         文件用户全权；GUI 层自行 confirm）。"""
         body = await req.json()
-        p = _workspace_file(_owner_scripts_dir(req), str(body.get("name") or ""))
+        p = _workspace_file(_scripts_dir(), str(body.get("name") or ""))
         if not p.is_file():
             raise HTTPException(status_code=404, detail="文件不存在")
         p.unlink()
@@ -635,13 +623,12 @@ def create_app(*, static_dir: str | Path | None = None,
             from .session.kernel_session import doc_path
             from .session.session_client import DEFAULT_SESSION
             sid = req.headers.get("X-Session-Id") or DEFAULT_SESSION
-            owner = owner_of(req)
             try:
-                prefer = [doc_path(owner, sid)]
+                prefer = [doc_path(sid)]
             except Exception:   # noqa: BLE001
                 prefer = []
             try:
-                src = results_view.locate(workspace_root() / owner, job_id,
+                src = results_view.locate(workspace_root(), job_id,
                                           sid, prefer=prefer)
             except ValueError:
                 src = None
@@ -661,7 +648,7 @@ def create_app(*, static_dir: str | Path | None = None,
             # 取结果来源，打包/守卫零手抄。
             # 2026-11-01 裁：**不再打包工作区文件**——文档装"这个仿真"
             # （配置 + 结果 + state），不装"当时那个文件夹"；此前这里扫
-            # `<workspace>/<owner>/` 全量入包，包内容随工作区位置变化。
+            # `<workspace>/` 全量入包，包内容随工作区位置变化。
             from genie.core.archive import simfile
             simfile.write(tmp_path, cfg, result_path=result_p,
                           result_data=result_data, state=state)
@@ -758,7 +745,7 @@ def create_app(*, static_dir: str | Path | None = None,
                         base = n[len("results/"):]
                         try:
                             rp = results_view.result_path(
-                                workspace_root() / owner_of(req),
+                                workspace_root(),
                                 result_job, sid)
                         except ValueError as e:
                             raise HTTPException(status_code=422, detail=str(e))

@@ -19,18 +19,17 @@ M2/O1+O2（2026-10-22）后的三条界：
   1. **会话地址 = 部署细节**：本模块不再从环境变量猜地址；进程主入口把
      ``SessionClient(url)`` 显式注入 Studio 工厂（``create_app(session=…)``）。
      环境变量只在独立会话服务这种跨进程形态（console、外部工具）里作为缺省值。
-  2. **三生命周期正交**：owner（隔离到哪个目录，**会话进程属性**）/ token（能不能提交）/
+  2. **三生命周期正交**：工作区（一个进程一片目录，登录不参与）/ token（能不能提交）/
      session_id（哪一份模型）互不决定对方。换 token 只走 ``attach``，
      **不换模型**；换 session_id = 新会话 = 新模型（由前端用户在登录时生成）。
-     owner 不在请求面上（2026-11-01 A4a/A4b 收口）：它由入口注入一次，
-     客户端只答"哪一份模型"。
+     请求面没有这些身份字段（2026-11-01 删掉 owner 层）。
   3. **唯一网关出口**：Studio 不再自己拨号后端。``gateway()`` 把
      /api/auth/*、/api/jobs/* 交给会话服务转发（会话侧有
      路径白名单），于是"上游不可达"只有一种措辞、一个实现。
      /api/tools/*（库清单/材料拟合）自 G19b 起为 Studio 本地实现，
      不经此转发面（G111 清账 R38）。
 
-本模块仍是**唯一一份**拨号/错误翻译/owner 白名单实现：host(:8843) 与
+本模块仍是**唯一一份**拨号/错误翻译/session_id 白名单实现：host(:8843) 与
 studio(:8777) 都经它说话。
 """
 from __future__ import annotations
@@ -40,22 +39,12 @@ import re
 
 from fastapi import FastAPI, HTTPException, Request
 
-# owner 白名单：同 script 名规则 [\w\-]{1,64}——owner 会用作工作目录名
-# （workspace 根/<owner>/），路径穿越/空串/点号/非 ASCII 一律拒
-# （re.ASCII：\w 裸用连中文都放行，B3 调研裁决②钉死）。
-OWNER_RE = re.compile(r"[\w\-]{1,64}", re.ASCII)
-# session_id 同规则（它也是目录名：session/<owner>/<session_id>/）
+# session_id 白名单：[\w\-]{1,64}（它当目录名用：session/<session_id>/），
+# 路径穿越/空串/点号/非 ASCII 一律拒（re.ASCII：\w 裸用连中文都放行，
+# B3 调研裁决②钉死）。
 SESSION_ID_RE = re.compile(r"[\w\-]{1,64}", re.ASCII)
 
 DEFAULT_SESSION = "default"
-
-
-def check_owner(owner: str) -> str:
-    """owner 白名单校验（全仓唯一一份；不合规 422）。"""
-    if not OWNER_RE.fullmatch(owner or ""):
-        raise HTTPException(status_code=422,
-                            detail="owner 须为字母/数字/_/-（1-64 字符）")
-    return owner
 
 
 def check_session_id(session_id: str) -> str:
@@ -64,17 +53,6 @@ def check_session_id(session_id: str) -> str:
         raise HTTPException(status_code=422,
                             detail="session_id 须为字母/数字/_/-（1-64 字符）")
     return session_id
-
-
-def resolve_owner() -> str:
-    """会话 owner **缺省值**的唯一读取点（env `GENIE_SCRIPTS_OWNER` 缺省 "local"）。
-
-    G63 收敛（2026-10-23）：此前 __main__/console/server 三处各自读 env 各自
-    兜底——同一事实三个地址。2026-11-01 再收一层（A4a/A4b）：本函数只回答
-    "**没指定时**是谁"，值随即经 ``session_service.set_owner()`` 注入 ONCE，
-    不再随后续请求旅行。
-    """
-    return os.environ.get("GENIE_SCRIPTS_OWNER") or "local"
 
 
 def session_url() -> str:
@@ -103,8 +81,7 @@ class SessionClient:
         self.token = token or os.environ.get("GENIE_SESSION_TOKEN", "")
         self.timeout = timeout
         # 缺省 session_id：``discover()`` 会把门牌里的值填进来，于是跨进程
-        # 调用方（console / agent 脚本）不必每次重抄。owner 不在客户端上
-        # ——它是会话进程的属性（2026-11-01 A4a/A4b 收口）。
+        # 调用方（console / agent 脚本）不必每次重抄。
         self.session_id = session_id
 
     @classmethod
@@ -314,8 +291,7 @@ def register_session_routes(
     ``on_attach(session_id)``：attach 成功后回调（Studio 用它把"当前活跃
     会话"写进门牌，让 ``genie console`` 能接上同一个模型）。
 
-    **owner 不在参数面上**（2026-11-01 A4a/A4b 收口）：它是会话进程的属性，
-    由入口 ``set_owner()`` 注入；本门面转发的是"哪一份模型"（session_id）。
+    请求面只有"哪一份模型"（session_id）——工作区由进程决定，没有 owner 字段。
 
     鉴权交调用方的会话守卫/本地信任面——本函数不做认证。
     须在静态兜底路由之前调用（GET 路由落在兜底之后会被吞成 404，A1 教训）。

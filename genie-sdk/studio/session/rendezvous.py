@@ -6,7 +6,7 @@
 
 答案：**一个门牌文件**，由会话的拥有者写、别人读。
 
-    ~/.genie/studio.json  {url, token, session_id, owner, pid, started_at}
+    ~/.genie/studio.json  {url, token, session_id, pid, started_at}
 
 三条纪律：
 
@@ -31,14 +31,13 @@ def path() -> Path:
                 or (Path.home() / ".genie" / "studio.json"))
 
 
-def write(*, url: str, token: str = "", session_id: str = "",
-          owner: str = "") -> None:
+def write(*, url: str, token: str = "", session_id: str = "") -> None:
     """写门牌（best-effort：写不进去不影响服务本身）。"""
     p = path()
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         body = {"url": url.rstrip("/"), "token": token,
-                "session_id": session_id, "owner": owner,
+                "session_id": session_id,
                 "pid": os.getpid(), "started_at": time.time()}
         tmp = p.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(body, ensure_ascii=False), encoding="utf-8")
@@ -58,7 +57,7 @@ def update(**fields) -> None:
         return
     cur.update({k: v for k, v in fields.items() if v is not None})
     write(url=cur.get("url", ""), token=cur.get("token", ""),
-          session_id=cur.get("session_id", ""), owner=cur.get("owner", ""))
+          session_id=cur.get("session_id", ""))
 
 
 def read() -> dict | None:

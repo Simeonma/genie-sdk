@@ -70,9 +70,8 @@ def _start_local_session() -> tuple[object, str, str]:
             "✗ 本地服务组件缺失（fastapi/uvicorn 已随 genie-sdk 基础依赖"
             "分发）——环境损坏，请重装：pip install --force-reinstall genie-sdk")
     token = secrets.token_urlsafe(24)
-    from genie.studio.session.session_client import resolve_owner
     try:
-        server, port = serve(0, token=token, owner=resolve_owner())
+        server, port = serve(0, token=token)
     except Exception as e:  # noqa: BLE001
         raise SystemExit(f"✗ 本地会话启动失败：{e}")
     return server, f"http://127.0.0.1:{port}", token
@@ -93,21 +92,14 @@ def cmd_studio(args: argparse.Namespace) -> int:
     from genie.studio.session.session_local import LocalSessionHost
 
     ss.enable_cred_broker()     # 本机单用户形态：登录截获/凭据代拨开启
-    # owner = 本会话的归属目录（进程属性；唯一注入点，2026-11-01 A4a/A4b）
-    from genie.studio.session.session_client import resolve_owner
-    ss.set_owner(resolve_owner())
     gui_port = args.port if args.port else _next_free_port("127.0.0.1", 8777)
     gui_url = f"http://127.0.0.1:{gui_port}"
     require_auth = not (args.open
                         or os.environ.get("GENIE_STUDIO_OPEN") == "1")
 
     def _on_attach(session_id: str) -> None:
-        """把"当前活跃会话"记进门牌（console 据此接上同一个模型）。
-
-        owner 也一起写：那是**这个会话**的归属目录（进程属性），门牌只是
-        描述它；console 不再拿它当输入（2026-11-01 A4a/A4b）。
-        """
-        rv.update(session_id=session_id, owner=resolve_owner())
+        """把"当前活跃会话"记进门牌（console 据此接上同一个模型）。"""
+        rv.update(session_id=session_id)
 
     # 同进程：会话对象与 GUI 在同一个进程里，**没有 HTTP 跳、没有第二个
     # 端口**（O3）。给跨进程客户端（console）留的门 = /session，带口令。

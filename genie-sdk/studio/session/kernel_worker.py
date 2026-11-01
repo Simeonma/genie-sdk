@@ -167,7 +167,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
     # 结果实际由 _auto_save_result 落 **worker cwd** 的 genie_results/
     # （$GENIE_RESULT_DIR 未设时），且用户代码可 os.chdir，故清理目标
     # 只能锚定启动 cwd，不能锚定 state 目录（旧 bug：目标指向
-    # session/<owner>/genie_results，该目录从未存在 → 配额从未生效）。
+    # session/<session_id>/genie_results，该目录从未存在 → 配额从未生效）。
     workspace = Path.cwd()
 
     # session_connect 连出来的实例落这里。**build（脚本运行）期间临时改道**
