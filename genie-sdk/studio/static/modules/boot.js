@@ -1371,7 +1371,7 @@ function bootSyncSession() {
     .then((r) => {
       if (r.ok) return r.json();
       if (r.status === 401) {           /* token 失效/被吊销：清凭据，
-                                         * **保留 session_id**——同账号再登录
+                                         * **保留模型**——同账号再登录
                                          * 回到同一个模型（O2） */
         genieDropToken();
         const b = document.getElementById("login-toggle");

@@ -792,7 +792,7 @@ class ApodizeSpec(_StrictModel):
 
 class _MonitorMixin(_StrictModel):
     # G141 定案①（站长裁决 2026-10-27）：监视器名白名单 [\w\-]{1,64}
-    # （re.ASCII——与 owner/session_id/文件名同款）。名字会成为 h5 组名
+    # （re.ASCII——与文件名字白名单同款）。名字会成为 h5 组名
     # 与 t@<名>.<字段> 结果键的地址段——含点/空格会让键解析歧义
     # （"a.b" 的场被监视器 "a" 的前缀吞噬，修前实测）。
     name: str = Field(min_length=1)

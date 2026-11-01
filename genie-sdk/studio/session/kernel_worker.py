@@ -526,7 +526,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         旧协议 ``bind`` 的语义是"绑网关 + 预置命名空间"，且凭据变更会
         连带重生 worker（模型跟着 token 的寿命走）。现在拆成两件事：
         attach 只更新各实例 Client 的 X-API-Key 头；要不要新模型由上层
-        的 session_id 决定（新 session_id = 新 worker = 新目录 = 无快照）。
+        的 ``/model/new`` 决定：丢弃 = 杀 worker + 清快照/环（一个进程一份模型）。
         """
         nonlocal sim, sess_url, sess_key
         url = msg.get("url") or ""

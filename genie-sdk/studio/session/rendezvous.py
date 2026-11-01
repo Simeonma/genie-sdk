@@ -6,7 +6,7 @@
 
 答案：**一个门牌文件**，由会话的拥有者写、别人读。
 
-    ~/.genie/studio.json  {url, token, session_id, pid, started_at}
+    ~/.genie/studio.json  {url, token, pid, started_at}
 
 三条纪律：
 

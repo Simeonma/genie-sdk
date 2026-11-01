@@ -15,7 +15,7 @@
 
 O1 起会话地址与口令由调用方注入（``run_console(client, ...)``），不再从
 环境变量猜——``genie console`` 读本机门牌拿到 GUI 正在用的那个会话
-（含 session_id），于是"同一个 f"仍然成立。
+（连同口令），于是"同一个 f"仍然成立。
 """
 from __future__ import annotations
 
