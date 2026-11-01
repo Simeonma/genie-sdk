@@ -5,7 +5,7 @@
 - **同进程**（本地默认）：`LocalSessionHost` 直接调 `session_service` 的
   函数——零 HTTP、零端口、零序列化。Studio 与持有 `f` 的 worker 之间没有
   "边"，因为不存在需要跨的边界（同机、同用户、同信任域、同生命周期）。
-- **跨进程**（`genie console` / 外部工具）：
+- **跨进程**（agent / 外部工具）：
   `session_client.SessionClient` 走 `/session/*`（挂在 Studio 上的同一套
   路由，带本地口令）——**独立服务已退役**（G63：worker 与 GUI 同进程）。
 

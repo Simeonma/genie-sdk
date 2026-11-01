@@ -412,7 +412,7 @@ SessionSync.onSnapshot(applyCfgSnapshot);   /* 投影订阅同步器（收敛③
 
 /* ── 空闲持续订阅（G13①）：GUI 是 worker 的投影，不是"执行期才睁眼的
  * 观察者"。exec 期间 termExec 的 350ms 轮询在跑；空闲期本 2s 节拍
- * 接力——同一 since 增量机制，两种节奏。外部键盘（console/另一窗口）
+ * 接力——同一 since 增量机制，两种节奏。外部键盘（另一窗口）
  * 的编辑与输出由此流进本页（含输入 echo）。────────────────────── */
 setInterval(async () => {
   if (termBusy || termPollTimer) return;   /* exec 轮询在管，不抢线 */

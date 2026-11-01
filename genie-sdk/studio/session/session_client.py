@@ -21,7 +21,7 @@
 M2/O1+O2（2026-10-22）后的三条界：
   1. **地址 = 部署细节**：本模块不再从环境变量猜地址；进程主入口把
      ``SessionClient(url)`` 显式注入 Studio 工厂（``create_app(session=…)``）。
-     环境变量只在跨进程客户端（console / 外部工具）里作为缺省值。
+     环境变量只在跨进程客户端（agent / 外部工具）里作为缺省值。
   2. **两条生命周期 + 一份模型**：工作区（一个进程一片目录，登录不参与）/
      token（能不能提交）互不决定；模型一个进程只有一份，刷新/重登都保留它，
      ``new_model()`` 才丢弃（请求面既没有 owner 也没有 session_id）。
@@ -48,10 +48,10 @@ def session_url() -> str:
     这个函数故意改成"响亮失败"：以前它硬编码 `127.0.0.1:8123`，而那个端口
     早就没人听，于是所有忘了注入地址的调用方都会静默去拨一个空端口（宿主
     `/api/exec` 因此 503 了很久才被发现）。现在缺地址就当场报错，指路 =
-    门牌 `~/.genie/studio.json`（`SessionClient.discover()`）或显式 `base_url`。
+    门牌 `~/.genie/studio.json`（读它拿到 url + 口令）或显式 `base_url`。
     """
     raise RuntimeError(
-        "没有 /session 地址：用 SessionClient.discover() 读门牌，或显式传 base_url"
+        "没有 /session 地址：显式传 base_url（例如读门牌拿到 url + 口令）"
         "（独立服务已退役，不再有 127.0.0.1:8123 这个默认值）")
 
 
@@ -67,21 +67,6 @@ class SessionClient:
         self.base_url = (base_url or session_url()).rstrip("/")
         self.token = token or os.environ.get("GENIE_SESSION_TOKEN", "")
         self.timeout = timeout
-
-    @classmethod
-    def discover(cls) -> "SessionClient | None":
-        """接上**正在跑的本地 Studio**（读门牌）；没门牌 → None。
-
-        只给跨进程客户端用（``genie console`` / agent 脚本 / 第二个 Studio）。
-        本机 Studio 自己持有 worker 对象、不走 HTTP（O1/O3），所以这条路上
-        不存在"探测端口并复用"的旧毛病：门牌是 Studio 写的，只有一份。
-        """
-        from genie.studio.session import rendezvous as rv
-
-        card = rv.read() or {}
-        if not card.get("url"):
-            return None
-        return cls(card["url"], token=card.get("token", ""))
 
     # ---- 传输 ----
 
@@ -202,15 +187,6 @@ class SessionClient:
             "job_id": job_id, "mon": mon, "field": field,
             "maxpoints": maxpoints,
             "axes": axes, "slices": slices})
-
-    def result_inject(self, *,
-                      job_id: str, mon: str, field: str = "",
-                      data: bytes) -> dict:
-        """外部结果注入（G148 批 4b 腿 B）：h5 字节上传 + plot 事件
-        （外部 SDK 的 f.visualize 走这里——直连本地端口，不经 studio）。"""
-        return self._json("POST", "/result/inject", data=bytes(data),
-                          content_type="application/octet-stream", params={
-                              "job_id": job_id, "mon": mon, "field": field})
 
     def health(self) -> dict:
         return self._json("GET", "/health")

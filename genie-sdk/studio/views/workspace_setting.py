@@ -1,7 +1,7 @@
 """工作区根设置（**机器级持久**，2026-10-30 站长定案）。
 
 一个用户一台机器一个"当前工作区"（像 IDE 的"打开文件夹"）：所有 Studio、
-`genie console`、结果、脚本、自动存档的 `.gensim` 都跟着它走。用户想换，
+结果、脚本、自动存档的 `.gensim` 都跟着它走。用户想换，
 就显式换（`genie workspace PATH` 或 Studio 的 Workspace… 按钮）。
 
 解析优先级（唯一口径 = ``core.paths.workspace_root``）：

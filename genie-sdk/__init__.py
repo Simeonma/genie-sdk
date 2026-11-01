@@ -57,59 +57,10 @@ __version__ = "2.1.1"
 # 注入 core 的 hooks——``import genie`` 即接线，core 永不反向 import 上层。
 # （2026-10-27 G19b 翻转：材质库 HTTP 回退 hook 已退役，材质库纯本地。）
 # 分层守卫 = tests/sdk/test_layering.py。
-def _push_visualize(sim, mon: str, field: str | None = None) -> None:
-    """G148 批 4b 腿 B：外部 SDK 的 ``f.visualize`` → 推送端点。
-
-    结果 h5 字节随行上传——外部作业的落盘在**用户机器**
-    （``_auto_save_result``），worker 工作区读不到，推图即推数。
-    没有**活着的** Studio（门牌缺失或进程已退出）= 明确报错指路；
-    不做本地画图退化轨（站长定案）。"""
-    if getattr(sim, "_job_id", None) is None:
-        raise RuntimeError(
-            "visualize: 本实例还没有作业——先 f.run()（推的是该作业的"
-            "结果数据）")
-    card = _alive_card()
-    if card is None:
-        raise RuntimeError(
-            "visualize: 没有活着的 Studio（门牌缺失或进程已退出）——先"
-            " `genie studio` 起 Studio（在 Studio 里跑脚本则天然可用）；"
-            "按定案无本地画图退化轨")
-    from .studio.session.session_client import SessionClient
-    cli = SessionClient(card["url"], token=card.get("token", ""))
-    cli.result_inject(job_id=sim._job_id, mon=mon, field=field or "",
-                      data=sim._result_bytes())
-
-
-def _push_sweep_visualize(sw, mon: str, field: str | None = None) -> None:
-    """G182 P5c：扫描的 ``visualize``——同一个动词、同一条推送路径。
-
-    推的是**合并结果**（数据多 k 维，坐标不复制）；Plot 面板已有的
-    轴选择器/滑条把参数轴当普通轴用——画图实现只有一套（G148 定案：
-    SDK 面零 matplotlib，交互只住 GUI）。"""
-    sid = str(getattr(sw, "id", "") or "")
-    if not sid:
-        raise RuntimeError("visualize: 这个扫描还没有 id（sweep.json 缺 "
-                           "sweep_id）——重跑一次 f.sweep() 即可")
-    card = _alive_card()
-    if card is None:
-        raise RuntimeError(
-            "visualize: 没有活着的 Studio（门牌缺失或进程已退出）——先"
-            " `genie studio` 起 Studio（在 Studio 里跑脚本则天然可用）；"
-            "按定案无本地画图退化轨")
-    from .studio.session.session_client import SessionClient
-    cli = SessionClient(card["url"], token=card.get("token", ""))
-    cli.result_inject(job_id=sid, mon=mon, field=field or "",
-                      data=sw._cube_bytes())
-
-
 def _wire_core_hooks() -> None:
     from .core import run as _simulate
     from .core import sweep as _sweep
 
-    _simulate._wire(
-        visualize=_push_visualize,
-    )
-    _sweep.hooks.update(visualize_sweep=_push_sweep_visualize)
     # 2026-10-27 G19b 翻转：材质库 HTTP 回退（remote_nk_fetch）退役——
     # 材质库纯本地（genie/core/nkdata 随包分发），材质面不再接线。
     # 2026-10-28 G174：preview 的 connect 交换钩子（_swap_connect）随
@@ -172,47 +123,20 @@ __all__ = [
 def connect(base_url: str | None = None, api_key: str | None = None,
             username: str | None = None, password: str | None = None, *,
             timeout: float = 30.0) -> Simulation:
-    """连接 GENIE 服务 → Simulation（≈ 本地包的 ``FDTD()``）。
+    """**只能在 Studio 里用**（2026-11-02 G204：执行面只有一个）。
 
-    正道 = **零参**（R40 定案 2026-10-29）：凭据经 ``genie login``（终端）
-    或 Studio 登录闸注入本机凭据仓，一次即可；脚本永远 ``genie.connect()``。
-    显式参数已退役——传任何连接参数都会被拒并指路；机器预置走 env
-    （``GENIE_URL`` / ``GENIE_API_KEY`` / ``GENIE_USERNAME`` / ``GENIE_PASSWORD``）。
+    在 Studio 的脚本编辑器 / 终端里，这个符号被 worker 接管——它建一个
+    **新的实例**并纳入当前模型（配方里 ``genie.connect()`` 仍可写）。
 
-    **一条轨：直拨**。网关与 token 从 env / 凭据仓解析
-    （``resolve_gateway`` / ``resolve_credential``）；解析不出网关 → 报错并
-    给"下一步动作"。**不看门牌**——本机有没有开着 Studio，不改变这行代码
-    连到哪、用谁的凭据（2026-11-01 删掉"搭车轨"：它不多拿任何凭据
-    ——登录截获本来就落盘进凭据仓——却让同一行代码的凭据来源取决于一个
-    文件在不在，是"环境决定行为"）。
-
-    （R40/G109 定案：原"无门牌时进程内自起无头 worker"引擎整体退役——
-    三仓 grep 零消费者实证，同族 G176/G177 随之销账；存在权审查：
-    自起服务的两条卖点——"token 不进脚本"在同机同用户下是安全戏、
-    "console 可接上"从未生效——均答不出服务的真实用户任务。）
+    在 Studio 外它不可用：唯一执行面是 worker，没有"自己进程拨网关"这
+    条路了。外面只想**建模**（不跑）用 ``genie.Simulation()`` /
+    ``genie.open(路径)``；要**跑**就在 Studio 里写配方。
     """
-    if base_url or api_key or username or password:
-        from .models.errors import GenieConfigError
-        raise GenieConfigError(
-            "connect() 不接受连接参数（2026-10-29 起零参唯一形态）。\n"
-            "  凭据注入：genie login（终端，一次即可）或 genie studio 登录闸\n"
-            "  机器预置：set GENIE_URL / GENIE_API_KEY / GENIE_USERNAME"
-            " / GENIE_PASSWORD")
-    from .net import client as _client_mod
-    from .net.config import resolve_credential, resolve_gateway
-
-    url = resolve_gateway(None)
-    key = resolve_credential(None, "GENIE_API_KEY", "api_key")
-    user = resolve_credential(None, "GENIE_USERNAME", "username")
-    pwd = os.environ.get("GENIE_PASSWORD")
-    client = _client_mod.Client(url, key, username=user,
-                                timeout=timeout)  # 模块属性寻址——测试可注入假传输
-    if pwd and not key:
-        if not user:
-            raise ValueError("password 登录需要同时给 username")
-        client.login(user, pwd)
-    return Simulation(client)
-
+    from .models.errors import GenieConfigError
+    raise GenieConfigError(
+        "connect() 只能在 Studio 里用（脚本编辑器 / 终端会自动接管）。\n"
+        "  只想建模（不跑）：genie.Simulation() 或 genie.open(路径)\n"
+        "  要跑仿真：在 Studio 里写配方（唯一执行面是 worker）")
 
 def _connect_direct(base_url: str, api_key: str | None = None, *,
                     timeout: float = 30.0) -> Simulation:
@@ -240,7 +164,7 @@ def open(path) -> Simulation:
     hook = _simulate.hooks.get("open_sim")
     if hook is not None:
         return hook(cfg, str(path))
-    f = connect()
+    f = Simulation(None)
     f.load_config(cfg)
     f._doc_path = str(path)
     return f

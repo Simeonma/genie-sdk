@@ -1,16 +1,14 @@
 """``genie`` 命令行入口——软件的一键形态（G12/G8，2026-10-13 定案）。
 
 - ``genie studio``：本地拉起整套软件——一个持有 f 的 worker 子进程
-  + 浏览器 GUI；
-- ``genie console``：你 shell 里的终端客户端——与 GUI terminal 平等
-  的键盘（Jupyter console 语义）。
+  + 浏览器 GUI。**这是唯一形态**（无浏览器形态已随 console 退役）。
 
 **拓扑（M2/O1+O3，2026-10-22）：两个进程，一个端口。**
 
     genie studio
       ① worker 管理器与 GUI **同进程**（零 HTTP 跳、零第二个端口）
       ② 模型住在 worker 子进程里（故障域隔离 + 可中断 + 独立 cwd）
-      ③ 跨进程客户端（console/外部工具）走 GUI 端口的 ``/session``，
+      ③ 跨进程客户端（agent / 外部工具）走 GUI 端口的 ``/session``，
          口令写在门牌 ~/.genie/studio.json；指纹之外一律不认
       ④ 全局唯一网络出口 = 本地端口（``/gw`` 白名单）
 
@@ -56,32 +54,11 @@ def _next_free_port(host: str, start: int) -> int:
     raise SystemExit(f"端口 {start}~{start + 49} 均被占用——用 --port 指定")
 
 
-def _start_local_session() -> tuple[object, str, str]:
-    """起本地端口（OS 分配端口 + 本机口令）→ (server, url, token)。
-
-    **不做存活探测、不复用**：复用会把上一个后端/上一个凭据的旧 worker
-    带进来，正是"模型莫名其妙存在/消失"的根源（M2/O1）。
-    """
-    try:
-        from genie.studio.session.session_service import serve
-    except ImportError:  # pragma: no cover —— 指路不裸栈
-        # R41/N3：装法合一（R40）后没有 server extra 可装——缺件=环境损坏。
-        raise SystemExit(
-            "✗ 本地服务组件缺失（fastapi/uvicorn 已随 genie-sdk 基础依赖"
-            "分发）——环境损坏，请重装：pip install --force-reinstall genie-sdk")
-    token = secrets.token_urlsafe(24)
-    try:
-        server, port = serve(0, token=token)
-    except Exception as e:  # noqa: BLE001
-        raise SystemExit(f"✗ 本地端口启动失败：{e}")
-    return server, f"http://127.0.0.1:{port}", token
-
-
 def cmd_studio(args: argparse.Namespace) -> int:
     try:
         import uvicorn
     except ImportError:  # pragma: no cover —— 指路不裸栈（同下方 session_service）
-        # R41/N3：同 _start_local_session——装法合一后无 extra 可装。
+        # R41/N3：装法合一后无 extra 可装。
         raise SystemExit(
             "✗ 本地服务组件缺失（fastapi/uvicorn 已随 genie-sdk 基础依赖"
             "分发）——环境损坏，请重装：pip install --force-reinstall genie-sdk")
@@ -121,33 +98,6 @@ def cmd_studio(args: argparse.Namespace) -> int:
         if share:
             rv.clear()
     return 0
-
-
-def cmd_console(args: argparse.Namespace) -> int:
-    from genie.studio.session import rendezvous as rv
-    from genie.studio.console import run_console
-    from genie.studio.session.session_client import SessionClient
-
-    url = (args.attach or "").rstrip("/")
-    token = os.environ.get("GENIE_SESSION_TOKEN", "")
-    server = None
-    cli = None
-    if not url:
-        cli = SessionClient.discover()      # 读门牌：GUI 正在用的那个端口
-    if cli is None and url:
-        cli = SessionClient(url, token=token)
-    if cli is not None:
-        print(f"· 连接 Studio（{cli.base_url}）")
-    else:
-        server, url, token = _start_local_session()
-        rv.write(url=url, token=token)
-        cli = SessionClient(url, token=token)
-        print(f"· 本地端口已启动（{url}）")
-    try:
-        return run_console(cli)
-    finally:
-        if server is not None:
-            rv.clear()
 
 
 def cmd_connect(args: argparse.Namespace) -> int:
@@ -294,10 +244,6 @@ def main(argv: list[str] | None = None) -> int:
     st.add_argument("--open", action="store_true",
                     help="本机免登录形态（调试用；等价 GENIE_STUDIO_OPEN=1）")
     st.set_defaults(fn=cmd_studio)
-    co = sub.add_parser("console", help="shell 里的终端客户端（与 GUI 平等）")
-    co.add_argument("--attach", default="",
-                    help="连一个已在跑的 Studio（缺省读门牌）")
-    co.set_defaults(fn=cmd_console)
     cn = sub.add_parser(
         "connect", help="写本机网关与凭据配置（一次即可，之后 connect() 无参即通）")
     cn.add_argument("url", nargs="?", default="",

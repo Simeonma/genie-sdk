@@ -12,9 +12,11 @@
 ```python
 from genie.studio.session.session_client import SessionClient
 
-cli = SessionClient.discover()      # 读门牌（~/.genie/studio.json）
-if cli is None:
+from genie.studio.session import rendezvous as rv
+card = rv.alive()                   # 读门牌并探活（~/.genie/studio.json）
+if card is None:
     raise SystemExit("没有在跑的 Studio——让用户先启动 genie studio")
+cli = SessionClient(card["url"], token=card.get("token", ""))
 cli.health()                        # 不可达会抛 503，别静默继续
 ```
 

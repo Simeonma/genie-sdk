@@ -8,14 +8,14 @@
 **M2/O1**（确定性启动）：本地 ``genie studio`` 自己起这个 app（端口由
 OS 分配、地址与口令经内存 + 门牌显式传递），**不再"探测 8123 并复用"**——
 复用会把上一个后端/上一个凭据的旧 worker 继承进来，是"模型莫名其妙存在/
-消失"的根源。跨进程客户端（``genie console`` / MCP）仍走这个本地端口。
+消失"的根源。跨进程客户端（agent 面）仍走这个本地端口。
 
 **两条生命周期正交（2026-11-01：owner 与 session_id 两层都删了）**：
   - ``workspace``  = 工作区根（一个进程一片目录，登录账号不参与）；
   - ``key``      = 能不能提交（``/attach`` 幂等换绑，**换 key 不换模型**）。
   一个进程只有一份可编辑的模型：新模型 = ``/model/new``（丢弃旧的），不是新命名空间。
 
-**唯一网关出口**：``/gw/{path}`` 代所有客户端（studio / console）拨后端，
+**唯一网关出口**：``/gw/{path}`` 代所有客户端（studio / agent）拨后端，
 带路径白名单。上游不可达的措辞只有这一处实现。
 
 只听 127.0.0.1；身份判断只发生在 studio 客户端。可选口令
@@ -35,7 +35,7 @@ from ...net.config import resolve_gateway
 
 _kernel: object | None = None      # 一个进程一份模型（2026-11-01 删 session 维度）
 _lock = threading.Lock()
-_TOKEN = ""            # 本地端口口令（serve()/set_token() 注入；空 = 不校验）
+_TOKEN = ""            # 本地端口口令（set_token() 注入；空 = 不校验）
 
 
 def set_token(token: str) -> None:
@@ -295,7 +295,7 @@ def attach(body: AttachIn) -> dict:
 # ── 结果读取（G13②：结果 = 模型状态；G182 P3：主来源 = 当前文档）──
 # 纯函数逻辑 = results_view（可单测）；此处只做 404 与路径取用。
 # 定位：当前文档（打开的 .gensim / genie.gensim，state.job_id 相符）
-# → 旧 h5 只读回退（历史作业 / result/inject）。不扫 runs/sweeps。
+# → 旧 h5 只读回退（历史作业）。不扫 runs/sweeps。
 
 def _result_prefer() -> list:
     """当前文档候选（G182 P3）：文档是结果的主来源。"""
@@ -357,34 +357,6 @@ def result_series(job_id: str, mon: str, field: str,
         raise HTTPException(status_code=404, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
-
-
-@app.post("/result/inject")
-async def result_inject(request: Request,
-                        job_id: str = "", mon: str = "",
-                        field: str = "") -> dict:
-    """外部结果注入（G148 批 4b 腿 B）：body = results h5 字节 →
-    落工作区结果目录 + ``plot`` 事件入输出环（GUI Plot 面板
-    自动开卡）。为什么上传字节：外部 SDK 作业的落盘在**用户机器**
-    （``_auto_save_result``），worker 的工作区读不到——推图即推数。"""
-    from pathlib import Path
-    from genie.studio.views import results_view
-    if not job_id or not mon:
-        raise HTTPException(status_code=422, detail="job_id/mon 必填")
-    try:
-        p = results_view.result_path(Path(workspace_root()), job_id)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-    body = await request.body()
-    if not body:
-        raise HTTPException(status_code=422,
-                            detail="body = 结果 h5 字节，不能为空")
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_bytes(body)
-    os.chmod(p, 0o600)
-    get_kernel().emit_external(
-        "plot", {"job_id": job_id, "mon": mon, "field": field or None})
-    return {"ok": True, "job_id": job_id}
 
 
 # ── 唯一网关出口 ────────────────────────────────────────────────
@@ -532,7 +504,7 @@ def gateway_forward(method: str, path: str, *, key: str = "",
 
 @app.api_route("/gw/{path:path}", methods=["GET", "POST", "DELETE"])
 async def gw(path: str, request: Request):
-    """HTTP 形态的网关出口（跨进程客户端用：宿主、console、外部工具）。"""
+    """HTTP 形态的网关出口（跨进程客户端用：agent、外部工具）。"""
     from fastapi.concurrency import run_in_threadpool
     from fastapi.responses import Response
 
@@ -568,36 +540,3 @@ def health() -> dict:
 
 
 # ── 启动 ────────────────────────────────────────────────────────
-
-
-def serve(port: int = 0, *, host: str = "127.0.0.1",
-          token: str = ""):
-    """后台线程起本服务 → (uvicorn.Server, 实际端口)。
-
-    ``port=0`` 让 OS 分配（O1：不猜端口、不抢端口）。返回实际端口供调用方
-    显式注入客户端——地址不再经环境变量泄漏进语义。
-    """
-    import time
-
-    import uvicorn
-
-    global _TOKEN
-    if token:
-        _TOKEN = token
-    enable_cred_broker()        # serve() 只被本机入口调用（console/studio）
-    workspace_root().mkdir(parents=True, exist_ok=True)
-    server = uvicorn.Server(uvicorn.Config(
-        app, host=host, port=port, log_level="warning"))
-    threading.Thread(target=server.run, daemon=True,
-                     name="genie-session").start()
-    for _ in range(200):               # 等就绪（≤10s）
-        if server.started:
-            break
-        time.sleep(0.05)
-    else:                              # pragma: no cover —— 起不来就是致命的
-        raise RuntimeError(f"本地端口启动失败（{host}:{port}）")
-    socks = []
-    for srv in (getattr(server, "servers", None) or []):
-        socks.extend(getattr(srv, "sockets", None) or [])
-    actual = socks[0].getsockname()[1] if socks else port
-    return server, actual

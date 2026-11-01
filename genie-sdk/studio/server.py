@@ -360,10 +360,10 @@ def create_app(*, static_dir: str | Path | None = None,
         async def api_usage_fwd(req: Request) -> Response:
             return await _gw_fwd(req, "api/usage", timeout=30.0)
 
-    # ── 本地端口（只给**跨进程客户端**用：genie console / 外部工具）──
+    # ── 本地端口（只给**跨进程客户端**用：agent / 外部工具）──
     # 同进程的 GUI 走上面的门面直接调对象（零 HTTP）；这里挂同一套路由
     # 路由，带本机口令（session_service.set_token 由入口设置）。于是
-    # "一个进程、一个端口"：GUI 的 8777 同时也是 console 的入口。
+    # "一个进程、一个端口"：GUI 的 8777 同时也是 agent 的入口。
     if share_session:
         from genie.studio.session import session_service as _session_service
         app.mount("/session", _session_service.app)

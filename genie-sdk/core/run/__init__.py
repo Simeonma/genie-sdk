@@ -443,11 +443,11 @@ class Simulation:
 
     def visualize(self, mon: str, field: str | None = None) -> None:
         """把该监视器推到 Studio 的 Plot 交互面板（G148 定案：交互只住
-        GUI——SDK 面零 matplotlib）。两条触发腿：**worker 内脚本**（Studio
-        编辑器/终端——worker 给实例注入执行版 visualize，emit ``plot``
-        事件，本方法被实例属性遮蔽）；**外部 SDK 进程**（组合根 hook →
-        推送端点，G148 批 4b）。未接线（没有 Studio）= 明确报错指路。
-        自由画图不是产品面：拿 ``results()`` 的 ndarray 自己写 Python。"""
+        GUI——SDK 面零 matplotlib）。**在 Studio 里**（脚本编辑器 / 终端）
+        由 worker 给实例注入执行版 visualize（emit ``plot`` 事件），本方法
+        被实例属性遮蔽；在 Studio 外没有这条腿（G204 删掉外部推送），
+        调用即明确报错。自由画图不是产品面：拿 ``results()`` 的 ndarray
+        自己写 Python。"""
         hook = hooks.get("visualize")
         if hook is None:
             raise RuntimeError(

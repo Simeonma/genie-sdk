@@ -1,8 +1,7 @@
 """genie/studio/rendezvous — 本机 Studio 的"门牌"（O1）。
 
 问题：Studio 的 ``/session`` 面起在 **OS 分配的端口**上（这样不会抢端口、
-也不会误连上一个进程留下的旧 worker）。于是别的客户端（``genie console``、
-MCP、第二个 Studio）没法靠猜端口找到它。
+也不会误连上一个进程留下的旧 worker）。于是别的客户端（agent、外部工具）没法靠猜端口找到它。
 
 答案：**一个门牌文件**，由 Studio 写、跨进程客户端读。
 
