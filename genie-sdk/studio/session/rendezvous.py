@@ -63,7 +63,12 @@ def update(**fields) -> None:
 
 
 def read() -> dict | None:
-    """读门牌；不存在/坏文件 → None（调用方按"没有会话"处理）。"""
+    """读门牌；不存在/坏文件 → None（调用方按"没有会话"处理）。
+
+    **纯读、不探活**：牌在 ≠ 牌后面那个进程还在。要"有没有活着的"用
+    ``alive()``——两个问题两个函数（2026-11-01 收口：原来探活还另有一份
+    在 ``genie/__init__._alive_card``，同一个问题两个答案）。
+    """
     try:
         d = json.loads(path().read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -71,6 +76,25 @@ def read() -> dict | None:
     if not isinstance(d, dict) or not d.get("url"):
         return None
     return d
+
+
+def alive(timeout: float = 1.5) -> dict | None:
+    """读门牌并探活；没牌/死牌/读不了 → None。**"有没有活着的会话"的唯一答案。**
+
+    死牌不删：门牌可能属于另一个进程（它只是暂时没响应/正在重启），
+    删了会踩掉别人的；判死只影响这一次调用。
+    """
+    card = read()
+    if not card:
+        return None
+    try:
+        import requests
+        if requests.get(card["url"].rstrip("/") + "/health",
+                        timeout=timeout).status_code != 200:
+            return None
+    except Exception:        # noqa: BLE001 —— 死门牌 = 没有会话
+        return None
+    return card
 
 
 def clear() -> None:

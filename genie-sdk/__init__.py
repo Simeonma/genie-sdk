@@ -62,17 +62,20 @@ def _push_visualize(sim, mon: str, field: str | None = None) -> None:
 
     结果 h5 字节随行上传——外部作业的落盘在**用户机器**
     （``_auto_save_result``），会话工作区读不到，推图即推数。
-    无门牌（无会话）= 明确报错指路；不做本地画图退化轨（站长定案）。"""
+    没有**活着的** Studio（门牌缺失或进程已退出）= 明确报错指路；
+    不做本地画图退化轨（站长定案）。"""
     if getattr(sim, "_job_id", None) is None:
         raise RuntimeError(
             "visualize: 本实例还没有作业——先 f.run()（推的是该作业的"
             "结果数据）")
-    from .studio.session.session_client import SessionClient
-    cli = SessionClient.discover()
-    if cli is None:
+    card = _alive_card()
+    if card is None:
         raise RuntimeError(
-            "visualize: 找不到本机会话门牌——先 `genie studio` 开会话"
-            "（在 Studio 里跑脚本则天然可用）；按定案无本地画图退化轨")
+            "visualize: 没有活着的 Studio（门牌缺失或进程已退出）——先"
+            " `genie studio` 开会话（在 Studio 里跑脚本则天然可用）；"
+            "按定案无本地画图退化轨")
+    from .studio.session.session_client import SessionClient
+    cli = SessionClient(card["url"], token=card.get("token", ""))
     cli.result_inject(job_id=sim._job_id, mon=mon, field=field or "",
                       data=sim._result_bytes())
 
@@ -87,12 +90,14 @@ def _push_sweep_visualize(sw, mon: str, field: str | None = None) -> None:
     if not sid:
         raise RuntimeError("visualize: 这个扫描还没有 id（sweep.json 缺 "
                            "sweep_id）——重跑一次 f.sweep() 即可")
-    from .studio.session.session_client import SessionClient
-    cli = SessionClient.discover()
-    if cli is None:
+    card = _alive_card()
+    if card is None:
         raise RuntimeError(
-            "visualize: 找不到本机会话门牌——先 `genie studio` 开会话"
-            "（在 Studio 里跑脚本则天然可用）；按定案无本地画图退化轨")
+            "visualize: 没有活着的 Studio（门牌缺失或进程已退出）——先"
+            " `genie studio` 开会话（在 Studio 里跑脚本则天然可用）；"
+            "按定案无本地画图退化轨")
+    from .studio.session.session_client import SessionClient
+    cli = SessionClient(card["url"], token=card.get("token", ""))
     cli.result_inject(job_id=sid, mon=mon, field=field or "",
                       data=sw._cube_bytes())
 
@@ -117,14 +122,29 @@ def _wire_core_hooks() -> None:
 _wire_core_hooks()
 
 
+def _alive_card() -> dict | None:
+    """门牌探活：**唯一实现**在 ``rendezvous.alive()``；这里只兜"studio 缺件"。"""
+    try:
+        from .studio.session import rendezvous as rv
+    except ImportError:      # 异形安装（studio 缺件）：会话形态不存在
+        return None
+    return rv.alive()
+
+
 def _session_client():
-    """MCP/工具面用的"会话把手"：读门牌接上正在跑的 Studio（没有 → None）。
+    """MCP/工具面用的"会话把手"：接上**活着的** Studio（没有 → None）。
+
+    用 ``alive()`` 而不是 ``discover()``：工具面拿到一个已经死掉的 client
+    只会把"没有会话"伪装成"传输错误"。
 
     懒 import：``import genie`` 不该把 fastapi 拉进来（studio 是可选 extra）。
     注入方向也是组合根的老规矩——``integrations`` 不得依赖 ``studio``。
     """
+    card = _alive_card()
+    if card is None:
+        return None
     from .studio.session.session_client import SessionClient
-    return SessionClient.discover()
+    return SessionClient(card["url"], token=card.get("token", ""))
 
 
 def _wire_agent_surface() -> None:
@@ -159,13 +179,12 @@ def connect(base_url: str | None = None, api_key: str | None = None,
     显式参数已退役——传任何连接参数都会被拒并指路；机器预置走 env
     （``GENIE_URL`` / ``GENIE_API_KEY`` / ``GENIE_USERNAME`` / ``GENIE_PASSWORD``）。
 
-    两条轨：
-
-    - **本机有活 Studio**（门牌探活通过）→ 搭车轨：经会话 ``/gw`` 代理，
-      凭据由会话代持（token 不进脚本世界——这条纪律的真值场在 GUI）。
-    - **其余一切情况** → 直拨轨：网关与 token 从 env/凭据仓解析
-      （``resolve_gateway`` / ``resolve_credential``）；解析不出网关 →
-      报错并给"下一步动作"。
+    **一条轨：直拨**。网关与 token 从 env / 凭据仓解析
+    （``resolve_gateway`` / ``resolve_credential``）；解析不出网关 → 报错并
+    给"下一步动作"。**不看门牌**——本机有没有开着 Studio，不改变这行代码
+    连到哪、用谁的凭据（2026-11-01 删掉"搭车轨"：它不多拿任何凭据
+    ——登录截获本来就落盘进凭据仓——却让同一行代码的凭据来源取决于一个
+    文件在不在，是"环境决定行为"）。
 
     （R40/G109 定案：原"无门牌时进程内自起无头会话"引擎整体退役——
     三仓 grep 零消费者实证，同族 G176/G177 随之销账；存在权审查：
@@ -182,15 +201,6 @@ def connect(base_url: str | None = None, api_key: str | None = None,
     from .net import client as _client_mod
     from .net.config import resolve_credential, resolve_gateway
 
-    if not os.environ.get("GENIE_URL"):
-        # 搭车轨：机器没显式指网关（env）且本机有活 Studio 门牌
-        card = _alive_card()
-        if card is not None:
-            return Simulation(_client_mod.Client(
-                card["url"].rstrip("/") + "/gw", None, timeout=timeout,
-                extra_headers={"X-Session-Token": card.get("token", "")}
-                if card.get("token") else None))
-    # 直拨轨（默认；env GENIE_URL 预置时直接走这）
     url = resolve_gateway(None)
     key = resolve_credential(None, "GENIE_API_KEY", "api_key")
     user = resolve_credential(None, "GENIE_USERNAME", "username")
@@ -251,25 +261,3 @@ def open_sweep(sweep_dir) -> "SweepSet":
     from .core.sweep import SweepSet
     return SweepSet(sweep_dir)
 
-
-def _alive_card() -> dict | None:
-    """读门牌并探活；无牌/死牌/读不了 → None（调用方落直拨轨）。
-
-    门牌纪律"不做存活探测"防的是**复用旧会话的模型态**；这里只用
-    它的 /gw 代理（无状态），探测死门牌是为了不把用户引向死路。
-    """
-    try:
-        from .studio.session import rendezvous as rv
-    except ImportError:      # 异形安装（studio 缺件）：会话形态不存在
-        return None
-    card = rv.read()
-    if not (card and card.get("url")):
-        return None
-    try:
-        import requests as _rq
-        if _rq.get(card["url"].rstrip("/") + "/health",
-                   timeout=1.5).status_code != 200:
-            return None
-    except Exception:        # noqa: BLE001 —— 死门牌 = 没有会话
-        return None
-    return card

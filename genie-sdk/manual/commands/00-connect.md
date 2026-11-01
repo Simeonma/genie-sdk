@@ -19,10 +19,12 @@ sub-objects: `f.domain` ([Domain](#f-domain-physical-domain-boundaries)), `f.mes
 are gone. Credentials are injected once per machine by a human (login) or by
 an operator (environment variables) — scripts never carry addresses or keys.
 
-**Two rails (picked automatically, same call):** a live local Studio is
-found → ride it through the session's `/gw` proxy (the script holds no
-credential); otherwise → dial the gateway directly, address and token
-resolved from env / the machine's credential store.
+**One rail: dial the gateway directly.** Address and token are resolved from
+env / the machine's credential store. A running local Studio does **not**
+change where this call goes or which credential it uses — the same script
+behaves the same way whether or not Studio happens to be open (2026-11-01:
+the "ride a live Studio" rail was removed — it borrowed no credential the
+store didn't already have, and made the credential source depend on a file).
 
 Login once per machine (either surface writes the same token store):
 

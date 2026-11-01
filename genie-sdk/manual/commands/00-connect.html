@@ -333,7 +333,7 @@ SDK Docs</a></div></div>
 <tr><td><code>timeout</code></td><td>float</td><td>No</td><td>30.0</td><td>HTTP timeout (s, keyword-only)</td></tr>
 </tbody></table></div>
 <p><strong>Zero-argument is the only form</strong> (2026-10-29): connection parameters are gone. Credentials are injected once per machine by a human (login) or by an operator (environment variables) — scripts never carry addresses or keys.</p>
-<p><strong>Two rails (picked automatically, same call):</strong> a live local Studio is found → ride it through the session's <code>/gw</code> proxy (the script holds no credential); otherwise → dial the gateway directly, address and token resolved from env / the machine's credential store.</p>
+<p><strong>One rail: dial the gateway directly.</strong> Address and token are resolved from env / the machine's credential store. A running local Studio does <strong>not</strong> change where this call goes or which credential it uses — the same script behaves the same way whether or not Studio happens to be open (2026-11-01: the "ride a live Studio" rail was removed — it borrowed no credential the store didn't already have, and made the credential source depend on a file).</p>
 <p>Login once per machine (either surface writes the same token store):</p>
 <pre class="code"><code>genie login                     <span class="cm"># terminal: username + password, once</span>
 genie studio                    <span class="cm"># or log in once in the Studio login gate</span>
