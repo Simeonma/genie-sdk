@@ -560,8 +560,12 @@ function setFileWorkspacePath(root) {
   el.title = root ? "当前工作区：" + root : "";
 }
 async function loadFileWorkspace() {
+  /* 未登录不敲门：/api/workspace 在闸内，裸调会在控制台留一条 401 噪音
+   * （2026-11-02 修：token 缺失直接跳过；登录态下带 X-API-Key 再取）。 */
+  const key = localStorage.getItem("genie_v2_api_key") || "";
+  if (!key) { setFileWorkspacePath(""); return; }
   try {
-    const r = await fetch("/api/workspace");
+    const r = await fetch("/api/workspace", { headers: { "X-API-Key": key } });
     const j = await r.json();
     setFileWorkspacePath(j.root || "");
   } catch { /* 状态面失败不拦页面 */ }

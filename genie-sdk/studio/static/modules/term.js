@@ -41,6 +41,15 @@ const SessionSync = {
     /* 生命周期快照（2026-10 站长裁决「状态监测架构收敛」）：按钮/停止/
      * 进度条 = worker 现值的纯投影——termBusy 降级为纯提交闸门（防本页
      * 双发），显示一律不信它（外部 exec/刷新恢复都靠这里的 server 态）。 */
+    /* 脚本（配方）：worker 里那份变了（agent 改的 / 另一处改的）→ 回填编辑器。
+     * 用户正在编辑器里敲字时不抢（焦点保护同 live.js 的纪律）。 */
+    if (typeof j.script === "string") {
+      const ed = document.getElementById("code-editor");
+      if (ed && document.activeElement !== ed && ed.value !== j.script) {
+        ed.value = j.script;
+        if (typeof hlRefresh === "function") hlRefresh();
+      }
+    }
     if (typeof j.busy === "boolean") {
       setStopVisible(j.busy);
       if (typeof window.__jobPhase === "function")

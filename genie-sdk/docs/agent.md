@@ -1,170 +1,56 @@
-# 给 agent 的入口 —— 用代码驱动 Studio
+# agent.md — 你和用户在用同一个软件
 
-> 这一页写给**模型/agent**（写给人看的是 [快速上手](../manual/commands/quickstart.html)）。
-> 读它就够开始干活；字段级语义见随包手册（[manual/commands/](../manual/commands/index.html)
-> 的 00–12 参考页与教程）。
+Studio 正在跑，用户看着那份**脚本**和它构建出来的**模型**。你没有第二份模型，
+也不需要"模拟登录"：你只是另外一双写同一个编辑器、同一个终端的手。
 
-前提：用户已经把 `genie studio` 跑起来了，浏览器里有一份**他正在看的模型**。
-你的任务是改那一份，**不是另起一份**。
+## 你只有三个动作
 
-## 1. 接上
-
-```python
-from genie.studio.session.session_client import SessionClient
-
-from genie.studio.session import rendezvous as rv
-card = rv.alive()                   # 读门牌并探活（~/.genie/studio.json）
-if card is None:
-    raise SystemExit("没有在跑的 Studio——让用户先启动 genie studio")
-cli = SessionClient(card["url"], token=card.get("token", ""))
-cli.health()                        # 不可达会抛 503，别静默继续
-```
-
-`discover()` 只带出**地址与本地端口口令**——模型只有一份，没有 owner /
-session_id 要传。门牌里还有端口口令——**不需要**用户的 API key，worker
-已经持有了。
-
-## 2. 看一眼现在的模型
-
-```python
-out = cli.output()
-model = out["cfg"]        # 线格式 SimConfig（字段见手册参考页）
-out["busy"]               # True = 有人在跑东西（exec/run/写模型）
-out["phase"]              # exec|submit|queue|run|download|idle
-out["job_id"]             # 当前/最近一次作业的 id（取结果时显式带上）
-```
-
-`cfg` 为 `None` / `{}` = 还没有模型（先 `replace` 一份或跑一段 `exec`）。
-
-## 3. 改一处 —— 默认用最小的那个
-
-```python
-cli.patch([{"path": "mesh.dx", "value": 5e-8}])
-cli.patch([{"verb": "append", "path": "monitor",
-            "value": {"type": "time", "name": "t1", "field": "Ey"}}])
-cli.patch([{"verb": "remove", "path": "geometry.grating"}])   # 名字，不是下标
-```
-
-- `verb` ∈ `set`（缺省）/ `append` / `remove`；细节见上文 §3。
-- 数组那一段**可以是名字**（对象的 `name`）：改/删优先用名字。按下标是
-  "读→算→写"，别人刚插了一个，你动到的就是别人。
-- `append` 应用后的回执路径是**新元素的下标**（往 `monitor` 加一个，
-  回执路径 `monitor.1`）；`remove` 删掉中间元素后，**后续下标自动前移**——
-  删前记住的下标随即作废，别存着复用（要用名字）。
-- `set` 沿路**自动创建缺失的中间节点**（下一段是数字建 list，否则建 dict），
-  所以 `set` 可以直接写深路径；`append` / `remove` 只认**已存在**的数组，
-  不会替你建。数组名解析失败时报错会列出该数组现有名字（前 8 个）——
-  拿不准就照着报错里的名字写。
-- **一批 op 全对或全错**：被拒时模型不动，报错点名第几条、哪个路径。
-- 落地后的快照 `origin=patch` 带 `paths`=本次**实际变动的路径列表**，
-  界面只刷新那几处，不整份回读；`origin=reject` 是这批被拒（模型没动），
-  界面据此回滚——同 §7，别把本地那份当真。
-- 不要为了改一个字段去 `replace` 整份模型，也不要"读整份 → 改 → 写回"
-  （会盖掉别人同时做的改动）。改动的代价阶梯——**用最小那条原语**：
-
-  | 原语 | 代价 |
-  |---|---|
-  | `patch` | 增量解析+校验（最廉） |
-  | `replace` | 全量解析+校验 |
-  | `exec(mode="build")` | 脚本执行+整体重建 |
-
-写入是**异步**的：`patch` 立刻返回，改动稍后落地。等它：
-
-```python
-import time
-
-def wait(cli, seq, tries=200):
-    """等一次写入落地：cfg_seq 前进且不在忙。"""
-    for _ in range(tries):
-        out = cli.output()
-        if out.get("cfg_seq") != seq and not out.get("busy"):
-            return out
-        time.sleep(0.05)
-    raise RuntimeError("写入没落地——看 output()['lines'] 里的 error")
-
-seq = cli.output()["cfg_seq"]
-cli.patch([{"path": "domain.cfl", "value": 0.8}])
-out = wait(cli, seq)      # 新的 cfg 就在 out["cfg"]
-```
-
-## 4. 跑
-
-```python
-cli.run()                       # 提交**当前模型**（不改模型）
-```
-
-要循环、扫参、按数据生成几何，就发一段代码。worker 的命名空间里已经绑好
-`f`（当前模型）、`genie`、`connect`、`run_model`：
-
-```python
-cli.exec("""
-best = None
-for p in [2e-7, 3e-7, 4e-7]:
-    f.geometry[0].x_range = (0, p)
-    jid = run_model()                 # 提交；别用 f.run()
-    print(p, jid)
-""", mode="run")
-```
-
-两种 `mode` 的差别（选错会很难查）：
-
-| mode | 语义 | 用在哪 |
+| 工具 | 做什么 | 什么时候用 |
 |---|---|---|
-| `run`（缺省） | 在当前命名空间执行，改 `f` 就是改模型 | 循环、扫参、试探 |
-| `build` | 在**新**命名空间执行，成功才整体提交 | 想"要么全成要么别动"的整段构造 |
+| `edit_script(text)` | 改编辑器里的脚本（**只改，不跑**） | 要动代码结构时（加结构、改循环、参数化建模） |
+| `run_script()` | 跑当前那份脚本（**整份重建**，原子） | 新模型 / 大改之后 |
+| `run_code(code)` | 在当前模型上**就地执行一段**（增量） | 改一个数值、试表达式、跑扫描、读结果 |
 
-## 5. 取结果
+两个 `run` 都等到落地才返回，带**尾部输出**（含报错行号）——你靠它判断成了没有。
 
-```python
-job = cli.output()["job_id"]
-cli.result_meta(job_id=job)                      # 有哪些监视器/字段
-cli.result_series(job_id=job, mon="t1", field="Ey")
-```
+## 工作流
 
-`job_id` **必填**（G58/G66 定案 2026-10-29：服务端不猜"最近一次"；
-从 `output()["job_id"]` 或作业日志里拿）。
+1. 用户说人话（"把周期改成 5 个"）。
+2. **要改代码** → 先 `edit_script()`（不传 text = 读当前脚本），再
+   `edit_script(整份新文本)`，然后 `run_script()`。
+3. **只改一个值** → `run_code("f.geom.grating.period = 600e-9")`，不用碰脚本。
+4. 看 `output`：成功会有建模摘要；失败带 `✗` 和行号——照行号改，别整份重写猜。
+5. 扫参 / 批处理 → 写进脚本用 `f.sweep(...)`，或 `run_code` 里跑一小段。
 
-## 6. 别做这些
+## 物理与 API 从哪学
 
-- **别自己起第二个 Studio**：一个进程一份模型，第二个实例里那份用户在浏览器里
-  看不到（要新模型请 `cli.new_model()`，那才会丢给用户看的那一份）。
-- **别调 `connect()`**：worker 已经有凭据，`connect()` 只会多开一个实例进合并集。
-- **别用 `f.run()`**：它会把当前模型锁在 `done`（之后要 `reopen()` 才能改）。用 `run_model()`。
-- **别猜字段名**：服务端对未知字段一律 422。不确定就查手册参考页。
-- **别吞错误**：`patch` 被拒、422、503 都要往上报，别重试到没反应。
+**不在工具里**（工具表只有三个动词，不随物理能力增长）。语义真源是随包分发的
+手册（`manual/commands/`，00–12）：
 
-## 7. 报错怎么读
+| 你想知道 | 看 |
+|---|---|
+| 域 / 网格 / 材料 / 几何 / 源 / 监视器怎么设 | 01–06 |
+| 提交、状态机、`f.run()` | 07 |
+| 扫参 `f.sweep()` | 08 |
+| 取结果 `results()` / NDArray 约定 | 09 |
+| 拟合、材料库、参数表 | 10 / 11 / 12 |
 
-| 现象 | 含义 | 怎么办 |
-|---|---|---|
-| `HTTP 422` + 字段名 | 值/形状不合法（或字段不存在） | 按字段改，查手册对应参考页 |
-| `HTTP 503` 本地端口不可达 | Studio 没在跑 / 门牌过期 | 让用户重启，不要自己起服务 |
-| 终端里 `(patch 失败: … 整批未提交)` | 这批 op 全被拒，模型没动 | 按点名的第几条修 |
-| `origin=reject` 的快照 | 同上，这次是界面视角 | 别把本地那份当真 |
+几条硬规矩：单位一律 SI；数值槽也接受表达式字符串（`"20[nm]"`、`"d/4"`，
+走 `f.parameters`）；一个实例只能提交一次（要再跑就新建）。
 
-改完模型建议**看一眼 `cfg`** 再提交——你改的和用户看到的是同一份，
-但你的读写之间，用户可能也动了一下。
+## 纪律
 
-## 8. 如果你是通过 MCP 接入（不能跑代码）
+- **不要另起 Studio**，也不要 `genie.connect()`——worker 已经接管，它只会多开一个实例。
+- **大改走脚本，小改走 `run_code`**：脚本是"模型怎么来的"，散改会让人分不清模型和代码。
+- **失败不自作主张**：`run_script` 失败时模型一个字节没动（原子），把报错原样告诉用户比"修一版试试"更有用。
+- `busy=true` = 有人正在跑（用户或另一个 agent）——等它，不要并发写。
+- 脚本是用户的：改之前先读，改之后把意图说清楚（"我把周期改成 5 个"）。
 
-工具面就是上面那几条路的工具版，语义一一对应：
+## 出错对照
 
-| 工具 | 干什么 | 对应本文 |
-|---|---|---|
-| `get_model` | 读当前模型 + 忙闲/作业 | §2 |
-| `edit_model` | 一条 op 改一处（`set`/`append`/`remove`）；被拒如实报错 | §3 |
-| `run_script` | 发一段脚本（循环/扫参/程序化）；`mode=build` 是事务 | §4 |
-| `run_model` | 提交当前模型（不改模型） | §4 |
-| `get_results` | 结果清单 / 曲线 | §5 |
-| `get_starter_script` | 拿一份已验证可跑的最小样板（**别自己发明 API 写法**） | §4 |
-| `list_materials` | n-k 材料库名单（`f.mat.add_from_library('Au', name='Au')` 用；详见手册 10 · material） | §4 |
-| `login_status` | 本机登录/配置状态（401 时先调它再指引用户 `genie login`） | §1 |
-
-工具描述本身就是 prompt，先读它再调。写是异步的，但 `edit_model` /
-`run_script` 会**等到落地才返回**，所以不用自己写轮询。
-
-两条省轮次/省上下文的约定：
-
-- `edit_model` 的回执只带改动的几处（`{路径: 改后的值}`），不刷整份模型；
-  要看全貌用 `get_model`，大模型可以 `section="monitor"` 只取一节。
-- `run_model` 提交失败会报 `ok=false`——别把它当成功然后一直等作业。
+| 返回 | 意思 |
+|---|---|
+| `session: false` | Studio 没在跑 / 门牌过期 → 让用户 `genie studio` |
+| `空脚本` | 还没写过脚本 → 先 `edit_script` |
+| `output` 里带 `✗` + 行号 | 脚本/代码报错 → 照行号改 |
+| `busy: true` | 有任务在跑 → 等 |

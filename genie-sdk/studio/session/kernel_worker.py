@@ -159,6 +159,9 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
     sess_key = ""
     first_connect_note = True
     restored: list = []      # B2：本次新生由落盘重放出来的实例（重放判据）
+    # 脚本（模型的配方）。2026-11-02：脚本住 worker——它和 f 同生共死，
+    # 界面只是它的视图；MCP 的"改脚本/跑脚本"改的就是这一份。
+    script: str = ""
     real_connect = genie._connect_direct   # 内部直连（公开 connect 已零参化）
     # B2 模型态落盘路径：管理器经 GENIE_STATE_FILE 显式传递（系统文件
     # 住系统空间，2026-10-13 搬家定案）；缺省回退 cwd 仅为独立调试形态
@@ -166,6 +169,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
     # 代码里 os.chdir 不影响恢复快照的读写落点。
     state_path = Path(os.environ.get("GENIE_STATE_FILE")
                       or Path.cwd() / "session_state.json")
+    script_path = state_path.with_name("script.py")
     # 工作区锚（2026-10-20 结果配额修复）：启动即定格为绝对路径——
     # 结果实际由 _auto_save_result 落 **worker cwd** 的 genie_results/
     # （$GENIE_RESULT_DIR 未设时），且用户代码可 os.chdir，故清理目标
@@ -606,6 +610,17 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         except Exception:   # noqa: BLE001 — 落盘失败不炸 worker
             pass
 
+    def persist_script():
+        """把脚本写到状态目录（best-effort）：worker 重生/Studio 重启后还在。"""
+        try:
+            script_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = script_path.with_name(script_path.name + ".tmp")
+            tmp.write_text(script, encoding="utf-8")
+            os.chmod(tmp, 0o600)
+            tmp.replace(script_path)
+        except Exception:   # noqa: BLE001 — 落盘失败不炸 worker
+            pass
+
     def replay_state():
         """B2 重生重放（worker 新生且存在落盘状态时，main 末尾进循环前
         调一次）：读 session_state.json → 逐实例
@@ -617,9 +632,15 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         genie.Simulation(client=None)——connect("") 会抛 ValueError、空串
         还会回落 GENIE_URL 环境变量（串网关风险），故按显式 url 分支。
         任何异常吞掉 + note，恢复失败绝不拦住 worker。"""
-        nonlocal sess_url, sess_key
+        nonlocal sess_url, sess_key, script
+        try:
+            if script_path.exists():
+                script = script_path.read_text(encoding="utf-8")
+                emit({"ev": "script", "text": script})
+        except OSError:                 # 读不了 = 全新脚本
+            script = ""
         if not state_path.exists():
-            return                     # 全新状态目录（无落盘态）：静默，非失败
+            return                     # 全新模型（无落盘态）：静默，非失败
         try:
             st = json.loads(state_path.read_text(encoding="utf-8"))
             cfgs = st.get("sims") or []
@@ -949,12 +970,23 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
     def _step(line):
         # 循环体（本机由下面的 while 驱动；网页同进程形态由 _runtime.InprocRuntime
         # 逐条调用——同一份代码，两个驱动方。见 LEDGER G80 第 4b 步）。
-        nonlocal ns, sims, sim, sess_url
+        nonlocal ns, sims, sim, sess_url, script
         try:
             msg = json.loads(line)
         except json.JSONDecodeError:
             return
         op = msg.get("op")
+        if op == "run_script":
+            # 跑 worker 里那份脚本（不是调用方传的文本）：整份重建，原子。
+            if not script.strip():
+                eid = msg.get("id", 0)
+                emit({"ev": "out", "kind": "error",
+                      "text": "✗ 还没有脚本——先写一份（编辑器 / 改脚本工具）\n"})
+                emit({"ev": "done", "id": eid, "ok": False,
+                      "err": "empty script"})
+                return
+            msg = {**msg, "op": "exec", "code": script, "mode": "build"}
+            op = "exec"
         if op == "attach":                # （R41/S2：旧名 bind 已删——零发送方）
             try:
                 attach(msg)
@@ -1027,6 +1059,13 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
                 emit({"ev": "out", "kind": "error",
                       "text": f"({op} 失败: {e})\n"})
                 emit({"ev": "done", "id": eid, "ok": False, "err": str(e)})
+        elif op == "script":
+            # 改脚本：只改配方，不跑（跑是 run_script / exec(build)）。
+            eid = msg.get("id", 0)
+            script = str(msg.get("text") or "")
+            persist_script()
+            emit({"ev": "script", "text": script})
+            emit({"ev": "done", "id": eid, "ok": True, "err": ""})
         elif op in ("exec", "run"):
             # 注意：ns/sims/sim 是 main() 的局部量，下面直接重新绑定——
             # 闭包（snapshot/session_insts/persist_state…）拿的是同一个 cell，
@@ -1056,6 +1095,13 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
             # 读值分叉——旧前端 reset:true 别名由 /api/exec 转发层接住
             # （session_client），worker 不再抄第二套归一。
             mode = msg.get("mode")
+            if mode == "build":
+                # 整份重建 = "这就是配方"：脚本随之更新并回流（2026-11-02）。
+                # 于是 GUI 点 Run 与 agent 的 run_script 是同一条语义，
+                # 编辑器里的文本永远等于最后跑过的那份。
+                script = code
+                persist_script()
+                emit({"ev": "script", "text": script})
             target_ns = ns
             build_ns = None
             build_sims: list = []

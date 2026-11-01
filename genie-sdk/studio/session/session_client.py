@@ -155,6 +155,18 @@ class SessionClient:
         return self._json("POST", "/model/replace", json_body={
             "model": model, "key": key})
 
+    def set_script(self, text: str) -> dict:
+        """改脚本（只改配方，不跑）→ op id。"""
+        return self._json("POST", "/script", json_body={"text": text})
+
+    def get_script(self) -> dict:
+        """读当前脚本（配方）→ {"text": ...}。"""
+        return self._json("GET", "/script")
+
+    def run_script(self) -> dict:
+        """跑 worker 里那份脚本（整份重建）→ op id。"""
+        return self._json("POST", "/run_script")
+
     def new_model(self) -> dict:
         """丢弃当前模型（2026-11-01：取代"换 session_id"）。"""
         return self._json("POST", "/model/new")
@@ -353,6 +365,23 @@ def register_session_routes(
     @app.post("/api/session/attach")
     async def api_session_attach(req: Request) -> dict:
         return await _attach(req)
+
+    @app.get("/api/script")
+    async def api_script_get() -> dict:
+        """编辑器读脚本（人和 agent 读的是同一份）。"""
+        return await run_in_threadpool(cli.get_script)
+
+    @app.post("/api/script")
+    async def api_script_set(req: Request) -> dict:
+        """编辑器改脚本（只改配方，不跑）。"""
+        body = await req.json()
+        return await run_in_threadpool(
+            cli.set_script, str((body or {}).get("text") or ""))
+
+    @app.post("/api/run_script")
+    async def api_run_script() -> dict:
+        """跑 worker 里那份脚本（整份重建）。"""
+        return await run_in_threadpool(cli.run_script)
 
     @app.post("/api/model/new")
     async def api_model_new() -> dict:

@@ -60,6 +60,15 @@ class LocalSessionHost:
     def replace(self, model: dict, *, key: str = "") -> dict:
         return {"id": _svc.replace_action(model=model, key=key)}
 
+    def set_script(self, text: str) -> dict:
+        return {"id": _svc.get_kernel().set_script(text)}
+
+    def get_script(self) -> dict:
+        return {"text": _svc.get_kernel().script}
+
+    def run_script(self) -> dict:
+        return {"id": _svc.get_kernel().run_script()}
+
     def new_model(self) -> dict:
         """丢弃当前模型（下一个请求从空开始）。"""
         return _svc.new_model()

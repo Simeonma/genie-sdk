@@ -57,7 +57,7 @@ _MANUAL = _PKG / "manual"
 _EXAMPLES = _PKG / "examples"
 _MAX_SCRIPT = 256 * 1024
 # B3/B4 安全两洞先钉（调研裁决）：① /api/scripts/save 原本无大小上限
-# （_MAX_SCRIPT 只管 drafts）——save/上传文本类统一钉 256KiB（超限 413）；
+# ——save/上传文本类统一钉 256KiB（超限 413）；
 # ② \w 裸用连非 ASCII 名都放行（re 无 re.ASCII，实测 "中文脚本.py" 通过）
 # ——所有名字白名单统一 flags=re.ASCII。二进制/数据（multipart 流式）上
 # 限 512MiB：工作区文件是用户仿真产物（savefig 图 / npz/h5 场数据），
@@ -65,31 +65,6 @@ _MAX_SCRIPT = 256 * 1024
 # （注意：`.gensim` 文档容器**不设上限**——2026-10-30 站长裁，文档面
 #  只认格式不认大小；这两个常量只用于 HTTP 上传面。）
 _MAX_BINARY = 512 * 1024 * 1024
-
-
-class DraftRing:
-    """环形脚本文本环（/api/drafts ↔ /__drafts 的服务端存储）。
-
-    通道里只有脚本文本——模型由 worker 执行脚本派生（脚本是本体，cfg 不是
-    同伴负载）。本地单环（进程级 ``_DEFAULT_RING``）。
-    """
-
-    def __init__(self, keep: int = 50):
-        self._keep = keep
-        self._items: list[dict] = []
-
-    def push(self, label: str, script: str) -> dict:
-        item = {"seq": time.time_ns(), "ts": time.time(),
-                "label": label, "script": script}
-        self._items.append(item)
-        del self._items[:-self._keep]
-        return item
-
-    def since(self, seq: int) -> list[dict]:
-        return [d for d in self._items if d["seq"] > seq]
-
-
-_DEFAULT_RING = DraftRing()
 
 
 def create_app(*, static_dir: str | Path | None = None,
@@ -145,7 +120,7 @@ def create_app(*, static_dir: str | Path | None = None,
     @app.middleware("http")
     async def require_signin(request: Request, call_next):
         p = request.url.path
-        gated = p.startswith("/api/") or p.startswith("/__drafts")
+        gated = p.startswith("/api/")
         if (require_auth and gated
                 and not any(p == o or p.startswith(o) for o in _OPEN_PREFIX)):
             if not (request.headers.get("X-API-Key") or "").strip():
@@ -185,23 +160,6 @@ def create_app(*, static_dir: str | Path | None = None,
         from genie.models.resolve import validate_for_ui
         errors = await run_in_threadpool(validate_for_ui, cfg)
         return {"ok": not errors, "errors": errors}
-
-    # ══ SDK → Studio 实时通道（进程级单环 _DEFAULT_RING）════════════
-    @app.post("/api/drafts")
-    async def push_draft(req: Request) -> dict:
-        body = await req.json()
-        label = str(body.get("label") or "sdk")[:64]
-        script = body.get("script")
-        if not isinstance(script, str) or not script.strip():
-            raise HTTPException(status_code=422, detail="script 必须是非空文本")
-        if len(script.encode("utf-8")) > _MAX_SCRIPT:
-            raise HTTPException(status_code=413, detail="script 超 256KiB 上限")
-        item = _DEFAULT_RING.push(label, script)
-        return {"ok": True, "seq": item["seq"]}
-
-    @app.get("/__drafts")
-    def pull_drafts(req: Request, since: int = 0) -> list[dict]:
-        return _DEFAULT_RING.since(since)
 
     # ══ /session 门面 + 网关门面（mount_session=True 时挂）═══════════════
     if mount_session:

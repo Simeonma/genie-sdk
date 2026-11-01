@@ -138,6 +138,11 @@ class AttachIn(BaseModel):
     url: str = ""      # 旧 wire 兼容：后端归 worker env，此字段忽略
 
 
+class ScriptIn(BaseModel):
+    """改脚本（只改配方，不跑）。"""
+    text: str = ""
+
+
 # ── 写路径接待正典（G115 收拢 2026-10-29）─────────────────────────
 # 「attach-then-<动作> + mode 归一」的唯一真源 = 下面四个 *_action：
 # HTTP 路由（/exec /run /model/patch /model/replace）与同进程适配器
@@ -258,6 +263,26 @@ def model_new() -> dict:
     退出登录 / 换账号时调它——"换模型"是一个动作，不是一个新的命名空间。
     """
     return new_model()
+
+
+# ── 脚本（模型配方）：worker 里一份，界面与 agent 读写同一个 ──────
+@app.get("/script")
+def get_script() -> dict:
+    """当前脚本（配方）。没起过 worker → 空串（不为此唤起）。"""
+    k = get_kernel()
+    return {"text": k.script}
+
+
+@app.post("/script")
+def set_script(body: ScriptIn) -> dict:
+    """改脚本（只改配方，不跑；跑是 /run_script）。"""
+    return {"id": get_kernel().set_script(body.text)}
+
+
+@app.post("/run_script")
+def run_script() -> dict:
+    """跑 worker 里那份脚本（整份重建，原子；失败模型不动）。"""
+    return {"id": get_kernel().run_script()}
 
 
 @app.get("/output")

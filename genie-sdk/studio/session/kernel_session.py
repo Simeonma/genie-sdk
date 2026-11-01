@@ -146,6 +146,7 @@ class SessionKernel:
         # 相位现值：worker 的 state 事件原样存（本类不改写），output() 投影出去。
         self._worker_phase = "idle"
         self._job_id = ""
+        self._script = ""       # 脚本（模型配方）：真源在 worker，这里只镜像
         self._key = ""          # 授权凭据（可空）：换绑只改这一格
         self._next_id = 1
         # B2 落盘（状态目录 0700，文件 0600 各写点收紧）：
@@ -224,6 +225,32 @@ class SessionKernel:
         self._begin(eid, "run")
         self._send({"op": "run", "id": eid, "gpu": gpu,
                     "timeout_s": timeout_s,
+                    "url": resolve_gateway(), "key": self._key})
+        return eid
+
+    # ---- 脚本（模型配方）：和 f 同一个家（worker），界面只是视图 ----
+
+    @property
+    def script(self) -> str:
+        with self._lock:
+            return self._script
+
+    def set_script(self, text: str) -> int:
+        """改脚本（**只改配方，不跑**）→ op id。跑是 ``run_script``。"""
+        self._ensure()
+        eid = self._next_id
+        self._next_id += 1
+        self._begin(eid, "script")
+        self._send({"op": "script", "id": eid, "text": str(text or "")})
+        return eid
+
+    def run_script(self) -> int:
+        """跑 worker 里那份脚本（整份重建，原子）→ op id。"""
+        self._ensure()
+        eid = self._next_id
+        self._next_id += 1
+        self._begin(eid, "run_script")
+        self._send({"op": "run_script", "id": eid,
                     "url": resolve_gateway(), "key": self._key})
         return eid
 
@@ -338,6 +365,7 @@ class SessionKernel:
                     "busy": bool(self._inflight),
                     "phase": self._worker_phase if self._inflight else "idle",
                     "job_id": self._job_id,
+                    "script": self._script,
                     "cfg": cfg.get("cfg"),
                     "resolved": cfg.get("resolved"),
                     "cfg_seq": self._cfg_seq,
@@ -400,6 +428,7 @@ class SessionKernel:
             self._inflight.clear()
             self._worker_phase = "idle"
             self._job_id = ""
+            self._script = ""
         if self._ring_fh is not None:
             try:
                 self._ring_fh.close()
@@ -407,7 +436,8 @@ class SessionKernel:
                 pass
             self._ring_fh = None
         for p in (self._state_path, self._ring_path,
-                  _session_root() / "doc.json"):
+                  _session_root() / "doc.json",
+                  _session_root() / "script.py"):
             try:
                 p.unlink()
             except OSError:
@@ -585,6 +615,10 @@ class SessionKernel:
             self._emit(ev.get("kind") or "stdout",
                        ev.get("text", ""), "worker",
                        data=data)
+        elif kind == "script":
+            # 脚本变更（谁改的都一样：GUI 编辑器 / MCP 的改脚本工具）。
+            with self._lock:
+                self._script = str(ev.get("text") or "")
         elif kind == "cfg":
             with self._lock:
                 self._cfg = {"cfg": ev.get("cfg"),

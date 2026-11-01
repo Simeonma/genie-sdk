@@ -102,7 +102,7 @@ def gateway_source() -> tuple[str | None, str | None]:
     SDK 侧不认——同一台机器上"SDK 连 A、GUI 连 localhost"。现在两层共用
     这一条链，且都直接调 ``resolve_gateway()``。
 
-    报地址给人/agent 看的面（mcp login_status、CLI connect 展示）一律走
+    报地址给人的面（CLI 展示）一律走
     这里，别手抄链——手抄份不归一时，报出去的地址会和实际拨号地址字形
     不同（G101 清账 2026-10-27 前的实测病灶）。
     """
