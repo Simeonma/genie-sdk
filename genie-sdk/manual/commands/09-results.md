@@ -74,12 +74,10 @@ matplotlib on the SDK side; the old `data.plot` was removed — R36).
 Push a monitor's result to the Studio **Plot panel** — the interactive
 result browser (1D curves with any axis as x, 2D cross-sections with any
 two axes as x/y, slice pickers for the remaining axes, hover readouts,
-zoom). Two trigger paths, one experience:
+zoom). One trigger path (2026-11-02: the external push leg was removed):
 
-- **Inside a Studio session** (script editor / terminal): the session wires
-  `f.visualize` for you.
-- **Outside** (your own terminal, bare `genie.connect()`): the result h5 is
-  uploaded to your session and the Plot panel opens automatically.
+- **Inside Studio** (script editor / terminal): the worker wires
+  `f.visualize` for you and emits a `plot` event to the Plot panel.
 
 ```python
 f.run()

@@ -1,8 +1,9 @@
 # Quickstart
 
 > A complete no-wizard, copy-paste starter: one grating transmission simulation,
-> from `connect()` to a plot, in about 30 lines. Every step links to the
-> full reference.
+> from a recipe to a plot, in about 30 lines. Every step links to the full
+> reference. **Runs inside Studio** — that is the only place a simulation runs
+> (2026-11-02); the editor is where the recipe lives, and the worker executes it.
 
 ## Install
 
@@ -47,21 +48,25 @@ genie studio                 # GUI: File → Workspace… picks the same setting
 ```
 
 Unset, the workspace defaults to `~/data/genie/scripts`; result files land
-under `<workspace>/<owner>/genie_results/`, and after every successful run
-the current simulation is auto-saved to `<workspace>/<owner>/<session>.gensim`
-(no manual save needed). Opening a `.gensim` in Studio (`File → Open…`)
+under `<workspace>/genie_results/`, and after every successful run the current
+simulation is auto-saved as a `.gensim` document — to the document you have
+open if there is one, otherwise into `<workspace>/runs/` (no manual save
+needed). Opening a `.gensim` in Studio (`File → Open…`)
 also **switches the workspace to that file's folder** and makes the opened
 file the auto-save target — so a run updates the document you opened.
 
-## The whole script
+## The whole recipe
 
-This is a real, runnable simulation — a 10-period dielectric grating with a
-plane-wave source and a frequency-domain transmission monitor:
+Paste this into Studio's **script editor** and press **Run** (Ctrl+Enter).
+It is a real simulation — a 10-period dielectric grating with a plane-wave
+source and a frequency-domain transmission monitor. (Running it outside
+Studio is refused by design: `connect()` raises, because the only execution
+surface is the worker inside Studio.)
 
 ```python
 import genie
 
-f = genie.connect()   # credentials come from `genie login` (once per machine)
+f = genie.connect()   # inside Studio the worker takes this over (fresh instance)
 
 # 1 · physical domain (SI units throughout)
 f.domain.x_range = (-2e-6, 2e-6)
