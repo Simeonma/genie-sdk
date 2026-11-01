@@ -14,3 +14,14 @@ from __future__ import annotations
 
 TERMINAL_OK = "succeeded"
 TERMINAL_BAD = ("failed", "killed", "archived")
+
+
+class StateError(RuntimeError):
+    """动作与当前实例状态不符（生命周期拒绝；不是配置错、不是服务端错）。
+
+    ``Simulation`` 的状态机守卫统一抛这个（2026-10-31 状态统一裁）：
+    ``editing`` / ``running`` / ``done`` / ``failed`` 四态，动作不许就报错、
+    不静默返回。继承 ``RuntimeError``：老调用方的 ``except RuntimeError``
+    继续接得住。
+    """
+

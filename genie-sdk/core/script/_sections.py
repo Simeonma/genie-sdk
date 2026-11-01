@@ -568,7 +568,7 @@ def _gen_monitor(list_, W: list, env: dict) -> list[str]:
         out.extend(_chain(first, parts))
     return out
 
-def _gen_run(cfg: dict, W: list, env: dict) -> str | None:
+def _gen_run(cfg: dict, W: list, env: dict) -> str:
     # G18 单旋钮：时长在 domain.total_time（_gen_domain 渲染），run 节
     # 只剩 gpu/timeout_s——f.run() 无步数参数（跑到网格时间容量）。
     r = cfg.get("run") or {}
@@ -585,8 +585,8 @@ def _gen_run(cfg: dict, W: list, env: dict) -> str | None:
         kw.append("timeout_s=" + to)
     return "f.run(" + (", ".join(kw)) + ")"
 
-def _gen_results(monitors, has_run: bool) -> list[str]:
-    if not has_run or not (monitors or []):
+def _gen_results(monitors) -> list[str]:
+    if not (monitors or []):
         return []
     out = []
     used = set()

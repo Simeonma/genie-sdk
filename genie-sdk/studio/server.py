@@ -40,11 +40,12 @@ from starlette.background import BackgroundTask
 import genie
 from genie.models import LIBRARY_FIT_DEFAULTS
 
-# 工作区根**唯一解析点**（M2）：此前 studio 侧另有一份 GENIE_SCRIPTS_DIR
-# 解析，只设 GENIE_SESSION_CWD 时两处得出不同根目录——"文件面板看不到
-# 脚本/结果"的根源。现在双方都调 kernel_session.workspace_root()。
-from .kernel_session import workspace_root
-from .session_client import (SessionClient, register_result_routes,
+# 工作区根**唯一解析点** = `core.paths.workspace_root`（2026-11-01 收口）：
+# 此前是 `core.paths` ← `workspace_setting.current_root` ← `kernel_session.
+# workspace_root` 三层零逻辑别名，server 从最外层取。现在直接取叶子。
+from genie.core.paths import workspace_root
+from .session.kernel_session import owner_dir
+from .session.session_client import (SessionClient, register_result_routes,
                                          register_session_routes)
 
 _STUDIO = Path(__file__).resolve().parent / "static"
@@ -113,9 +114,10 @@ def create_app(*, static_dir: str | Path | None = None,
     可显式退回"本机免登录"形态（调试/纯本地离线场景）。
     """
     static = Path(static_dir) if static_dir else _STUDIO
-    # B1 按人隔离：req → owner。缺省 = 本地形态固定 owner（M1 遗留：本地
-    # 单用户，owner 不跟随登录账号；见 LEDGER）。
-    from .session_client import resolve_owner
+    # owner_of：Studio **自己**拼路径用（文件面板 / 结果 / 文档指针），与
+    # 会话的 owner 同源（同一个 resolve_owner），但不经请求面——会话 owner
+    # 由入口注入一次（2026-11-01 A4a/A4b 收口）。owner_fn 只给测试注入。
+    from .session.session_client import resolve_owner
     owner_of = owner_fn or (lambda request: resolve_owner())
     key_of = req_key
     if session is not None:
@@ -210,10 +212,10 @@ def create_app(*, static_dir: str | Path | None = None,
 
     # ══ 会话门面 + 网关门面（mount_session=True 时挂）═══════════════
     if mount_session:
-        register_session_routes(app, owner_of=owner_of,
+        register_session_routes(app,
                                 exec_credentials_of=key_of,
                                 client=sess, on_attach=on_attach)
-        register_result_routes(app, owner_of=owner_of, client=sess)
+        register_result_routes(app, client=sess)
 
         async def _gw_fwd(req: Request, up: str, *, timeout: float) -> Response:
             """转发一次后端调用（体字节透传、状态码穿透）。
@@ -250,7 +252,7 @@ def create_app(*, static_dir: str | Path | None = None,
         @app.post("/api/identity/clear")
         async def identity_clear() -> dict:
             from genie.net.config import clear_config
-            from genie.studio import session_service as _ss
+            from genie.studio.session import session_service as _ss
             clear_config("api_key", "username")
             _ss._CRED = {}
             return {"ok": True}
@@ -370,7 +372,7 @@ def create_app(*, static_dir: str | Path | None = None,
     # 路由，带本机口令（session_service.set_token 由入口设置）。于是
     # "一个进程、一个端口"：GUI 的 8777 同时也是 console 的会话入口。
     if share_session:
-        from genie.studio import session_service as _session_service
+        from genie.studio.session import session_service as _session_service
         app.mount("/session", _session_service.app)
 
     # ── 脚本工作区 ────────────────────────────────────────────────
@@ -378,10 +380,7 @@ def create_app(*, static_dir: str | Path | None = None,
     # 目录名，白名单 = session_client.check_owner。
     import re as _re
 
-    from genie.studio.session_client import check_owner
-
-    _scripts_dir = workspace_root()
-    _scripts_dir.mkdir(parents=True, exist_ok=True)
+    from genie.studio.session.session_client import check_owner
 
     def _owner_scripts_dir(req: Request) -> Path:
         """本请求的 owner 脚本目录 = **当前**工作区根/<owner>/（懒落位 0700）。
@@ -389,13 +388,14 @@ def create_app(*, static_dir: str | Path | None = None,
         工作区根**每次请求重解析**（G4a 2026-10-30）：`genie workspace` /
         Workspace… 按钮切换后，文件面板/导入/结果必须立刻跟到新根——修前
         在这里把根钉死在进程启动时，换根要重启 Studio 才生效。
+
+        目录本身**只经 ``kernel_session.owner_dir`` 一处创建**（2026-11-01
+        收口：此前这里有一份同路径、同 mkdir、同 0700 的第二份实现）。
+        本函数只多做一件它该做的事：owner 白名单校验。
         """
-        owner = str(owner_of(req) or "local")
+        owner = owner_of(req)
         check_owner(owner)
-        d = workspace_root() / owner
-        d.mkdir(parents=True, exist_ok=True)
-        os.chmod(d, 0o700)   # mkdir 的 mode 受 umask 影响，落位后显式收紧
-        return d
+        return owner_dir(owner)
 
     # B3 工作区放宽面（调研裁决）：基名 [\w\-]{1,64}（re.ASCII）+ 扩展名
     # 白名单。scripts 三端点与工作区端点族共用同一守卫——名字白名单防
@@ -448,7 +448,7 @@ def create_app(*, static_dir: str | Path | None = None,
     # 机器级持久设置（~/.genie/workspace.json）的唯一读写口；本地 Studio
     # 的 Workspace… 按钮走 POST（无 path → 服务端原生目录对话框），
     # 换根后当前会话自动重挂（GENIE_RESULT_DIR/GENIE_DOC_PATH 是 spawn env）。
-    from . import workspace_setting as _ws
+    from .views import workspace_setting as _ws
 
     @app.get("/api/workspace")
     async def workspace_get() -> dict:
@@ -460,8 +460,8 @@ def create_app(*, static_dir: str | Path | None = None,
         if _ws.source() == "env":
             raise HTTPException(
                 status_code=409,
-                detail="本机设了 GENIE_SESSION_CWD / GENIE_SCRIPTS_DIR，"
-                       "环境变量优先——请改环境变量，或先移除它们再选工作区")
+                detail="本机设了 GENIE_SCRIPTS_DIR（旧名 GENIE_SESSION_CWD），"
+                       "环境变量优先——请改环境变量，或先移除它再选工作区")
         body = {}
         try:
             body = await req.json()
@@ -481,12 +481,11 @@ def create_app(*, static_dir: str | Path | None = None,
         except ValueError as e:
             raise HTTPException(status_code=422, detail=str(e))
         outcome = "remote"
-        if sess is not None and hasattr(sess, "restart_for_workspace"):
-            from .session_client import DEFAULT_SESSION, check_session_id
+        if sess is not None and hasattr(sess, "respawn_for_paths"):
+            from .session.session_client import DEFAULT_SESSION, check_session_id
             try:
                 r = await run_in_threadpool(
-                    sess.restart_for_workspace,
-                    owner=owner_of(req),
+                    sess.respawn_for_paths,
                     session_id=check_session_id(
                         req.headers.get("X-Session-Id") or DEFAULT_SESSION))
                 outcome = "busy" if r.get("busy") else "restarted"
@@ -496,13 +495,13 @@ def create_app(*, static_dir: str | Path | None = None,
 
     @app.post("/api/sim/open")
     async def sim_open(req: Request) -> dict:
-        """打开本机 ``.gensim``（服务端原生对话框）→ **工作区切到它所在目录**。
+        """打开本机 ``.gensim``（服务端原生对话框）——**载入 + 钉存档**。
 
-        与浏览器上传的本质区别：本机 Python 进程拿得到**真实路径**。所以
-        "打开文件"能同时做三件事（G4a 2026-10-30 站长定案）：
-        ① 载入模型；② 工作区根 = 文件所在文件夹（结果/脚本跟着走）；
-        ③ 把自动存档钉回这个文件（之后跑完直接更新它）。
-        文件恢复/结果回落复用 ``sim_import`` 的同一份实现。
+        2026-11-01 裁：打开**不动工作区**。文档装的是"这个仿真"（配置 +
+        结果 + state），不是"文件所在的文件夹"；工作区是位置属性，由用户
+        显式切换（Workspace… / ``genie workspace``）。
+        本机 Python 进程拿得到真实路径，所以能做两件事：
+        ① 载入模型；② 把自动存档钉回这个文件（之后跑完直接更新它）。
         """
         body = {}
         try:
@@ -520,20 +519,16 @@ def create_app(*, static_dir: str | Path | None = None,
         p = Path(path).expanduser()
         if not p.is_file():
             raise HTTPException(status_code=422, detail=f"文件不存在：{p}")
-        if _ws.source() == "env":
-            switched = _ws.current_root()      # env 优先：不切根，如实回报
-        else:
-            switched = await run_in_threadpool(_ws.set_root, p.parent)
-        from .session_client import DEFAULT_SESSION, check_session_id
+        from .session.session_client import DEFAULT_SESSION, check_session_id
         sid = check_session_id(req.headers.get("X-Session-Id")
                                or DEFAULT_SESSION)
-        from .kernel_session import set_doc_path
+        from .session.kernel_session import set_doc_path
         await run_in_threadpool(set_doc_path, owner_of(req), sid, str(p))
         sess_state = "remote"
-        if sess is not None and hasattr(sess, "restart_for_workspace"):
+        if sess is not None and hasattr(sess, "respawn_for_paths"):
             try:
                 r = await run_in_threadpool(
-                    sess.restart_for_workspace, owner=owner_of(req),
+                    sess.respawn_for_paths,
                     session_id=sid)
                 sess_state = "busy" if r.get("busy") else "restarted"
             except Exception:   # noqa: BLE001 —— 会话侧故障不拦打开
@@ -541,7 +536,7 @@ def create_app(*, static_dir: str | Path | None = None,
         from starlette.datastructures import UploadFile as _UploadFile
         with open(p, "rb") as fh:
             out = await sim_import(req, _UploadFile(file=fh, filename=p.name))
-        out.update({"workspace": str(switched), "doc": str(p),
+        out.update({"workspace": str(workspace_root()), "doc": str(p),
                     "session": sess_state})
         return out
 
@@ -629,17 +624,16 @@ def create_app(*, static_dir: str | Path | None = None,
         if not isinstance(cfg, dict) or not cfg:
             raise HTTPException(status_code=422,
                                 detail="还没有可存储的配置——先运行脚本或在表单里搭好配置")
-        ws = _owner_scripts_dir(req)
         job_id = str(body.get("job_id") or "")
         result_p = None
         result_data = None
         state = None
         if job_id:
             # G182 P3：结果主来源 = 会话当前文档（内嵌 h5）→ 旧 h5 回退。
-            from genie.studio import results_view
-            from genie.core import simfile as _simfile
-            from .kernel_session import doc_path, workspace_root
-            from .session_client import DEFAULT_SESSION
+            from genie.studio.views import results_view
+            from genie.core.archive import simfile as _simfile
+            from .session.kernel_session import doc_path
+            from .session.session_client import DEFAULT_SESSION
             sid = req.headers.get("X-Session-Id") or DEFAULT_SESSION
             owner = owner_of(req)
             try:
@@ -663,14 +657,14 @@ def create_app(*, static_dir: str | Path | None = None,
                              "dt": st["dt"], "grid_shape": st["grid_shape"]}
 
         def _pack(tmp_path: str) -> None:
-            # 容器格式 = genie.core.simfile（正典，G4a 2026-10-30）——
-            # 本端点只负责"取当前工作区文件 + 结果来源"，打包/守卫零手抄。
-            from genie.core import simfile
-            files = [p for p in sorted(ws.iterdir(), key=lambda x: x.name)
-                     if p.is_file() and not p.name.startswith(".")
-                     and not p.name.endswith(".part")]
+            # 容器格式 = genie.core.archive.simfile（正典）——本端点只负责
+            # 取结果来源，打包/守卫零手抄。
+            # 2026-11-01 裁：**不再打包工作区文件**——文档装"这个仿真"
+            # （配置 + 结果 + state），不装"当时那个文件夹"；此前这里扫
+            # `<workspace>/<owner>/` 全量入包，包内容随工作区位置变化。
+            from genie.core.archive import simfile
             simfile.write(tmp_path, cfg, result_path=result_p,
-                          result_data=result_data, state=state, files=files)
+                          result_data=result_data, state=state)
 
         tmp = tempfile.NamedTemporaryFile(suffix=".gensim", delete=False)
         tmp.close()
@@ -697,7 +691,7 @@ def create_app(*, static_dir: str | Path | None = None,
         finally:
             await file.close()
         try:
-            from genie.core import simfile
+            from genie.core.archive import simfile
             try:
                 zf = zipfile.ZipFile(tmp.name)
             except zipfile.BadZipFile:
@@ -727,9 +721,9 @@ def create_app(*, static_dir: str | Path | None = None,
                     raise HTTPException(status_code=422,
                                         detail="配置未通过校验：" + first)
 
-                # 后解包：逐成员流式落盘（校验先行，失败零落盘）
-                ws = _owner_scripts_dir(req)
-                restored: list[str] = []
+                # 后解包：结果成员流式落盘（校验先行，失败零落盘）。
+                # 2026-11-01：文档不再带 workspace/ 成员——"打开"不往工作区
+                # 写任何文件。
                 result_job = None
                 state_obj = None
                 if "state.json" in names:
@@ -746,9 +740,8 @@ def create_app(*, static_dir: str | Path | None = None,
                     raise HTTPException(
                         status_code=422,
                         detail="容器含 results/ 但缺 state.json（job_id）")
-                from genie.studio import results_view
-                from .kernel_session import workspace_root
-                from .session_client import DEFAULT_SESSION
+                from genie.studio.views import results_view
+                from .session.session_client import DEFAULT_SESSION
                 sid = req.headers.get("X-Session-Id") or DEFAULT_SESSION
                 for n in names:
                     if n == "simconfig.json" or n == "state.json" or not n:
@@ -781,21 +774,12 @@ def create_app(*, static_dir: str | Path | None = None,
                         rp.with_name(rp.name + ".part").replace(rp)
                         os.chmod(rp, 0o600)
                         continue
-                    if not n.startswith("workspace/") or "/" in n[len("workspace/"):]:
-                        raise HTTPException(status_code=422,
-                                            detail="仿真文件含容器外成员（%s）——拒绝" % n)
-                    base = n[len("workspace/"):]
-                    p = _workspace_file(ws, base)   # 名守卫：基名白名单，违者 422
-                    with zf.open(n) as src, p.with_name(p.name + ".part") \
-                            .open("wb") as out:
-                        while True:
-                            chunk = src.read(1 << 20)
-                            if not chunk:
-                                break
-                            out.write(chunk)
-                    p.with_name(p.name + ".part").replace(p)
-                    restored.append(base)
-                out_resp: dict = {"ok": True, "cfg": cfg, "restored": restored}
+                    # 只剩未知成员：validate_structure 已拦（workspace/ 自
+                    # 2026-11-01 取消），这里再兜一层，避免将来加成员漏判。
+                    raise HTTPException(
+                        status_code=422,
+                        detail="仿真文件含未知成员（%s）——拒绝" % n)
+                out_resp: dict = {"ok": True, "cfg": cfg}
                 if res_names:
                     out_resp["has_results"] = True
                     out_resp["job_id"] = result_job

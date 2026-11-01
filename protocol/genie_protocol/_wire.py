@@ -1,4 +1,4 @@
-"""genie.models._wire — SimConfig 线格式的唯一真源（全部 pydantic 模型）。
+"""genie_protocol._wire — SimConfig 线格式的唯一真源（全部 pydantic 模型）。
 
 > 2026-10 迁移阶段 1a：自内核 ``fdtd/serve/schema.py`` 81-935 行逐字迁入
 > （framework.md §三 / migration-plan.md 阶段 1，站长已确认）。内核侧
@@ -578,11 +578,6 @@ def norm_vertices_pairs(vertices):
     return out
 
 
-# 旧私有名兼容（models/__init__ 名字表的历史条目；G2 起 builder 等
-# 消费方统一用公共名——polygon 哨兵归一自此单一实现）
-_norm_vertices_pairs = norm_vertices_pairs
-
-
 def _ser_vertices_json(verts):
     """(nan, nan) 内核哨兵 → JSON [null, null]（哨兵 JSON 往返闭合）。
     model_dump(json) 输出 NaN 字面量则 runner 二次 SimConfig 校验必拒
@@ -912,7 +907,8 @@ MonitorSpec = Annotated[
 # run 节（G18 2026-10-16 站长裁决，方案 A 单旋钮）：**唯一时间定义 =
 # domain.total_time**（SI 秒，gt=0 必填，见 DomainSpec）——作业推进到
 # 网格时间容量为止，步数是 build 后的派生量（summary/results 只读面）。
-# run 节本身只剩服务字段：gpu = 可选上限（ge=1 le=4，跨仓契约
+# run 节本身只剩服务字段：gpu = 可选上限（ge=1
+# le=MAX_GPU_PER_RUN（当前 8），跨仓契约
 # 2026-10-25：给几张卡由网关裁定；装不下 422、无空闲卡排队——
 # G84 清账 2026-10-27 前误写"卡数/显存不足 FAILED"）、timeout_s = 作业
 # 超时。旧 run.n_steps（实际推进步数第二旋钮）退役——容量/步数双旋钮
@@ -1121,8 +1117,9 @@ class SweepSpec(_StrictModel):
     R39（G169 站长裁 C+）：执行旋钮 ``gpus_per_sim`` / ``max_parallel`` /
     ``on_failure`` 自本类退役——它们是"服务端跑扫描"年代搭 wire 车的
     本地执行参数，R24c 客户端展开后 SweepSpec 根本不上线（唯一消费方
-    是 SDK 本地校验+展开），却自带一份抄错的上限（le=8 vs RunSpec.gpu
-    le=4，G169 矛盾的病根）。旋钮唯一住所 = ``f.sweep()`` 的 Python
+    是 SDK 本地校验+展开），却自带一份手抄上限（历史：SweepSpec 写
+    le=8，而当时 RunSpec.gpu 是 le=4——G169 矛盾的病根；现两处统一为
+    MAX_GPU_PER_RUN=8）。旋钮唯一住所 = ``f.sweep()`` 的 Python
     签名（转发每点 ``run(gpu=…)``），上限单一来源 MAX_GPU_PER_RUN，
     sweep 调用点早校验（core/simulate._sweep_points）。
     """

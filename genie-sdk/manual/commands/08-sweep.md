@@ -20,10 +20,10 @@ independent `Simulation` per point — nothing has been submitted yet.
 |---|---|---|---|---|
 | `parameters` | list | yes | — | Axis form: `[{"name": "pitch", "linspace": [10e-9, 40e-9, 4]}, …]`; each axis is `{"name": …}` plus exactly one of `values` / `linspace` / `logspace` (violating → `SweepExpandError`); `name` must be a key of the base `parameters` table |
 | `gpus_per_sim` | int | no | 1 | GPU cap per point — passed to each point's `run(gpu=…)` (a real knob); same cap as `run(gpu=…)` itself (1..8, single protocol constant), out-of-range raises `SweepExpandError` at the call point |
-| `max_parallel` | int | no | 1 | Concurrent points in flight (1 = strictly sequential; capped by your quota) |
+| `max_parallel` | int | no | 1 | Concurrent points in flight (1 = strictly sequential; local hard cap 1..16 — out-of-range raises `SweepExpandError`; also capped by your quota) |
 | `on_failure` | str | no | `"continue"` | `"continue"` (bad points mark `failed`, the rest run) / `"abort"` (first bad point **of any bad kind** — `failed`/`killed`/`archived` — stops scheduling and cancels in-flight points) |
 | `mode` | str | no | `"product"` | `"product"` (Cartesian) / `"zip"` (axes paired element-wise, equal lengths required) |
-| `name` | str | no | first axis name | Sweep folder name: `<workspace>/[owner/]sweeps/<name>-<timestamp>/` |
+| `name` | str | no | axis name / `"sweep"` | Sweep folder name (`<workspace>/[owner/]sweeps/<name>-<timestamp>/`): with a single axis the axis name, otherwise `"sweep"` |
 
 **Local expansion constraints** (`SweepExpandError` at the `f.sweep()`
 call point): at most 32 axes; at most 512 expanded points by default
@@ -54,8 +54,9 @@ single submission primitive. What each point gets for free:
 - ordinary-job tracking (job id, digest, cancellation) through the
   session gateway.
 
-Failed and canceled points also get a document (`state.json` with the
-error, no result member) — the folder is auditable. The `sweep.json` index
+Failed and canceled points also get a document (the same `.gensim`, its
+embedded `state.json` carrying the error — no result member) — the folder
+is auditable. The `sweep.json` index
 is written before the start (all points `pending`) and updated at every
 point terminal and at the sweep terminal.
 
@@ -67,7 +68,8 @@ your quota remains authoritative.
 ## SweepHandle
 
 Handle-side state machine: `pending → running → done | canceled | failed`
-— `failed` only when **every** point ended bad (failed/killed/canceled);
+— any canceled point → `canceled` (takes precedence); otherwise `failed`
+only when **every** point ended bad (`failed`/`killed`/`archived`);
 any success → `done`.
 
 | Attribute | Type | Description |
@@ -86,9 +88,9 @@ any success → `done`.
 | Method | Description |
 |---|---|
 | `wait(timeout=None, progress=None)` | Execute all points to a terminal state and return the final status dict. `done` → returned; `failed`/`canceled` → raises `GenieJobError` carrying the rollup. `timeout` expiry → `GenieHTTPError` (408); execution is not killed — re-enter `wait()` with no arguments to resume (finished points are skipped). In sequential mode (the default) the timeout is checked between points, so the raise can land later than `timeout` if a point runs long. `progress=True` prints a one-line rollup per step; a callable receives `progress(status)` |
-| `results()` | The sweep's result — **the same `SimData` a single run returns**, with one extra leading axis per swept parameter (see below). Reads the point documents; zero HTTP |
+| `results()` | The sweep's result — **the same `SimData` a single run returns**, with one extra leading axis per swept parameter (see below). Reads the point documents; zero HTTP (if a point document is missing/corrupt on a live handle, that point falls back to its instance path, which may re-fetch over HTTP) |
 | `visualize(mon, field=None)` | Push the sweep's result to the Studio Plot panel — the same verb as `Simulation.visualize`. The panel's axis pickers gain the parameter axes (pick one for a 2-D map, leave the rest as slices). Needs a GUI session; there is no local plotting fallback |
-| `status()` | Pure local assembly `{sweep_id, state, dir, rollup, points: [{idx, state, job_id, doc}]}` — **no network call** |
+| `status()` | Pure local assembly `{sweep_id, state, dir, rollup, points: [{idx, state, job_id}]}` — **no network call** (the richer per-point view with document paths is `SweepSet.status`, see `genie.open_sweep`) |
 | `rollup()` | Local count dict over per-point states (`{"succeeded": 3, "running": 1, …}`) |
 | `cancel()` | Idempotent: in-flight child jobs are cancelled one by one (via each point's live job id), remaining points marked `canceled` |
 

@@ -1,4 +1,4 @@
-"""genie.models.resolve — 参数解析（COMSOL 式参数替换 + 求值结果校验）。
+"""genie_protocol.resolve — 参数解析（COMSOL 式参数替换 + 求值结果校验）。
 
 > 2026-10 迁移阶段 1a：自内核 ``fdtd/serve/schema.py`` 1063-1285 行逐字
 > 迁入，**跳过 parse_config 编排**——它的尾巴上调内核资源守卫

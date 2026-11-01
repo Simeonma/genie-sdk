@@ -23,17 +23,61 @@ Expression syntax and evaluation rules are defined authoritatively in
 ## `f.run()`
 
 The synchronous entry point: implies submission (serialize + local precheck
-+ POST), polls until a terminal state, then **automatically downloads the
-results** to `<job_id>_results.h5` under `$GENIE_RESULT_DIR` (default
-`./genie_results/`; on failure it only warns — `results()` re-fetches on
-demand). Returns the `Simulation` itself (`state == "done"`), ready for
++ POST), polls until a terminal state, then **archives the results into a
+`.gensim` document** — the result bytes land inside the archive as the
+`results/<job_id>_results.h5` member (no standalone h5 file is written).
+The document path: the file you opened (if any) is updated in place;
+otherwise it is created at `<workspace>/runs/<job_id>.gensim`.
+On archiving failure it only warns — `results()` re-fetches on demand.
+Returns the `Simulation` itself (`state == "done"`), ready for
 `f.get_freq('tr')`.
+
+**One instance, one run.** A finished instance (`state` is `done` or
+`failed`) is locked: `run()` raises `StateError`, and the configuration
+rejects edits — a finished instance cannot be edited in place. The only
+way back is `f.reopen()`, and that is an explicit statement that you are
+abandoning that run's results: the job binding and the in-memory result
+cache are cleared, so `results()` / `get_*` stop working. Nothing is lost
+on disk: the archived `.gensim` still holds the results, and
+`genie.open(path)` reads them back.
+
+```python
+f.run()
+f.reopen()          # back to editing; this instance no longer points at that run
+f.mesh.dx = 2e-8
+f.run()             # a new job
+```
+
+`reopen()` is allowed only from `done` / `failed`; calling it while already
+`editing` raises (no silent no-op), and `running` must go through `wait()`
+or `cancel()` first.
+
+`run()` never re-submits a live instance: while `state == "running"` it
+raises. If the local wait times out (`GenieHTTPError`, status 408) the job
+is still running on the server — resume waiting with `f.wait()` (below),
+which never submits again.
+
+## `f.wait()`
+
+Resumes waiting for the **in-flight** job and returns the instance in its
+terminal state. It only polls: no submission, no config change, no retry.
+
+```python
+try:
+    f.run()
+except GenieHTTPError:      # local wait timed out; the job keeps running
+    f.wait()                # same job_id, no double submission
+    f.results()
+```
+
+Allowed only while `state == "running"`; every other state raises
+`StateError`.
 
 | Param | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `gpu` | int | no | — | **Optional upper bound** on GPUs (1..8). The server picks the actual count `N` from the model's estimated demand and the machine capacity, then caps it by your `max_gpu_per_run` quota and by this value. Omit it unless you want to forbid multi-GPU. Which cards, NV-link pairing and axis splitting are the provider's business |
 | `timeout_s` | int | no | 3600 | Server-side job timeout (s) |
-| `poll_interval` | float | no | 2.0 | Polling interval (s) |
+| `poll_interval` | float | no | 1.0 | Polling interval (s; tuned to the provider's 1 s status beat) |
 | `progress` | callable | no | — | Per-poll callback `progress(status_dict)` |
 
 Simulation length is defined solely by `domain.total_time` (SI seconds, > 0
@@ -47,9 +91,13 @@ One `.gensim` file = one simulation. `f.save('lab.gensim')` writes the
 current configuration plus the instance's already-downloaded result (when
 the instance has run) into a single zip container: `simconfig.json`,
 optional `results/<job>_results.h5` + `state.json` (job id, steps, dt,
-grid shape), and optional `workspace/` files. The write is atomic (a `.part`
-file is replaced into place), so a crash never leaves a half-written
-document.
+grid shape). The write is atomic (a `.part` file is replaced into place),
+so a crash never leaves a half-written document.
+
+The document carries **the simulation, not the folder**: workspace files
+(scripts, images) are never bundled, so the file's content does not depend
+on where your workspace happens to be. The script can always be
+reconstructed from the config with `f.to_script()`.
 
 `genie.open('lab.gensim')` reads the container back: **inside a Studio
 session it replaces the current session model** (same semantics as the
@@ -65,6 +113,10 @@ f2 = genie.open('lab.gensim')
 The container format (member names, size caps, guards) lives in
 `genie.core.simfile` — the same implementation serves the SDK and the
 Studio endpoints; do not hand-build the zip.
+
+Saving is **not** allowed while `state == "running"`: there is no result
+yet, and the file would read as a completed simulation. Call `f.wait()`
+first, then `save()`.
 
 ### GPU scheduling semantics
 
@@ -106,12 +158,14 @@ f.run(gpu=2, progress=print)                  # dual GPU + progress callback
 - Passing `gpu/timeout_s` after submission → RuntimeError (the configuration is already sent); each instance submits at most once — to change the configuration, create a new `genie.connect()`. At submission the configuration is frozen
 verbatim; there is no parameter-update-and-resume interface.
 - Omitting `domain.total_time` → rejected before submission (it is the only definition of simulation length).
-- Job failure/kill → raises `GenieJobError` (`.state` lands on `failed`/`killed`). Besides `done`/`failed`/`killed`, historical jobs may report the terminal state `archived` (server-side archival of past jobs; the client's `TERMINAL_BAD` set includes it). Results exist only for successful terminal states: querying the results endpoint of a `failed`/`killed` job returns HTTP 409.
+- Job failure/kill → raises `GenieJobError`; `f.state` becomes `failed` while the exception keeps the raw server state (`failed`/`killed`/`archived`). Besides `done`/`failed`/`killed`, historical jobs may report the terminal state `archived` (server-side archival of past jobs; the client's `TERMINAL_BAD` set includes it). Results exist only for successful terminal states: querying the results endpoint of a `failed`/`killed` job returns HTTP 409.
 
 ## `f.cancel()`
 
-Cancels the submitted background job (`-> dict | None`); a no-op returning
-None if this instance was never submitted.
+Cancels the in-flight background job (`-> dict`). Allowed **only** while
+`state == "running"`; every other state raises `StateError` (no silent
+no-op). `f.reopen()` is *not* a cancel — it drops the local binding to a
+finished run, while the archived document keeps its results.
 
 ## `f.summary()`
 

@@ -47,7 +47,7 @@ __all__ = [
 # dir() 枚举 _StrictModel 子类）与跨模块复用需要；不进 __all__。
 _INTERNAL = frozenset({
     "_StrictModel", "_RangeModel", "_TemporalMixin", "_MonitorMixin",
-    "_env_int", "_check_range", "_norm_polarization", "_norm_vertices_pairs",
+    "_env_int", "_check_range", "_norm_polarization",
 })
 
 

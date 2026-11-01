@@ -30,7 +30,6 @@ const TREE_META = {
   sweep: ["sweep", "Sweep"],
   params: ["params", "Parameters"],
 };
-const TREE_PV_KINDS = { geometry: 1, source: 1, monitor: 1, materials: 1 };
 function treePreviewKey(kind, i) {
   const it = (cfg && cfg[kind]) ? cfg[kind][i] : null;
   const t = it && it.type;

@@ -97,8 +97,6 @@ const ICON_PATHS = {
   copy: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 6.4 V4.2 A1.4 1.4 0 0 0 8.6 2.8 H4.2 A1.4 1.4 0 0 0 2.8 4.2 V8.6 A1.4 1.4 0 0 0 4.2 10 H6.4"/><rect x="6.4" y="6.4" width="6.8" height="6.8" rx="1.4"/></svg>',
   /* download：⤓ 箭头入托盘——取回/下载（.py 下载、results.npz、材料节点插入） */
   download: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.6 V9.2 M4.9 6.3 L8 9.4 L11.1 6.3"/><path d="M3.6 11.4 V12.7 H12.4 V11.4"/></svg>',
-  save: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.0 3.0 H10.6 L13.0 5.4 V13.0 H3.0 Z"/><path d="M5.4 3.0 V6.2 H10.2 V3.0"/><rect x="5.4" y="9.0" width="5.2" height="4.0"/></svg>',
-  runSel: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3.4 4.6 L7.6 8.0 L3.4 11.4 Z"/><path d="M10.0 4.6 V11.4 M12.4 5.4 V10.6" stroke-opacity="0.55"/></svg>',
   /* upload：⤵ 托盘出箭头——装回/上载（作业配置载回表单） */
   upload: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 11.2 V4.4 M4.9 7.5 L8 4.4 L11.1 7.5"/><path d="M3.6 11.4 V12.7 H12.4 V11.4"/></svg>',
   /* refresh：↻ 顺时针回环箭头——重新拉取（结果抽屉"刷新"、作业 running 转圈态） */

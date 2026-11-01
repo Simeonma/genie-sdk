@@ -10,7 +10,7 @@
 ## 1. 接上
 
 ```python
-from genie.studio.session_client import SessionClient
+from genie.studio.session.session_client import SessionClient
 
 cli = SessionClient.discover()      # 读门牌（~/.genie/studio.json）
 if cli is None:
@@ -126,7 +126,7 @@ cli.result_series(job_id=job, mon="t1", field="Ey")
 - **别自己起一个新会话**（`genie studio` / 新 session_id）：那是另一份模型，
   用户在浏览器里看不到。
 - **别调 `connect()`**：会话已经有凭据，`connect()` 只会多开一个实例进合并集。
-- **别用 `f.run()`**：一个实例只能提交一次，第二次会报错。用 `run_model()`。
+- **别用 `f.run()`**：它会把会话模型锁在 `done`（之后要 `reopen()` 才能改）。用 `run_model()`。
 - **别猜字段名**：服务端对未知字段一律 422。不确定就查手册参考页。
 - **别吞错误**：`patch` 被拒、422、503 都要往上报，别重试到没反应。
 

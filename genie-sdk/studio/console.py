@@ -5,7 +5,7 @@
 共享输出环。会话是专职进程、所有客户端平等（MCP/Jupyter/DAP 考据
 定案，决策档案 2026-10-13-session-local.md §6 补记）。
 
-协议复用 genie.studio.session_client（零新协议、零新 exec 实现）：
+协议复用 genie.studio.session.session_client（零新协议、零新 exec 实现）：
 
 - 逐条 exec（``mode="run"``，terminal 语义：f 常驻、状态累积）；
 - 多行输入：行缓冲 + ``code.compile_command`` 完整性判定（缩进块、
@@ -25,13 +25,13 @@ import signal
 import sys
 import time
 
-from .session_client import SessionClient
+from .session.session_client import SessionClient
 
 
-def _poll_output(cli: SessionClient, cursor: int, *, owner: str,
+def _poll_output(cli: SessionClient, cursor: int, *,
                  session_id: str) -> tuple[int, bool]:
     """增量打印输出环新行，返回 (新 cursor, busy)。"""
-    out = cli.output(owner=owner, session_id=session_id, since=cursor)
+    out = cli.output(session_id=session_id, since=cursor)
     for ln in out.get("lines") or []:
         text = ln.get("text") or ""
         if ln.get("kind") == "error":
@@ -43,23 +43,23 @@ def _poll_output(cli: SessionClient, cursor: int, *, owner: str,
     return cursor, bool(out.get("busy"))
 
 
-def _run_block(cli: SessionClient, block: str, cursor: int, *, owner: str,
+def _run_block(cli: SessionClient, block: str, cursor: int, *,
                session_id: str) -> int:
     """整段提交到会话并跟随输出到终态（busy False）。"""
-    cli.exec(block, owner=owner, session_id=session_id, mode="run",
+    cli.exec(block, session_id=session_id, mode="run",
              label="console")
     stopped = {"v": False}
 
     def _on_int(signum, frame):
         if not stopped["v"]:
             stopped["v"] = True
-            cli.stop(owner=owner, session_id=session_id)
+            cli.stop(session_id=session_id)
             print("\n^C（已发停止——会话仍在）")
 
     old = signal.signal(signal.SIGINT, _on_int)
     try:
         while True:
-            cursor, busy = _poll_output(cli, cursor, owner=owner,
+            cursor, busy = _poll_output(cli, cursor,
                                         session_id=session_id)
             if not busy:
                 return cursor
@@ -69,17 +69,13 @@ def _run_block(cli: SessionClient, block: str, cursor: int, *, owner: str,
 
 
 def run_console(client: SessionClient | None = None, *,
-                session_id: str = "default",
-                owner: str | None = None) -> int:
+                session_id: str = "default") -> int:
     """终端 REPL 主循环（会话已由调用方确保在跑）。"""
-    import os
-    from .session_client import resolve_owner
     cli = client or SessionClient()
-    owner = owner or resolve_owner()
     cursor = 0
     # 对齐当前环位（不重放历史——那是 GUI 终端窗口的职责）
     try:
-        out = cli.output(owner=owner, session_id=session_id, since=0)
+        out = cli.output(session_id=session_id, since=0)
         for ln in out.get("lines") or []:
             cursor = max(cursor, ln.get("seq", 0))
     except Exception as e:  # noqa: BLE001 —— 连不上就直说，别进假 REPL
@@ -117,7 +113,7 @@ def run_console(client: SessionClient | None = None, *,
         if block.strip() in ("exit", "quit", "exit()", "quit()"):
             return 0
         try:
-            cursor = _run_block(cli, block, cursor, owner=owner,
+            cursor = _run_block(cli, block, cursor,
                                 session_id=session_id)
         except Exception as e:      # noqa: BLE001 —— R41/S4：4xx/链路错误
             # 不得冲出 REPL：修前一次 422（如 --session "bad id!"）就让

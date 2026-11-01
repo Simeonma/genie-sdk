@@ -5,7 +5,8 @@
 
 解析优先级（唯一口径）：
 
-1. ``GENIE_SESSION_CWD`` / ``GENIE_SCRIPTS_DIR``（显式 env，CI/特殊场景）；
+1. ``GENIE_SCRIPTS_DIR``（显式 env，CI/特殊场景；旧名
+   ``GENIE_SESSION_CWD`` 仍兼容——2026-11-01 起文档只写新名）；
 2. ``~/.genie/workspace.json`` 的 ``root``（``genie workspace PATH`` /
    Studio 的 Workspace… 按钮写它）；
 3. 缺省 ``~/data/genie/scripts``。
@@ -35,7 +36,12 @@ def default_root() -> Path:
 
 
 def env_root() -> Path | None:
-    for key in ("GENIE_SESSION_CWD", "GENIE_SCRIPTS_DIR"):
+    """显式 env 覆盖（最高优先）：``GENIE_SCRIPTS_DIR``。
+
+    旧名 ``GENIE_SESSION_CWD`` 仍兼容（2026-11-01 裁：两个 env 一个意思
+    是冗余——文档只写新名，代码留一条兼容腿；两个都设时以新名为准）。
+    """
+    for key in ("GENIE_SCRIPTS_DIR", "GENIE_SESSION_CWD"):
         v = os.environ.get(key)
         if v:
             return Path(v)

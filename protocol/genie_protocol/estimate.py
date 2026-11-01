@@ -1,4 +1,4 @@
-"""genie.models.estimate — 资源估算单一真源（G19a，2026-10-16）。
+"""genie_protocol.estimate — 资源估算单一真源（G19a，2026-10-16）。
 
 网格总量 / dt / 步数的估算手，原生于内核 serve（fdtd/serve/schema.py
 的 estimate_cells 家族 + G18 的 _estimate_steps）；G3 方向 2 裁决把它

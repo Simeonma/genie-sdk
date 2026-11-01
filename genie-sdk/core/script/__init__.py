@@ -19,16 +19,14 @@
 处置形态**有意分歧**（渲染侧宽容跳过 + W，线格式侧严格抛错），分歧面由
 test_single_source_locks 的形态锚锁定（audit 批 α 定案）。
 
-公共名再导出：``render``（主入口）；FACES/BC_KINDS/
-LIBRARY_FIT_DEFAULTS（正典常量透传，消费方免二次深挖）；
-``_norm_pol`` 等内部名透传仅供归一锁测试（test_single_source_locks）
-锚定——非产品面，勿在新代码 import。
+公共名再导出：``render``（主入口）；FACES/BC_KINDS（正典常量透传，
+消费方免二次深挖）；``_norm_pol`` 等内部名透传仅供归一锁测试
+（test_single_source_locks）锚定——非产品面，勿在新代码 import。
 """
 from __future__ import annotations
 
-from ...models import BC_KINDS, FACES, LIBRARY_FIT_DEFAULTS
+from ...models import BC_KINDS, FACES
 from ._emit import _norm_pol
-from ._numfmt import py_num, py_str
 from ._params import _gen_params
 from ._sections import (_gen_domain, _gen_geometry, _gen_materials,
                         _gen_mesh, _gen_monitor, _gen_results, _gen_run,
@@ -62,7 +60,7 @@ def render(cfg: dict) -> str:
     source = _gen_source(cfg.get("source"), W, env)
     monitor = _gen_monitor(cfg.get("monitor"), W, env)
     run_line = _gen_run(cfg, W, env)
-    results = _gen_results(cfg.get("monitor"), run_line is not None)
+    results = _gen_results(cfg.get("monitor"))
 
     body: list[str] = []
 

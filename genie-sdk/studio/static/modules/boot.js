@@ -433,8 +433,9 @@ function importCfg() {
         if (typeof enterResult === "function") enterResult(true);
         if (typeof refreshResultChip === "function") refreshResultChip();
       }
-      toast("仿真已打开（模型已替换 + " +
-            out.restored.length + " 个文件回工作区" +
+      /* 2026-11-01：文档不再装工作区文件——打开只"载入模型 + 结果态"，
+       * 不往工作区写任何东西。 */
+      toast("仿真已打开（模型已替换" +
             (out.has_results ? "；含结果——已进结果态" : "") + "）", "ok");
     } catch (e) {
       toast("打开仿真失败：" + e.message, "err");
@@ -505,9 +506,10 @@ async function exportScript(askName = true) {
   }
 }
 
-/* ── 打开仿真（G4a 2026-10-30 站长定案）：Open = 打开文件 + 工作区切到
- * 它所在文件夹。浏览器拿不到真实路径，所以先走服务端原生文件对话框
- * （/api/sim/open）；本机没有系统对话框时退回浏览器上传（importCfg）。 */
+/* ── 打开仿真（2026-11-01 裁：Open = 载入模型 + 钉存档，**不动工作区**）。
+ * 工作区是位置属性，只能由用户显式切换（File → Workspace…）。
+ * 浏览器拿不到真实路径，所以先走服务端原生文件对话框（/api/sim/open）；
+ * 本机没有系统对话框时退回浏览器上传（importCfg）。 */
 async function openSimulation() {
   const b = $("file-open-btn");
   const btns = $("page-file").querySelectorAll(".tb-btn");
@@ -527,10 +529,10 @@ async function openSimulation() {
     if (window.loadWorkspaceFiles) loadWorkspaceFiles();
     setFileWorkspacePath(j.workspace || "");
     if (j.session === "busy") {
-      toast("已打开（工作区切换到 " + j.workspace + "；会话正忙，"
-            + "自动存档将在下个作业前生效）", "warn");
+      toast("已打开 " + (j.doc || "") + "；会话正忙，"
+            + "自动存档将在下个作业前生效", "warn");
     } else {
-      toast("已打开 " + j.doc + "；工作区 = " + j.workspace, "ok");
+      toast("已打开 " + j.doc, "ok");
     }
     if (j.has_results && j.job_id) {
       window.__lastJobId = j.job_id;

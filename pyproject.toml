@@ -53,9 +53,13 @@ genie-mcp = "genie.integrations.mcp:main"
 # 目录名带连字符不能作包名，靠这条映射把 genie.* 解析到 genie-sdk/*；
 # wheel 内路径依然是 genie/，所以 install 地址与发布门断言都不用动。
 [tool.setuptools]
-packages = ["genie", "genie.models", "genie.core", "genie.core.nkdata",
+packages = ["genie", "genie.models", "genie.core", "genie.core.archive",
+            "genie.core.model", "genie.core.material", "genie.core.results",
+            "genie.core.nkdata",
+            "genie.core.run", "genie.core.sweep",
             "genie.core.script", "genie.lib", "genie.net",
-            "genie.integrations", "genie.studio",
+            "genie.integrations", "genie.studio", "genie.studio.session",
+            "genie.studio.views",
             "genie_protocol"]
 package-dir = { genie = "genie-sdk", genie_protocol = "protocol/genie_protocol" }
 

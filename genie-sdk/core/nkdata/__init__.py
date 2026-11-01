@@ -1,5 +1,5 @@
 """genie.core.nkdata — 自有 n-k 材质库加载（F1 随 fit 能力迁入服务仓；
-阶段 ④ 自顶层 ``_nkdata.py``+``genie/nkdata/`` 并入本包——加载器与数据同包）。
+阶段 ④ 自顶层 ``_nkdata.py``+``genie/core/nkdata/`` 并入本包——加载器与数据同包）。
 
 Port of the kernel's ``fdtd/_material/nkdata/__init__.py`` (REFERENCE
 ONLY, never import the kernel): tabulated ``DATA:`` blocks and
@@ -87,7 +87,7 @@ def available_materials():
     2026-09 audit 批 α：删除了 ``not f.endswith('.material.yml')``
     排除子句——本仓随迁库（37 个 yml，迁移时与内核库逐字节一致）不
     含任何 ``*.material.yml`` 文件，该子句恒真（反证：``ls
-    genie/nkdata/*.material.yml`` 零命中），是死条件。
+    genie/core/nkdata/*.material.yml`` 零命中），是死条件。
     """
     try:
         files = os.listdir(_NKDATA_DIR)

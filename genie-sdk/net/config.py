@@ -94,13 +94,20 @@ def clear_config(*keys: str) -> None:
 
 def gateway_source() -> tuple[str | None, str | None]:
     """(网关地址, 来源标签) —— resolve_gateway 的非抛版，同一条链、
-    同一归一（strip + 去尾斜杠）。来源标签 ∈ env / config / default。
+    同一归一（strip + 去尾斜杠）。来源标签 ∈ backend / env / config / default。
+
+    链（高→低）：``GENIE_BACKEND``（部署覆盖）> ``GENIE_URL`` > 凭据仓
+    ``gateway`` > ``DEFAULT_GATEWAY``。2026-10-31 收口：``GENIE_BACKEND``
+    原先只在会话侧单独读（`kernel_session.backend()`，该别名同日删除），
+    SDK 侧不认——同一台机器上"SDK 连 A、GUI 连 localhost"。现在两层共用
+    这一条链，且都直接调 ``resolve_gateway()``。
 
     报地址给人/agent 看的面（mcp login_status、CLI connect 展示）一律走
     这里，别手抄链——手抄份不归一时，报出去的地址会和实际拨号地址字形
     不同（G101 清账 2026-10-27 前的实测病灶）。
     """
-    for cand, src in ((os.environ.get("GENIE_URL") or None, "env"),
+    for cand, src in ((os.environ.get("GENIE_BACKEND") or None, "backend"),
+                      (os.environ.get("GENIE_URL") or None, "env"),
                       (load_config().get("gateway") or None, "config"),
                       (DEFAULT_GATEWAY, "default")):
         if cand and str(cand).strip():
@@ -111,8 +118,14 @@ def gateway_source() -> tuple[str | None, str | None]:
 def resolve_gateway(explicit: str | None = None) -> str:
     """按优先级链解析网关地址；解析不出 → 报错并给**下一步动作**。
 
-    顺序：显式参数 > env ``GENIE_URL`` > credentials.json ``gateway``
-    > ``DEFAULT_GATEWAY``。链与归一化的唯一实现 = gateway_source()。
+    顺序：显式参数 > ``GENIE_BACKEND``（部署覆盖）> ``GENIE_URL`` >
+    credentials.json ``gateway`` > ``DEFAULT_GATEWAY``。
+    链与归一化的唯一实现 = gateway_source()。
+
+    **没有"本机兜底"**（2026-10-31 裁）：曾有一条会话专用的
+    ``127.0.0.1:9100`` 兜底，那是猜——与 ``DEFAULT_GATEWAY = None``
+    的定案（"填一个打不通的地址比不填更糟"）相矛盾，也让同一问题出现
+    两种表达。现在两边同一条链、同一种失败：报错并给三条下一步。
     """
     from ..models.errors import GenieConfigError
     if explicit and str(explicit).strip():
@@ -121,10 +134,9 @@ def resolve_gateway(explicit: str | None = None) -> str:
     if gw:
         return gw
     raise GenieConfigError(
-        "未配置网关地址。三选一：\n"
-        "  ① genie connect <服务地址>      写入本机配置（推荐，一次即可）\n"
-        "  ② set GENIE_URL=<服务地址>      环境变量\n"
-        "  ③ genie.connect(<服务地址>)     脚本里显式传参")
+        "未配置网关地址——先跑一次：\n"
+        "  genie connect <服务地址>\n"
+        "（写进本机配置，一次即可）")
 
 
 def resolve_credential(explicit: str | None, env_name: str,

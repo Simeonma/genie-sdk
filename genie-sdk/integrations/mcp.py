@@ -46,8 +46,9 @@ from ..models import MAX_GPU_PER_RUN
 __all__ = ["TOOLS", "TOOL_NAMES", "execute_tool", "build_server", "main",
            "set_session_factory", "SessionUnavailable"]
 
-# 组合根注入：返回一个"带 owner/session_id 的会话客户端"，没有会话时返回 None。
-# （为什么不在这里 import studio：integrations 层不得依赖组合层。）
+# 组合根注入：返回一个"已绑定 session_id 的会话客户端"，没有会话时返回 None。
+# （为什么不在这里 import studio：integrations 层不得依赖组合层。owner 不在
+# 这条面上——它是会话进程属性，2026-11-01 A4a/A4b。）
 _session_factory: Callable[[], Any] | None = None
 
 
@@ -167,7 +168,8 @@ TOOLS: list[dict[str, Any]] = [
             "不用 import genie、不用 connect。"
             "mode=run（缺省）改 f 就是改模型；mode=build 在新命名空间执行、"
             "成功才整体提交（要么全成要么别动）。"
-            "提交作业用 run_model()，**别用 f.run()**（一个实例只能提交一次）。"
+            "提交作业用 run_model()，**别用 f.run()**（会把会话模型锁在 done，"
+            "之后要 reopen() 才能改）。"
             "返回 {ok, output}——ok=false 时 output 是要改的那条错误。"),
         "parameters": {
             "type": "object",
@@ -185,7 +187,7 @@ TOOLS: list[dict[str, Any]] = [
         "name": "run_model",
         "description": (
             "提交**当前模型**（不改模型）。要跑的是会话里那份，不是你手里的副本。"
-            "提交是一次性的：一个模型实例只能提交一次，改完再跑是新提交。"
+            "每次提交都产生新作业；提交的是临时副本，模型本身保持可编辑。"
             "gpu / timeout_s 可选（缺省用模型 run 节里的）。"
             "返回 {ok, job_id, busy}——**提交失败会报 ok=false**（别把失败当成功），"
             "进度用 get_model 看 phase。"),
@@ -424,14 +426,6 @@ def execute_tool(name: str, args: dict, *, session: Any = None) -> dict:
         return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:400]}"}
     return {"ok": False,
             "error": f"工具 {name} 未接线（可用: {sorted(TOOL_NAMES)}）"}
-
-
-def _openai_tools() -> list[dict]:
-    """OpenAI function-calling 形态（agent 运行时消费）。"""
-    return [{"type": "function",
-             "function": {"name": t["name"], "description": t["description"],
-                          "parameters": t["parameters"]}}
-            for t in TOOLS]
 
 
 def build_server():

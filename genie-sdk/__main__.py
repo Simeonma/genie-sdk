@@ -63,15 +63,16 @@ def _start_local_session() -> tuple[object, str, str]:
     带进来，正是"模型莫名其妙存在/消失"的根源（M2/O1）。
     """
     try:
-        from genie.studio.session_service import serve
+        from genie.studio.session.session_service import serve
     except ImportError:  # pragma: no cover —— 指路不裸栈
         # R41/N3：装法合一（R40）后没有 server extra 可装——缺件=环境损坏。
         raise SystemExit(
             "✗ 本地服务组件缺失（fastapi/uvicorn 已随 genie-sdk 基础依赖"
             "分发）——环境损坏，请重装：pip install --force-reinstall genie-sdk")
     token = secrets.token_urlsafe(24)
+    from genie.studio.session.session_client import resolve_owner
     try:
-        server, port = serve(0, token=token)
+        server, port = serve(0, token=token, owner=resolve_owner())
     except Exception as e:  # noqa: BLE001
         raise SystemExit(f"✗ 本地会话启动失败：{e}")
     return server, f"http://127.0.0.1:{port}", token
@@ -86,20 +87,27 @@ def cmd_studio(args: argparse.Namespace) -> int:
             "✗ 本地服务组件缺失（fastapi/uvicorn 已随 genie-sdk 基础依赖"
             "分发）——环境损坏，请重装：pip install --force-reinstall genie-sdk")
 
-    from genie.studio import rendezvous as rv
-    from genie.studio import session_service as ss
+    from genie.studio.session import rendezvous as rv
+    from genie.studio.session import session_service as ss
     from genie.studio.server import create_app
-    from genie.studio.session_local import LocalSessionHost
+    from genie.studio.session.session_local import LocalSessionHost
 
     ss.enable_cred_broker()     # 本机单用户形态：登录截获/凭据代拨开启
+    # owner = 本会话的归属目录（进程属性；唯一注入点，2026-11-01 A4a/A4b）
+    from genie.studio.session.session_client import resolve_owner
+    ss.set_owner(resolve_owner())
     gui_port = args.port if args.port else _next_free_port("127.0.0.1", 8777)
     gui_url = f"http://127.0.0.1:{gui_port}"
     require_auth = not (args.open
                         or os.environ.get("GENIE_STUDIO_OPEN") == "1")
 
-    def _on_attach(owner: str, session_id: str) -> None:
-        """把"当前活跃会话"记进门牌（console 据此接上同一个模型）。"""
-        rv.update(session_id=session_id, owner=owner)
+    def _on_attach(session_id: str) -> None:
+        """把"当前活跃会话"记进门牌（console 据此接上同一个模型）。
+
+        owner 也一起写：那是**这个会话**的归属目录（进程属性），门牌只是
+        描述它；console 不再拿它当输入（2026-11-01 A4a/A4b）。
+        """
+        rv.update(session_id=session_id, owner=resolve_owner())
 
     # 同进程：会话对象与 GUI 在同一个进程里，**没有 HTTP 跳、没有第二个
     # 端口**（O3）。给跨进程客户端（console）留的门 = /session，带口令。
@@ -129,9 +137,9 @@ def cmd_studio(args: argparse.Namespace) -> int:
 
 
 def cmd_console(args: argparse.Namespace) -> int:
-    from genie.studio import rendezvous as rv
+    from genie.studio.session import rendezvous as rv
     from genie.studio.console import run_console
-    from genie.studio.session_client import SessionClient
+    from genie.studio.session.session_client import SessionClient
 
     url = (args.attach or "").rstrip("/")
     token = os.environ.get("GENIE_SESSION_TOKEN", "")
@@ -150,12 +158,10 @@ def cmd_console(args: argparse.Namespace) -> int:
         rv.write(url=url, token=token)
         cli = SessionClient(url, token=token)
         print(f"· 本机会话已启动（{url}）")
-    from genie.studio.session_client import resolve_owner
     try:
         return run_console(
             cli,
-            session_id=(sid or cli.session_id or "default"),
-            owner=(cli.owner or resolve_owner()))
+            session_id=(sid or cli.session_id or "default"))
     finally:
         if server is not None:
             rv.clear()
@@ -206,7 +212,7 @@ def cmd_workspace(args: argparse.Namespace) -> int:
     当前工作区（目录不存在则创建，校验可写）。机器级持久：之后所有会话、
     结果、脚本、自动存档的 .gensim 都跟着它走（已开的 Studio 需重启会话
     才换根——GUI 的 Workspace… 按钮会自动重挂）。"""
-    from genie.studio import workspace_setting as ws
+    from genie.studio.views import workspace_setting as ws
 
     if not args.path:
         root = ws.current_root()
@@ -219,8 +225,8 @@ def cmd_workspace(args: argparse.Namespace) -> int:
             for r in rec:
                 print("  " + r)
         if ws.source() == "env":
-            print("· 环境变量 GENIE_SESSION_CWD/GENIE_SCRIPTS_DIR 优先——"
-                  "要改请改环境变量或先移除它们")
+            print("· 环境变量 GENIE_SCRIPTS_DIR 优先（旧名 GENIE_SESSION_CWD 兼容）"
+                  "——要改请改环境变量或先移除它")
         return 0
     try:
         p = ws.set_root(args.path)
@@ -230,7 +236,7 @@ def cmd_workspace(args: argparse.Namespace) -> int:
     print(f"✓ 工作区已设为：{p}")
     print("· 之后的结果/脚本/自动存档 .gensim 都落在这里")
     if ws.source() == "env":
-        print("⚠ 但本机设了 GENIE_SESSION_CWD/GENIE_SCRIPTS_DIR，"
+        print("⚠ 但本机设了 GENIE_SCRIPTS_DIR（旧名 GENIE_SESSION_CWD），"
               "环境变量仍优先——实际生效的是它")
     print("· 已开着的 Studio 需重启会话（File → Workspace… 会自动重挂）")
     return 0

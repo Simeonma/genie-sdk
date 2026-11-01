@@ -42,7 +42,7 @@ from .models.errors import (GenieConfigError, GenieError, GenieHTTPError,
                             GenieJobError)
 from .core import material
 from .core.results import FreqResult, IndexResult, TimeResult
-from .core.simulate import Simulation
+from .core.run import Simulation
 from .core.sweep import SweepHandle
 
 # ``import genie.material`` 语句级可用（不只属性寻址）——注册进
@@ -67,7 +67,7 @@ def _push_visualize(sim, mon: str, field: str | None = None) -> None:
         raise RuntimeError(
             "visualize: 本实例还没有作业——先 f.run()（推的是该作业的"
             "结果数据）")
-    from .studio.session_client import SessionClient
+    from .studio.session.session_client import SessionClient
     cli = SessionClient.discover()
     if cli is None:
         raise RuntimeError(
@@ -87,7 +87,7 @@ def _push_sweep_visualize(sw, mon: str, field: str | None = None) -> None:
     if not sid:
         raise RuntimeError("visualize: 这个扫描还没有 id（sweep.json 缺 "
                            "sweep_id）——重跑一次 f.sweep() 即可")
-    from .studio.session_client import SessionClient
+    from .studio.session.session_client import SessionClient
     cli = SessionClient.discover()
     if cli is None:
         raise RuntimeError(
@@ -98,7 +98,7 @@ def _push_sweep_visualize(sw, mon: str, field: str | None = None) -> None:
 
 
 def _wire_core_hooks() -> None:
-    from .core import simulate as _simulate
+    from .core import run as _simulate
     from .core import sweep as _sweep
 
     _simulate._wire(
@@ -106,7 +106,7 @@ def _wire_core_hooks() -> None:
     )
     _sweep.hooks.update(visualize_sweep=_push_sweep_visualize)
     # 2026-10-27 G19b 翻转：材质库 HTTP 回退（remote_nk_fetch）退役——
-    # 材质库纯本地（genie/nkdata 随包分发），材质面不再接线。
+    # 材质库纯本地（genie/core/nkdata 随包分发），材质面不再接线。
     # 2026-10-28 G174：preview 的 connect 交换钩子（_swap_connect）随
     # 零网络预览引擎一并退役。
     # 2026-10-28 R36：expert_factory 钩子随专家会话面（net/expert.py、
@@ -123,7 +123,7 @@ def _session_client():
     懒 import：``import genie`` 不该把 fastapi 拉进来（studio 是可选 extra）。
     注入方向也是组合根的老规矩——``integrations`` 不得依赖 ``studio``。
     """
-    from .studio.session_client import SessionClient
+    from .studio.session.session_client import SessionClient
     return SessionClient.discover()
 
 
@@ -220,11 +220,11 @@ def open(path) -> Simulation:
     ``_doc_path`` 钉到这个文件：之后 ``run()`` 成功**原地更新它**
     （G182：文档是结果产物）。
 
-    容器格式由 ``genie.core.simfile`` 维护（与 ``f.save`` / Studio
+    容器格式由 ``genie.core.archive.simfile`` 维护（与 ``f.save`` / Studio
     的存储/打开同一份实现）。
     """
-    from .core import simfile
-    from .core import simulate as _simulate
+    from .core.archive import simfile
+    from .core import run as _simulate
 
     cfg = simfile.read_cfg(path)
     hook = _simulate.hooks.get("open_sim")
@@ -259,7 +259,7 @@ def _alive_card() -> dict | None:
     它的 /gw 代理（无状态），探测死门牌是为了不把用户引向死路。
     """
     try:
-        from .studio import rendezvous as rv
+        from .studio.session import rendezvous as rv
     except ImportError:      # 异形安装（studio 缺件）：会话形态不存在
         return None
     card = rv.read()

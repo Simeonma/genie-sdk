@@ -258,9 +258,9 @@ predates the current script.
 Diagnostic: compare group names in the h5 against the monitor list in the
 script that claims to have produced it; `f.results().attrs` (executed steps,
 grid, timestamps) answers "what actually ran".
-Fix: rerun; the auto-download writes `<job_id>_results.h5` under
-`$GENIE_RESULT_DIR` (default `./genie_results/`), and `results()` re-fetches
-on demand if the download only warned — see
+Fix: rerun; the run archives results into the `.gensim` document (member
+`results/<job_id>_results.h5` — no standalone h5 file), and `results()`
+re-fetches on demand if archiving only warned — see
 [reading-results.html](tut6.html) and
 [results-get-simdata.html](09-results.html).
 

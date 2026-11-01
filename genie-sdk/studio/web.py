@@ -78,8 +78,11 @@ def dispatch(app, method: str, path: str, body: bytes = b"",
 def serve(*, static_dir: str | None = None):
     """建 app（= 本机 ``genie studio`` 的同一份），返回它供 JS 调 ``dispatch``。"""
     from .server import create_app
-    from .session_local import LocalSessionHost
+    from .session import session_service as _ss
+    from .session.session_client import resolve_owner
+    from .session.session_local import LocalSessionHost
 
+    _ss.set_owner(resolve_owner())     # owner 是会话属性，入口注入一次
     app = create_app(session=LocalSessionHost(), mount_session=True,
                      share_session=True, **({"static_dir": static_dir}
                                             if static_dir else {}))
