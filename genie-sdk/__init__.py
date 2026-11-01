@@ -3,9 +3,9 @@
 产品口径（2026-10 terminal 战役后；G174 起单执行引擎）：
   · SDK 用户：写 genie 脚本，``f`` 是活配置对象，``f.run()`` 提交那一刻
     才序列化 SimConfig JSON（线格式，用完即弃，客户端不存 cfg 状态）；
-  · 云 GUI（Studio）背后是常驻会话进程里的同一个 SDK——**会话 f 是
-    唯一真源**，Terminal/脚本/表单三条变更通道同汇一处（详见
-    genie-service AGENTS.md）；本包不感知 GUI 形态；
+  · 云 GUI（Studio）背后是常驻 worker 里的同一个 SDK——**worker 里的 f
+    是唯一可编辑的东西**，Terminal/脚本/表单三条变更通道同汇一处（术语见
+    genie-sdk/studio/session/MODMAP.md §0）；本包不感知 GUI 形态；
   · **一个执行引擎（会话 worker）、一种语义（真执行——错了报错带
     行号自纠）**：G174（2026-10-28 站长三连裁决）退役了 preview 零网络
     预览引擎与 check_script 体检面，"验证"不是用户任务的步骤。

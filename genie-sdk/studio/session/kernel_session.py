@@ -1,7 +1,10 @@
-"""sdk/genie/studio/kernel_session — 会话 kernel 的管理器（库模块，非入口）。
+"""kernel_session — worker 的管理器（库模块，非入口）。
 
-持有常驻 worker 进程（kernel_worker.py）：spawn/重生、凭据换绑、exec
-提交、输出环缓冲（GUI 按 since 增量拉）、最新 cfg 快照。
+**它不持有模型**：``f`` 在 worker 里。本类只管 worker 的一生——spawn / 重生 /
+凭据换绑 / exec 提交 / 输出环缓冲（GUI 按 ``since`` 增量拉）/ 最新 cfg 快照。
+
+术语（五个名词，见 ``studio/session/MODMAP.md`` §0）：Studio / worker / ``f`` /
+状态目录 / 门牌。本文件的 "session" 是历史名字，指的是这几个东西的侧面，不是实体。
 
 **两条生命周期正交（M2/O2 起；2026-11-01 删 owner 层与 session_id 层）**：
 
@@ -9,7 +12,7 @@
                     目录，**不按登录账号分层**（登录只管能不能提交）；
 - ``key``         → 能不能提交（``attach()`` 幂等换绑，**换 key 不换模型**）。
 
-于是一个进程只有**一份**模型：刷新页面保留它；**改密码 / token 过期重登**
+于是一个进程只有**一份可编辑的模型**：刷新页面保留它；**改密码 / token 过期重登**
 也保留它（只是重新授权）；想要新模型 = ``discard()``（丢掉旧的，下一个请求
 从空开始）——没有"第二份模型"可以并存（2026-11-01 删 session_id 维度）。
 旧实现在 ``bind()`` 里比对凭据并删快照（``_drop_stale_state``）——那让 token
@@ -17,9 +20,9 @@
 
 线程模型：读 worker stdout 的 pump 线程 + 提交走锁——FastAPI 侧永不阻塞。
 
-B2 会话落盘：输出环全量追加流（log.jsonl，本类写/读）与会话 f 快照
-（session_state.json，worker 写）落系统空间（``GENIE_SESSION_STATE_DIR``）——
-worker 重生 / 服务重启不再「世界消失」。**落盘不含任何凭据**（见下）。
+B2 落盘：输出环全量追加流（log.jsonl，本类写/读）与模型快照
+（session_state.json，worker 写）落状态目录（``GENIE_SESSION_STATE_DIR``）——
+worker 重生 / Studio 重启不再「世界消失」。**落盘不含任何凭据**（见下）。
 """
 from __future__ import annotations
 
@@ -40,13 +43,13 @@ _RING_CAP_BYTES = 1 << 20  # 环文件（=运行日志）限量：1MB，重启�
 
 
 def _session_root() -> Path:
-    """系统空间根（2026-10-13 站长裁决搬家）：会话恢复快照与运行日志
+    """系统空间根（2026-10-13 站长裁决搬家）：模型恢复快照与运行日志
     住这里，**不进用户工作区**（工作区只剩用户自己的文件——
     文件面板所见即所得，无需过滤规则）。解析：GENIE_SESSION_STATE_DIR
     → 缺省 ~/data/genie/session。
 
-    2026-11-01：一个进程只有一份模型，所以这里就是会话目录本身
-    （不再有 ``<session_id>/`` 一层，也不再需要 GC 旧会话目录）。
+    2026-11-01：一个进程只有一份模型，所以这里就是状态目录本身
+    （不再有 ``<session_id>/`` 一层，也不需要 GC 旧目录）。
     """
     return Path(os.environ.get("GENIE_SESSION_STATE_DIR")
                 or Path.home() / "data/genie/session")
@@ -76,7 +79,7 @@ def results_dir() -> Path:
 def doc_path() -> Path:
     """自动存档的文档路径（G4a 2026-10-30）。
 
-    优先读会话目录的 ``doc.json``（GUI **Open 打开的 .gensim**——跑完把
+    优先读状态目录的 ``doc.json``（GUI **Open 打开的 .gensim**——跑完把
     结果写回这个文件）；没有则 = 工作区的 ``genie.gensim``
     （默认文档，用户从未打开过文件时的落点）。
     """
@@ -94,7 +97,7 @@ def doc_path() -> Path:
 def set_doc_path(path: str | None) -> Path | None:
     """钉当前文档（``None``/空串 = 清回默认）。
 
-    只写会话状态目录（系统空间，不进工作区）；worker 重挂时由
+    只写状态目录（系统空间，不进工作区）；worker 重挂时由
     ``_respawn`` 读进 ``GENIE_DOC_PATH``——Open 打开文件后**跑完自动写回
     那个文件**靠的就是这条。
     """
@@ -116,10 +119,10 @@ def set_doc_path(path: str | None) -> Path | None:
 
 
 class SessionKernel:
-    """一个进程一份会话管理器（spawn/重生 worker、输出环、凭据）。
+    """一个进程一个 worker 管理器（spawn / 重生 / 输出环 / 凭据）。
 
     B2 落盘边界（铁律 1）：**落盘是恢复快照，不是第二份可编辑设计状态**
-    ——唯一可编辑真源永远是会话进程内的 f；log.jsonl / session_state.json
+    ——唯一可编辑的东西永远是 worker 里的 f；log.jsonl / session_state.json
     只服务「worker 重生 / 服务重启」后的自动恢复，从不回流编辑（v1 病灶 =
     静默双中心同步，任何复刻一律拒绝）。
     """
@@ -145,9 +148,9 @@ class SessionKernel:
         self._job_id = ""
         self._key = ""          # 授权凭据（可空）：换绑只改这一格
         self._next_id = 1
-        # B2 会话落盘（目录 0700，文件 0600 各写点收紧）：
+        # B2 落盘（状态目录 0700，文件 0600 各写点收紧）：
         #   log.jsonl          —— 输出环 JSONL 追加流（本类写，构造时读回）
-        #   session_state.json —— 会话 f 快照（worker 原子写，不含凭据）
+        #   session_state.json —— worker 里的 f 快照（worker 原子写，不含凭据）
         _s = _session_root()
         _s.mkdir(parents=True, exist_ok=True)
         os.chmod(_s, 0o700)
@@ -168,8 +171,8 @@ class SessionKernel:
         """
         key = key or ""
         if not key and self._key:
-            # 空凭据的绑定请求**不得降级**已绑定的会话（console 没有 token，
-            # 它 attach 时不该把会话的钥匙拔掉）。要换掉凭据请显式给新 key。
+            # 空凭据的绑定请求**不得降级**已绑定的 worker（console 没有 token，
+            # 它 attach 时不该把 worker 的钥匙拔掉）。要换掉凭据请显式给新 key。
             return {"key_changed": False, "alive": self._alive}
         changed = key != self._key
         self._key = key
@@ -187,7 +190,7 @@ class SessionKernel:
 
     def submit(self, code: str, *, mode: str = "run",
                label: str = "") -> int:
-        """整段代码提交到会话 exec → exec id（输出走 output(since) 增量拉）。
+        """整段代码交给 worker 执行 → exec id（输出走 output(since) 增量拉）。
 
         ``mode``（M3）：
           - ``run``  —— 在**当前命名空间**里执行（终端语义：f 常驻、状态累积）；
@@ -246,8 +249,7 @@ class SessionKernel:
     def sweep_plot(self, mon: str, field: str = "") -> int:
         """把最近一次扫描的结果推到 Plot 面板 → op id。
 
-        与单跑 ``f.visualize`` 同一条事件路：worker 侧把合并结果落会话
-        结果目录并 emit ``plot`` 事件（job_id = 扫描 id）——面板零改动。
+        与单跑 ``f.visualize`` 同一条事件路：worker 侧把合并结果落结果目录并 emit ``plot`` 事件（job_id = 扫描 id）——面板零改动。
         """
         self._ensure()
         eid = self._next_id
@@ -297,7 +299,7 @@ class SessionKernel:
         return self._rt.stop()
 
     def reset(self) -> dict:
-        """清理并重启会话进程（R31 站长裁：A2 的进程级兜底）。
+        """重启 worker（R31 站长裁：A2 的进程级兜底）。
 
         **只清执行态**：在途 op 作废、卡死进程被杀、新进程宿主干净
         （脚本对 sys.path/env/猴子补丁的污染不跨重生——G161 的"脏手"
@@ -306,7 +308,7 @@ class SessionKernel:
         stop 治能响应信号的长任务，reset 治 stop 治不了的。"""
         had_inflight = bool(self._inflight)
         self._respawn()          # 杀旧进程 + 清 inflight + 起新进程
-        self._note("会话已清理重启"
+        self._note("执行进程已清理重启"
                    + ("（在途执行已作废）" if had_inflight else ""))
         return {"ok": True, "dropped_inflight": had_inflight}
 
@@ -328,7 +330,7 @@ class SessionKernel:
         return {"ok": True, "busy": False}
 
     def output(self, since: int) -> dict:
-        """读取会话快照（**纯读**，不唤起——唤起是产品策略，见 ``ensure()``）。"""
+        """读取 worker 快照（**纯读**，不唤起——唤起是产品策略，见 ``ensure()``）。"""
         with self._lock:
             cfg = self._cfg or {}
             return {"lines": [l for l in self._lines if l["seq"] > since],
@@ -360,12 +362,12 @@ class SessionKernel:
             return bool(self._inflight)
 
     def ensure(self) -> None:
-        """确保会话活着（**读即唤起**的产品策略入口）。
+        """确保 worker 活着（**读即唤起**的产品策略入口）。
 
-        为什么要它：Studio 与它会话同进程，Studio 重启 = 会话对象没了；而
+        为什么要它：Studio 与 worker 同进程，Studio 重启 = 管理器对象没了；而
         已经开着的页面只会轮询 ``/api/exec/output``，不会重新 attach。若轮询
         不唤起，页面会一直看到"空模型"——看起来像模型丢了，其实只是没人把
-        它叫醒。轮询方要的本来就是"这个会话现在是什么样"，所以读 = 确保活着。
+        它叫醒。轮询方要的本来就是"现在模型是什么样"，所以读 = 确保活着。
 
         唤起后 worker 会从快照重放并**主动回流一次 cfg**（见
         kernel_worker.replay_state），因此下一拍轮询就能拿到模型。
@@ -427,7 +429,7 @@ class SessionKernel:
         try:
             raw = self._ring_path.read_text(encoding="utf-8")
         except (FileNotFoundError, OSError):
-            return                     # 无环文件 = 全新会话
+            return                     # 无环文件 = 全新状态目录
         if len(raw.encode("utf-8")) > _RING_CAP_BYTES:
             head = raw[-_RING_CAP_BYTES:]
             cut = head.find("\n")      # 从整行边界开始保留
@@ -466,7 +468,7 @@ class SessionKernel:
     def _ring_append(self, entry: dict) -> None:
         """环条目落盘（B2，调用方持 _lock）：同步追加一行 JSONL——常开
         句柄 + 每条 write+flush，不 fsync（断电最多丢尾部，读回时半行
-        容忍）。文件 0600。异常全吞：盘故障不得拖垮会话输出。"""
+        容忍）。文件 0600。异常全吞：盘故障不得拖垮 worker 输出。"""
         try:
             if self._ring_fh is None:
                 self._ring_fh = self._ring_path.open("a", encoding="utf-8", newline="")
@@ -490,14 +492,14 @@ class SessionKernel:
                # 系统文件搬家配套：state 绝对路径显式传递（worker 的
                # cwd 是用户工作区，不再从 cwd 猜系统路径）
                "GENIE_STATE_FILE": str(self._state_path),
-               # O2：结果按会话分层（两个模型的结果不互相污染 latest）
+               # O2：结果目录由本进程决定（结果文件按 job_id 命名，不按 mtime 猜 latest）
                "GENIE_RESULT_DIR": str(results_dir()),
                # G4a（2026-10-30）：跑完自动存档的文档路径（绝对）。
-               # 优先 = 用户 Open 打开的 .gensim（session doc.json），
-               # 否则本会话默认 <session>.gensim；换工作区/换文档都靠重挂
+               # 优先 = 用户 Open 打开的 .gensim（状态目录的 doc.json），
+               # 否则本进程默认 genie.gensim；换工作区/换文档都靠重挂
                # 让这个 env 生效。
                "GENIE_DOC_PATH": str(doc_path()),
-               # G182 P4：扫描文件夹根（会话显式注入，避免把结果目录当基）
+               # G182 P4：扫描文件夹根（worker 显式注入，避免把结果目录当基）
                "GENIE_SWEEPS_DIR": str(scripts_dir() / "sweeps"),
                # 后端是部署属性：worker 从环境读，不从请求读
                "GENIE_BACKEND": resolve_gateway()}
@@ -512,7 +514,7 @@ class SessionKernel:
             on_line=self._pump, on_err=self._pump_err,
             on_exit=self._worker_exit)
         self._rt.start()
-        self._note("会话进程已启动"
+        self._note("执行进程已启动"
                    + ("（凭据已挂）" if self._key else "（未登录——只能编辑）"))
         if self._key:
             self._send({"op": "attach", "url": resolve_gateway(), "key": self._key})
@@ -541,7 +543,7 @@ class SessionKernel:
             self._ring_append(entry)   # B2：append 环后同步落盘一行
 
     def emit_external(self, kind: str, data: dict) -> None:
-        """外部事件注入（G148 批 4b 腿 B）：外部 SDK 进程经会话服务
+        """外部事件注入（G148 批 4b 腿 B）：外部 SDK 进程经本地 /session 面
         /result/inject 推 GUI 事件。走 ``_emit`` 环唯一写入口——seq/
         落盘/GUI 轮询语义与 worker 事件完全同轨（origin="external"）。"""
         self._emit(kind, "", "external", data=data)
@@ -609,9 +611,9 @@ class SessionKernel:
             self._op_end(ev.get("id"))
 
     def _worker_exit(self) -> None:
-        """stdout EOF = worker 退出（B2：不再有「会话态已丢」——输出历史
-        在环落盘里，会话 f 由 worker 重生时读 session_state.json 重放）"""
-        self._note("会话进程退出——下次执行自动重生（输出历史保留，会话 f 由落盘恢复）")
+        """stdout EOF = worker 退出（B2：不再有「模型丢了」——输出历史
+        在环落盘里，f 由 worker 重生时读 session_state.json 重放）"""
+        self._note("执行进程退出——下次执行自动重生（输出历史保留，模型由落盘恢复）")
         self._ops_lost()
 
     def _pump_err(self, line: str) -> None:

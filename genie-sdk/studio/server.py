@@ -1,24 +1,24 @@
-"""genie.studio.server — Studio 服务（静态 + 本地面 + 会话门面）。
+"""genie.studio.server — Studio 服务（静态 + 本地面 + ``/session`` 门面）。
 
 架构（2026-10-22 M2/O1+O2 收敛后，一句话）：
-**Studio 是"本机的一个网页门"——静态资源 + 本地磁盘 + 会话门面；它自己
-不拨后端。** 网络出口只有一个：会话（见 ``session_service``）。
+**Studio 是"本机的一个网页门"——静态资源 + 本地磁盘 + ``/session`` 门面；它自己
+不拨后端。** 网络出口只有一个：本地端口（见 ``session_service``）。
 
 三条由此而来的规矩：
 
-1. **地址是部署细节**：会话地址由进程主入口显式注入（``create_app(session=…)``），
-   不经环境变量泄漏进产品语义；本地默认由 ``genie studio`` 自己起会话、
+1. **地址是部署细节**：端口地址由进程主入口显式注入（``create_app(session=…)``），
+   不经环境变量泄漏进产品语义；本地默认由 ``genie studio`` 自己起这个端口、
    自己注入，不探测端口、不复用旧进程（O1）。
 2. **唯一网关出口**：``/api/auth/*``、``/api/jobs/*`` 经
-   ``session.gateway()`` 转发（会话侧有路径白名单 + 唯一一次"上游不可达"
+   ``session.gateway()`` 转发（worker 侧有路径白名单 + 唯一一次"上游不可达"
    翻译）。Studio 不再持有后端地址、不再自己发请求（O2）。
    ``/api/tools/*``（库清单/材料拟合）**不在转发面**——G19b 起纯本地
    实现（genie.core.material + 本地 scipy，见下方工具面端点）。
-3. **代理面是可选的**：``mount_session=True`` 才挂"会话门面 + 网关门面"
+3. **代理面是可选的**：``mount_session=True`` 才挂"``/session`` 门面 + 网关门面"
    （本地 ``genie studio`` 与 Pyodide 网页端 ``studio/web.py`` 共用）；
    ``False`` = 纯静态壳。
 
-脚本一律经会话执行面（/api/exec）驱动——G174 后**唯一执行引擎**
+脚本一律经执行面（/api/exec）驱动——G174 后**唯一执行引擎**
 （无独立 preview 端点：G50 删路由，2026-10-28 R33 连本地零网络
 引擎一并退役）。
 """
@@ -70,7 +70,7 @@ _MAX_BINARY = 512 * 1024 * 1024
 class DraftRing:
     """环形脚本文本环（/api/drafts ↔ /__drafts 的服务端存储）。
 
-    通道里只有脚本文本——模型由会话执行脚本派生（脚本是本体，cfg 不是
+    通道里只有脚本文本——模型由 worker 执行脚本派生（脚本是本体，cfg 不是
     同伴负载）。本地单环（进程级 ``_DEFAULT_RING``）。
     """
 
@@ -99,11 +99,11 @@ def create_app(*, static_dir: str | Path | None = None,
                require_auth: bool = False) -> FastAPI:
     """Studio app 工厂。
 
-    ``mount_session=True``：挂会话门面（/api/exec*、/api/session/*、
+    ``mount_session=True``：挂 ``/session`` 门面（/api/exec*、/api/session/*、
     /api/result/*）与网关门面（/api/auth/*、/api/jobs/*）——本地
     ``genie studio`` 与 Pyodide 网页端（``studio/web.py``）共用本工厂。
 
-    ``session``：会话客户端（地址 + 端口口令）。缺省 ``SessionClient()``
+    ``session``：端口客户端（地址 + 口令）。缺省 ``SessionClient()``
     （读 env，跨进程形态用）；本地入口显式注入——地址不进产品语义。
 
     ``require_auth=True``（站长裁决 2026-10-21）＝**未登录什么都不给做**：
@@ -136,7 +136,7 @@ def create_app(*, static_dir: str | Path | None = None,
 
     # ── 登录闸（站长裁决 2026-10-21：未登录什么都不给做）──
     # G110 清账 2026-10-27：原黑名单式 _GATED_PREFIX 只列八族，漏了
-    # /api/run、/api/model/*、/api/result/*——未登录可整份替换会话模型、
+    # /api/run、/api/model/*、/api/result/*——未登录可整份替换模型、
     # 以代持凭据提交 GPU 作业并读结果。黑名单的结构性缺陷 = 新增端点
     # 天然漏闸，反转成"默认全闸 + 显式放行"：放行只给健康检查与登录面
     # （不放行登录页自己都加载不出来）；静态资源不在 /api/ 下，不受影响。
@@ -155,20 +155,20 @@ def create_app(*, static_dir: str | Path | None = None,
 
     @app.get("/api/health")
     def health() -> dict:
-        """服务自述：上游地址**问会话**（Studio 不再持有后端配置）。"""
+        """服务自述：上游地址**问本地端口**（Studio 不再持有后端配置）。"""
         out: dict = {"ok": True, "service": _TITLE,
                      "sdk_version": genie.__version__,
                      "auth_required": bool(require_auth),
                      "upstream": None,
                      "session": False}
-        if sess is None:          # 纯静态角色的 app：没有会话门可报
+        if sess is None:          # 纯静态角色的 app：没有可报的端口
             out["session"] = None
             return out
         try:
             h = sess.health()
             out["session"] = bool(h.get("ok"))
             out["upstream"] = h.get("upstream")
-        except Exception:  # noqa: BLE001 — 会话没起也要能自述（GUI 靠它判断闸）
+        except Exception:  # noqa: BLE001 — 端口没起也要能自述（GUI 靠它判断闸）
             pass
         return out
 
@@ -203,7 +203,7 @@ def create_app(*, static_dir: str | Path | None = None,
     def pull_drafts(req: Request, since: int = 0) -> list[dict]:
         return _DEFAULT_RING.since(since)
 
-    # ══ 会话门面 + 网关门面（mount_session=True 时挂）═══════════════
+    # ══ /session 门面 + 网关门面（mount_session=True 时挂）═══════════════
     if mount_session:
         register_session_routes(app,
                                 exec_credentials_of=key_of,
@@ -214,7 +214,7 @@ def create_app(*, static_dir: str | Path | None = None,
             """转发一次后端调用（体字节透传、状态码穿透）。
 
             **本函数是 Studio 里唯一碰网关的地方**——它不解析业务、不改
-            写错误，唯一那一次"上游不可达"翻译在会话侧
+            写错误，唯一那一次"上游不可达"翻译在 worker 侧
             （session_service._upstream_down）。所以"后端没起"在全局只有
             一种措辞。
             """
@@ -233,7 +233,7 @@ def create_app(*, static_dir: str | Path | None = None,
             return Response(content=content, status_code=status,
                             media_type=ct or "application/json")
 
-        # 账号面：浏览器同源调本地，本地转发会话 → 网关（规避跨域）。
+        # 账号面：浏览器同源调本地，本地转发请求 → 网关（规避跨域）。
         # whoami 在网关上挂在根路径，其余在 /api/auth/* 下。
         @app.api_route("/api/auth/{path:path}", methods=["GET", "POST"])
         async def api_auth_fwd(path: str, req: Request) -> Response:
@@ -355,15 +355,15 @@ def create_app(*, static_dir: str | Path | None = None,
             return await _gw_fwd(req, f"api/jobs/{path}", timeout=120.0)
 
         # 账本（记账三件套③，2026-10-31）：本人本月卡时/笔数/配额——
-        # 与 jobs 同族的网关代拨（会话侧 _GW_ALLOW 放行 api/usage）。
+        # 与 jobs 同族的网关代拨（worker 侧 _GW_ALLOW 放行 api/usage）。
         @app.get("/api/usage")
         async def api_usage_fwd(req: Request) -> Response:
             return await _gw_fwd(req, "api/usage", timeout=30.0)
 
-    # ── 会话端口（只给**跨进程客户端**用：genie console / 外部工具）──
-    # 同进程的 GUI 走上面的门面直接调对象（零 HTTP）；这里挂同一套会话
+    # ── 本地端口（只给**跨进程客户端**用：genie console / 外部工具）──
+    # 同进程的 GUI 走上面的门面直接调对象（零 HTTP）；这里挂同一套路由
     # 路由，带本机口令（session_service.set_token 由入口设置）。于是
-    # "一个进程、一个端口"：GUI 的 8777 同时也是 console 的会话入口。
+    # "一个进程、一个端口"：GUI 的 8777 同时也是 console 的入口。
     if share_session:
         from genie.studio.session import session_service as _session_service
         app.mount("/session", _session_service.app)
@@ -434,7 +434,7 @@ def create_app(*, static_dir: str | Path | None = None,
     # ── 工作区根（G4a 2026-10-30 站长定案）：查看 / 选择 ─────────────
     # 机器级持久设置（~/.genie/workspace.json）的唯一读写口；本地 Studio
     # 的 Workspace… 按钮走 POST（无 path → 服务端原生目录对话框），
-    # 换根后当前会话自动重挂（GENIE_RESULT_DIR/GENIE_DOC_PATH 是 spawn env）。
+    # 换根后 worker 自动重挂（GENIE_RESULT_DIR/GENIE_DOC_PATH 是 spawn env）。
     from .views import workspace_setting as _ws
 
     @app.get("/api/workspace")
@@ -472,7 +472,7 @@ def create_app(*, static_dir: str | Path | None = None,
             try:
                 r = await run_in_threadpool(sess.respawn_for_paths)
                 outcome = "busy" if r.get("busy") else "restarted"
-            except Exception:   # noqa: BLE001 —— 会话侧故障不拦设置生效
+            except Exception:   # noqa: BLE001 —— worker 侧故障不拦设置生效
                 outcome = "remote"
         return {"ok": True, "root": str(root), "session": outcome}
 
@@ -509,7 +509,7 @@ def create_app(*, static_dir: str | Path | None = None,
             try:
                 r = await run_in_threadpool(sess.respawn_for_paths)
                 sess_state = "busy" if r.get("busy") else "restarted"
-            except Exception:   # noqa: BLE001 —— 会话侧故障不拦打开
+            except Exception:   # noqa: BLE001 —— worker 侧故障不拦打开
                 sess_state = "remote"
         from starlette.datastructures import UploadFile as _UploadFile
         with open(p, "rb") as fh:
@@ -593,7 +593,7 @@ def create_app(*, static_dir: str | Path | None = None,
     # 站长裁"有结果就自动带"）——导入端据此还原结果态（按钮 =
     # Switch to setting）。存储 = POST cfg → 服务端流式打包（大 h5 不过
     # 浏览器内存）；打开 = 上传 zip → 先验 cfg（genie.models 同一双手）
-    # 再解包落回工作区（同款名守卫/上限）。会话 f 仍是唯一真源——
+    # 再解包落回工作区（同款名守卫/上限）。worker 里的 f 仍是唯一可编辑的东西——
     # .gensim 只是它的可携快照，不构成第二持久化中心。
     @app.post("/api/sim/export")
     async def sim_export(req: Request) -> FileResponse:
@@ -607,7 +607,7 @@ def create_app(*, static_dir: str | Path | None = None,
         result_data = None
         state = None
         if job_id:
-            # G182 P3：结果主来源 = 会话当前文档（内嵌 h5）→ 旧 h5 回退。
+            # G182 P3：结果主来源 = 当前文档（内嵌 h5）→ 旧 h5 回退。
             from genie.studio.views import results_view
             from genie.core.archive import simfile as _simfile
             from .session.kernel_session import doc_path
@@ -722,7 +722,7 @@ def create_app(*, static_dir: str | Path | None = None,
                     if n == "results/":
                         continue
                     if n.startswith("results/"):
-                        # G148：结果 h5 回落会话结果目录（结果态还原的
+                        # G148：结果 h5 回落到结果目录（结果态还原的
                         # 数据源；job_id 白名单由 result_path 守卫）
                         if "/" in n[len("results/"):]:
                             raise HTTPException(
@@ -769,7 +769,7 @@ def create_app(*, static_dir: str | Path | None = None,
         只读投影：入参 = 前端手里的当前模型 cfg（与 /api/sim/export 同源），
         渲染器 = `core/script.render`（golden 字节锁定的唯一一份）——参数
         保留为变量、表达式槽保留为表达式，生成的脚本可独立运行重建同一模型。
-        **不碰会话、不写盘、不改编辑器**（脚本是脚本、仿真是仿真；这是
+        **不碰 worker、不写盘、不改编辑器**（脚本是脚本、仿真是仿真；这是
         模型→代码的一次性交接）。
         """
         body = await req.json()

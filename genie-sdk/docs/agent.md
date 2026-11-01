@@ -18,8 +18,8 @@ if cli is None:
 cli.health()                        # 不可达会抛 503，别静默继续
 ```
 
-`discover()` 只带出**地址与本机会话口令**——模型只有一份，没有 owner /
-session_id 要传。门牌里还有本机会话口令——**不需要**用户的 API key，会话
+`discover()` 只带出**地址与本地端口口令**——模型只有一份，没有 owner /
+session_id 要传。门牌里还有端口口令——**不需要**用户的 API key，worker
 已经持有了。
 
 ## 2. 看一眼现在的模型
@@ -29,10 +29,10 @@ out = cli.output()
 model = out["cfg"]        # 线格式 SimConfig（字段见手册参考页）
 out["busy"]               # True = 有人在跑东西（exec/run/写模型）
 out["phase"]              # exec|submit|queue|run|download|idle
-out["job_id"]             # 会话当前/最近一次作业的 id（取结果时显式带上）
+out["job_id"]             # 当前/最近一次作业的 id（取结果时显式带上）
 ```
 
-`cfg` 为 `None` / `{}` = 会话还没有模型（先 `replace` 一份或跑一段 `exec`）。
+`cfg` 为 `None` / `{}` = 还没有模型（先 `replace` 一份或跑一段 `exec`）。
 
 ## 3. 改一处 —— 默认用最小的那个
 
@@ -91,7 +91,7 @@ out = wait(cli, seq)      # 新的 cfg 就在 out["cfg"]
 cli.run()                       # 提交**当前模型**（不改模型）
 ```
 
-要循环、扫参、按数据生成几何，就发一段代码。会话的命名空间里已经绑好
+要循环、扫参、按数据生成几何，就发一段代码。worker 的命名空间里已经绑好
 `f`（当前模型）、`genie`、`connect`、`run_model`：
 
 ```python
@@ -126,8 +126,8 @@ cli.result_series(job_id=job, mon="t1", field="Ey")
 
 - **别自己起第二个 Studio**：一个进程一份模型，第二个实例里那份用户在浏览器里
   看不到（要新模型请 `cli.new_model()`，那才会丢给用户看的那一份）。
-- **别调 `connect()`**：会话已经有凭据，`connect()` 只会多开一个实例进合并集。
-- **别用 `f.run()`**：它会把会话模型锁在 `done`（之后要 `reopen()` 才能改）。用 `run_model()`。
+- **别调 `connect()`**：worker 已经有凭据，`connect()` 只会多开一个实例进合并集。
+- **别用 `f.run()`**：它会把当前模型锁在 `done`（之后要 `reopen()` 才能改）。用 `run_model()`。
 - **别猜字段名**：服务端对未知字段一律 422。不确定就查手册参考页。
 - **别吞错误**：`patch` 被拒、422、503 都要往上报，别重试到没反应。
 
@@ -136,7 +136,7 @@ cli.result_series(job_id=job, mon="t1", field="Ey")
 | 现象 | 含义 | 怎么办 |
 |---|---|---|
 | `HTTP 422` + 字段名 | 值/形状不合法（或字段不存在） | 按字段改，查手册对应参考页 |
-| `HTTP 503` 会话不可达 | Studio 没在跑 / 门牌过期 | 让用户重启，不要自己起服务 |
+| `HTTP 503` 本地端口不可达 | Studio 没在跑 / 门牌过期 | 让用户重启，不要自己起服务 |
 | 终端里 `(patch 失败: … 整批未提交)` | 这批 op 全被拒，模型没动 | 按点名的第几条修 |
 | `origin=reject` 的快照 | 同上，这次是界面视角 | 别把本地那份当真 |
 

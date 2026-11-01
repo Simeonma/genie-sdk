@@ -1,4 +1,7 @@
-"""sdk/genie/studio/session_client — 会话服务的客户端与路由注册（公共）。
+"""session_client — ``/session`` 面的客户端 + Studio 门面的路由注册（公共）。
+
+（名字里的 "session" 指这个本地端口，不是某个实体；五名词见
+``studio/session/MODMAP.md`` §0。）
 
 事件契约（G13① 起正式化——所有脸按这张表说话，改动词 = 改这里）：
   环条目 {seq, text, kind, origin, ts[, mark][, data]}：
@@ -9,22 +12,22 @@
            ≈5% 一跳；终端不落屏，只喂 GUI 进度条/ETA）
          | state（生命周期相位，data={phase[,job_id]}，phase ∈
            exec|submit|queue|run|download|idle；GUI 状态监测用）
-    origin ∈ manager（会话管理层）| worker（执行面）
+    origin ∈ manager（管理器 / 父层）| worker（执行面）
   /output 响应 {lines, busy, cfg, resolved, cfg_seq, phase, job_id}：
-    cfg/resolved = 会话 f 的快照（GUI 投影数据源）；cfg_seq 单调，
+    cfg/resolved = **worker 里那份模型**的快照（GUI 投影数据源）；cfg_seq 单调，
     客户端以 since 游标增量消费——重放安全（B2 seq 续接）；
-    phase/job_id = 会话级作业状态监测（GUI 进度条数据源）。
+    phase/job_id = 作业状态监测（GUI 进度条数据源）。
 
 M2/O1+O2（2026-10-22）后的三条界：
-  1. **会话地址 = 部署细节**：本模块不再从环境变量猜地址；进程主入口把
+  1. **地址 = 部署细节**：本模块不再从环境变量猜地址；进程主入口把
      ``SessionClient(url)`` 显式注入 Studio 工厂（``create_app(session=…)``）。
      环境变量只在跨进程客户端（console / 外部工具）里作为缺省值。
   2. **两条生命周期 + 一份模型**：工作区（一个进程一片目录，登录不参与）/
      token（能不能提交）互不决定；模型一个进程只有一份，刷新/重登都保留它，
      ``new_model()`` 才丢弃（请求面既没有 owner 也没有 session_id）。
   3. **唯一网关出口**：Studio 不再自己拨号后端。``gateway()`` 把
-     /api/auth/*、/api/jobs/* 交给会话服务转发（会话侧有
-     路径白名单），于是"上游不可达"只有一种措辞、一个实现。
+     /api/auth/*、/api/jobs/* 交给本端口转发（路径白名单在这里），于是
+     "上游不可达"只有一种措辞、一个实现。
      /api/tools/*（库清单/材料拟合）自 G19b 起为 Studio 本地实现，
      不经此转发面（G111 清账 R38）。
 
@@ -40,7 +43,7 @@ from fastapi import FastAPI, HTTPException, Request
 
 
 def session_url() -> str:
-    """**没有默认会话地址**——独立会话服务（旧 :8123）已随 G63 退役。
+    """**没有默认端口地址**——独立会话服务（旧 :8123）已随 G63 退役。
 
     这个函数故意改成"响亮失败"：以前它硬编码 `127.0.0.1:8123`，而那个端口
     早就没人听，于是所有忘了注入地址的调用方都会静默去拨一个空端口（宿主
@@ -48,14 +51,14 @@ def session_url() -> str:
     门牌 `~/.genie/studio.json`（`SessionClient.discover()`）或显式 `base_url`。
     """
     raise RuntimeError(
-        "没有会话地址：用 SessionClient.discover() 读门牌，或显式传 base_url"
+        "没有 /session 地址：用 SessionClient.discover() 读门牌，或显式传 base_url"
         "（独立会话服务已退役，不再有 127.0.0.1:8123 这个默认值）")
 
 
 class SessionClient:
-    """会话服务客户端（唯一一份）。
+    """``/session`` 面客户端（唯一一份）。
 
-    ``token`` = 本机会话端口的访问口令（O1：会话端口带口令，写进
+    ``token`` = 本地端口的访问口令（O1：端口带口令，写进
     rendezvous 文件；未配置 = 退回"本机信任面"形态）。
     """
 
@@ -70,8 +73,8 @@ class SessionClient:
         """接上**正在跑的本地 Studio**（读门牌）；没门牌 → None。
 
         只给跨进程客户端用（``genie console`` / agent 脚本 / 第二个 Studio）。
-        本机 Studio 自己持有会话对象、不走 HTTP（O1/O3），所以这条路上
-        不存在"探测端口并复用"的旧毛病：门牌是会话拥有者写的，只有一份。
+        本机 Studio 自己持有 worker 对象、不走 HTTP（O1/O3），所以这条路上
+        不存在"探测端口并复用"的旧毛病：门牌是 Studio 写的，只有一份。
         """
         from genie.studio.session import rendezvous as rv
 
@@ -99,10 +102,10 @@ class SessionClient:
                 method, self.base_url + path, json=json_body, data=data,
                 params=params, headers=hdr or None,
                 timeout=self.timeout if timeout is None else timeout)
-        except Exception as e:  # noqa: BLE001 — 会话掉线必须显性
+        except Exception as e:  # noqa: BLE001 — 端口不可达必须显性
             raise HTTPException(
                 status_code=503,
-                detail=f"会话服务不可达（{self.base_url}）：{e}") from e
+                detail=f"本地端口不可达（{self.base_url}）：{e}") from e
 
     def _json(self, method: str, path: str, *, json_body=None, params=None,
               data=None, content_type="", timeout=None) -> dict:
@@ -121,7 +124,7 @@ class SessionClient:
                           params=params, headers=headers, timeout=timeout)
         return r.status_code, r.content, r.headers.get("Content-Type", "")
 
-    # ---- 会话面 ----
+    # ---- /session 面 ----
 
     def exec(self, code: str, *,
              mode: str = "run", label: str = "", key: str = "") -> dict:
@@ -156,7 +159,7 @@ class SessionClient:
 
         ``verb`` ∈ ``set``（缺省）/ ``append``（往数组尾加一个）/ ``remove``
         （删数组里的一个，path 指到元素）。**一批 op 全对或全错**——被拒时
-        模型一个字节不动，会话回声 ``origin=reject``。
+        模型一个字节不动，worker 回声 ``origin=reject``。
         """
         return self._json("POST", "/model/patch", json_body={
             "ops": list(ops or []), "key": key})
@@ -178,7 +181,7 @@ class SessionClient:
         return self._json("POST", "/stop")
 
     def reset(self) -> dict:
-        """清理并重启会话进程（R31：stop 治不了时的进程级兜底）。"""
+        """重启 worker（R31：stop 治不了时的进程级兜底）。"""
         return self._json("POST", "/reset")
 
     def attach(self, *, key: str = "") -> dict:
@@ -204,7 +207,7 @@ class SessionClient:
                       job_id: str, mon: str, field: str = "",
                       data: bytes) -> dict:
         """外部结果注入（G148 批 4b 腿 B）：h5 字节上传 + plot 事件
-        （外部 SDK 的 f.visualize 走这里——直连会话端口，不经 studio）。"""
+        （外部 SDK 的 f.visualize 走这里——直连本地端口，不经 studio）。"""
         return self._json("POST", "/result/inject", data=bytes(data),
                           content_type="application/octet-stream", params={
                               "job_id": job_id, "mon": mon, "field": field})
@@ -217,9 +220,9 @@ class SessionClient:
     def gateway(self, method: str, path: str, *, key: str = "", data=None,
                 content_type: str = "application/json", params=None,
                 timeout: float = 120.0):
-        """经会话转发一次后端调用 → (status, bytes, content_type)。
+        """经本地端口转发一次后端调用 → (status, bytes, content_type)。
 
-        非 2xx **原样返回**（调用方决定措辞）——会话侧已完成唯一一次
+        非 2xx **原样返回**（调用方决定措辞）——本端已完成唯一一次
         "上游不可达"翻译（见 session_service._upstream_down）。
         体走原始字节：JSON / 空体 / 将来的表单都不需要在这里分叉。
         """
@@ -252,7 +255,7 @@ def register_session_routes(
     请求面只有"要做什么"，没有身份字段：工作区由进程决定（无 owner），
     模型也只有一份（无 session_id）。**新模型 = POST /api/model/new**。
 
-    鉴权交调用方的会话守卫/本地信任面——本函数不做认证。
+    鉴权交调用方的登录闸/本地信任面——本函数不做认证。
     须在静态兜底路由之前调用（GET 路由落在兜底之后会被吞成 404，A1 教训）。
     """
     from fastapi.concurrency import run_in_threadpool
@@ -261,9 +264,9 @@ def register_session_routes(
 
     @app.post("/api/exec")
     async def api_exec(req: Request) -> dict:
-        """Terminal/脚本运行：整段代码在会话 kernel 里执行（真 SDK +
+        """Terminal/脚本运行：整段代码在 worker 里执行（真 SDK +
         绑定 key + 上游 backend）。表单字段级修改走
-        /api/exec/load_config 推进同一份会话 f。
+        /api/exec/load_config 推进同一份模型。
 
         ``mode``：run=在当前命名空间执行（终端）；build=构造新模型（脚本，
         失败零副作用；``reset`` 保留为旧名）。
@@ -365,7 +368,7 @@ def register_session_routes(
 
         **换 key 不换模型**：token 轮换/改密/过期后重登，模型原样保留；
         要新模型走 ``POST /api/model/new``。未登录（取不到 key）时不建模型
-        ——没凭据的会话没有意义。
+        ——没凭据不建模型。
         """
         key = _key_of(exec_credentials_of, req)
         out = await run_in_threadpool(cli.attach, key=key)
@@ -382,20 +385,20 @@ def register_session_routes(
 
     @app.get("/api/exec/output")
     async def api_exec_output(req: Request, since: int = 0) -> dict:
-        """Terminal 输出增量拉取 + 会话忙闲 + cfg 快照回流。"""
+        """Terminal 输出增量拉取 + worker 忙闲 + cfg 快照回流。"""
         return await run_in_threadpool(
             cli.output, since=since)
 
     @app.post("/api/exec/stop")
     async def api_exec_stop(req: Request) -> dict:
-        """停止当前执行（A2「长任务必须能掐」）：经会话 /stop 向
+        """停止当前执行（A2「长任务必须能掐」）：经 /stop 向
         worker 发 SIGINT（exec 掐断+孤儿作业清理；空闲忽略）。"""
         return await run_in_threadpool(
             cli.stop)
 
     @app.post("/api/exec/reset")
     async def api_exec_reset(req: Request) -> dict:
-        """清理并重启会话进程（R31 站长裁：死循环/宿主污染停不掉时的
+        """重启 worker（R31 站长裁：死循环/宿主污染停不掉时的
         进程级兜底——杀 worker 重起，只清执行态，模型与历史保留）。"""
         return await run_in_threadpool(
             cli.reset)
@@ -403,8 +406,8 @@ def register_session_routes(
 
 def register_result_routes(app, *,
                            client: SessionClient | None = None) -> None:
-    """代理 /api/result/meta + /api/result/series → 会话服务（G13②：
-    结果 = 会话状态，GUI 经自己的 origin 代理读取）。GET 路由，须在
+    """代理 /api/result/meta + /api/result/series → 本地端口（G13②：
+    结果 = 模型状态，GUI 经自己的 origin 代理读取）。GET 路由，须在
     静态兜底之前注册（A1 教训）；鉴权交调用方守卫面。"""
     from fastapi import Request
     from fastapi.concurrency import run_in_threadpool

@@ -1,25 +1,25 @@
-"""会话唯一家（2026-10-11 站长裁决，第一性收敛；2026-10-22 M2/O1+O2 收敛）。
+"""session_service — ``/session`` 面：本机唯一那份模型的 HTTP 门（库模块，非入口）。
 
-一个服务、一份 kernel 管理器、一个 worker、一个输出环。
+一个 app、一个 worker 管理器（``SessionKernel``）、一个 worker、一个输出环。
+**模型不在这里**——``f`` 在 worker 里（术语见 ``studio/session/MODMAP.md`` §0）。
 
     studio ─(同进程调用 / 本机 HTTP)→ session_service ──→ kernel_worker 子进程
 
-**M2/O1**（确定性启动）：本地 ``genie studio`` 自己起这个服务（端口由
-OS 分配、地址与口令经内存 + rendezvous 文件显式传递），**不再"探测 8123
-并复用"**——复用会把上一个后端/上一个凭据的旧会话继承进来，是"模型莫名
-其妙存在/消失"的根源。跨进程形态（``genie console``、外部工具）仍走本
-服务的端口。
+**M2/O1**（确定性启动）：本地 ``genie studio`` 自己起这个 app（端口由
+OS 分配、地址与口令经内存 + 门牌显式传递），**不再"探测 8123 并复用"**——
+复用会把上一个后端/上一个凭据的旧 worker 继承进来，是"模型莫名其妙存在/
+消失"的根源。跨进程客户端（``genie console`` / MCP）仍走这个本地端口。
 
 **两条生命周期正交（2026-11-01：owner 与 session_id 两层都删了）**：
   - ``workspace``  = 工作区根（一个进程一片目录，登录账号不参与）；
   - ``key``      = 能不能提交（``/attach`` 幂等换绑，**换 key 不换模型**）。
-  一个进程只有一份模型：新模型 = ``/model/new``（丢弃旧的），不是新命名空间。
+  一个进程只有一份可编辑的模型：新模型 = ``/model/new``（丢弃旧的），不是新命名空间。
 
 **唯一网关出口**：``/gw/{path}`` 代所有客户端（studio / console）拨后端，
 带路径白名单。上游不可达的措辞只有这一处实现。
 
-本服务只听 127.0.0.1；身份判断只发生在 studio 客户端。可选口令
-（``GENIE_SESSION_TOKEN``）用于本机会话端口——未配置即旧的"本机信任面"。
+只听 127.0.0.1；身份判断只发生在 studio 客户端。可选口令
+（``GENIE_SESSION_TOKEN``）用于本地端口——未配置即"本机信任面"。
 """
 from __future__ import annotations
 
@@ -35,11 +35,11 @@ from ...net.config import resolve_gateway
 
 _kernel: object | None = None      # 一个进程一份模型（2026-11-01 删 session 维度）
 _lock = threading.Lock()
-_TOKEN = ""            # 会话端口口令（serve()/set_token() 注入；空 = 不校验）
+_TOKEN = ""            # 本地端口口令（serve()/set_token() 注入；空 = 不校验）
 
 
 def set_token(token: str) -> None:
-    """设置本进程会话端口的口令（O3：Studio 同进程挂载时由入口设置）。"""
+    """设置本进程端口的口令（O3：Studio 同进程挂载时由入口设置）。"""
     global _TOKEN
     _TOKEN = token or ""
 
@@ -72,7 +72,7 @@ def new_model() -> dict:
 app = FastAPI(title="genie-session", docs_url=None, redoc_url=None)
 
 
-# ── 会话端口口令（可选）────────────────────────────────────────────
+# ── 本地端口口令（可选）────────────────────────────────────────────
 @app.middleware("http")
 async def _session_token(request: Request, call_next):
     tok = _TOKEN or os.environ.get("GENIE_SESSION_TOKEN", "")
@@ -86,7 +86,7 @@ async def _session_token(request: Request, call_next):
         if path not in ("/health",):
             if request.headers.get("X-Session-Token") != tok:
                 from fastapi.responses import JSONResponse
-                return JSONResponse({"detail": "会话端口口令缺失"},
+                return JSONResponse({"detail": "本地端口口令缺失"},
                                     status_code=401)
     return await call_next(request)
 
@@ -135,7 +135,7 @@ class ReplaceIn(BaseModel):
 
 class AttachIn(BaseModel):
     key: str = ""
-    url: str = ""      # 旧 wire 兼容：后端归会话 env，此字段忽略
+    url: str = ""      # 旧 wire 兼容：后端归 worker env，此字段忽略
 
 
 # ── 写路径接待正典（G115 收拢 2026-10-29）─────────────────────────
@@ -278,7 +278,7 @@ def stop() -> dict:
 
 @app.post("/reset")
 def session_reset() -> dict:
-    """清理并重启会话进程（R31 站长裁：stop 治不了时的进程级兜底——
+    """重启 worker（R31 站长裁：stop 治不了时的进程级兜底——
     死循环卡 exec、脚本污染宿主，CTRL_BREAK 投递不进就杀进程重起）。
     **只清执行态**：在途 op 作废、新进程宿主干净；模型状态与终端
     输出历史保留（worker 重放 session_state.json / 环落盘）。"""
@@ -292,9 +292,9 @@ def attach(body: AttachIn) -> dict:
     return k.attach(body.key)
 
 
-# ── 结果读取（G13②：结果 = 会话状态；G182 P3：主来源 = 会话当前文档）──
+# ── 结果读取（G13②：结果 = 模型状态；G182 P3：主来源 = 当前文档）──
 # 纯函数逻辑 = results_view（可单测）；此处只做 404 与路径取用。
-# 定位：会话当前文档（打开的 .gensim / <session>.gensim，state.job_id 相符）
+# 定位：当前文档（打开的 .gensim / genie.gensim，state.job_id 相符）
 # → 旧 h5 只读回退（历史作业 / result/inject）。不扫 runs/sweeps。
 
 def _result_prefer() -> list:
@@ -366,7 +366,7 @@ async def result_inject(request: Request,
     """外部结果注入（G148 批 4b 腿 B）：body = results h5 字节 →
     落工作区结果目录 + ``plot`` 事件入输出环（GUI Plot 面板
     自动开卡）。为什么上传字节：外部 SDK 作业的落盘在**用户机器**
-    （``_auto_save_result``），会话工作区读不到——推图即推数。"""
+    （``_auto_save_result``），worker 的工作区读不到——推图即推数。"""
     from pathlib import Path
     from genie.studio.views import results_view
     if not job_id or not mon:
@@ -393,15 +393,15 @@ async def result_inject(request: Request,
 # 按"绕路"判据删除。现在调用点直接 `resolve_gateway()`：一条链、一个函数、一种失败。
 
 
-# 白名单：会话只代拨这几族。别的路径一律 403（不做通用代理）。
-# （api/health：Client.health() 经 /gw 走会话轨时需要。网关 tools 面
+# 白名单：本端口只代拨这几族。别的路径一律 403（不做通用代理）。
+# （api/health：Client.health() 经 /gw 时需要。网关 tools 面
 # 已随 G19b 撤除——/api/tools/* 是 Studio 纯本地实现，不经 /gw。
 # api/usage：本人本月账本——记账三件套③，2026-10-31。）
 _GW_ALLOW = ("whoami", "api/auth/", "api/jobs", "api/health",
              "api/config/", "api/usage")
 
 
-# ── 会话代持凭据（G72 终稿：token 只住会话，脚本零凭据）────────────
+# ── 凭据代持（G72 终稿：token 只住 worker，脚本零凭据）────────────
 # 进程内缓存，首用从凭据仓（~/.genie/credentials.json）载入；
 # 登录截获（下方 _capture_login）即时更新内存 + 落盘。
 # **仅本机单用户入口启用**（enable_cred_broker）：多用户云宿主上开它会
@@ -421,7 +421,7 @@ def enable_cred_broker(on: bool = True) -> None:
 
 
 def _stored_cred() -> dict:
-    """会话当前持有的凭据 {api_key, username}（无则空 dict）。
+    """worker 当前持有的凭据 {api_key, username}（无则空 dict）。
 
     解析口径 = ``net.config.resolve_credential``（显式 > env > 凭据仓）——
     与 SDK 面**同一条链**。2026-10-31 收口：修前这里直接读凭据仓、不看
@@ -495,12 +495,12 @@ def gateway_forward(method: str, path: str, *, key: str = "",
     ——所以"上游不可达"的翻译只有一处，无论调用方在不在本进程。
 
     凭据代持（G72，仅本机形态——``enable_cred_broker`` 开启时）：调用方
-    没带 key 时用**会话持有的凭据**代拨——脚本经 /gw 的请求从头到尾不碰
+    没带 key 时用 **worker 持有的凭据** 代拨——脚本经 /gw 的请求从头到尾不碰
     token。多用户宿主不开代持，行为与从前完全一致（无 key 即裸拨）。
     """
     if not _gw_allowed(path):
         raise HTTPException(status_code=403,
-                            detail=f"会话不代拨该路径：/{path}")
+                            detail=f"本端口不代拨该路径：/{path}")
     cred = (_stored_cred() if (_CRED_BROKER and not key) else {})
     headers = {}
     # 体存在才挂 Content-Type——此前本参数是**死参数**（收了从没挂上）：
@@ -595,7 +595,7 @@ def serve(port: int = 0, *, host: str = "127.0.0.1",
             break
         time.sleep(0.05)
     else:                              # pragma: no cover —— 起不来就是致命的
-        raise RuntimeError(f"会话服务启动失败（{host}:{port}）")
+        raise RuntimeError(f"本地端口启动失败（{host}:{port}）")
     socks = []
     for srv in (getattr(server, "servers", None) or []):
         socks.extend(getattr(srv, "sockets", None) or [])

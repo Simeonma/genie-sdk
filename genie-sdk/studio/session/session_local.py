@@ -1,16 +1,16 @@
-"""genie/studio/session_local.py — 会话的**同进程**适配器（O3）。
+"""genie/studio/session_local.py — ``/session`` 面的**同进程**适配器（O3）。
 
-一份模型一个 actor（`SessionKernel`），它的"地址"是部署细节：
+一份模型、两个适配器，区别只在"调函数的地址"：
 
 - **同进程**（本地默认）：`LocalSessionHost` 直接调 `session_service` 的
-  函数——零 HTTP、零端口、零序列化。Studio 与它的会话之间没有"边"，
-  因为不存在任何需要跨的边界（同机、同用户、同信任域、同生命周期）。
+  函数——零 HTTP、零端口、零序列化。Studio 与持有 `f` 的 worker 之间没有
+  "边"，因为不存在需要跨的边界（同机、同用户、同信任域、同生命周期）。
 - **跨进程**（`genie console` / 外部工具）：
   `session_client.SessionClient` 走 `/session/*`（挂在 Studio 上的同一套
-  路由，带本机口令）——**独立会话服务已退役**（G63：会话与 GUI 同进程）。
+  路由，带本地口令）——**独立会话服务已退役**（G63：worker 与 GUI 同进程）。
 
 两个适配器实现同一张方法表，所以门面（`register_session_routes` /
-`register_result_routes` / `gateway`）对"会话在哪"完全无知。
+`register_result_routes` / `gateway`）对"调用落在哪"完全无知。
 
 **身份维度为零**（2026-11-01）：没有 owner（工作区由进程决定）、没有
 session_id（一个进程一份模型，新模型 = ``new_model()``）。适配器只搬运
@@ -22,13 +22,13 @@ from . import session_service as _svc
 
 
 class LocalSessionHost:
-    """同进程会话适配器（与 SessionClient 同形，可互换）。"""
+    """同进程适配器（与 SessionClient 同形，可互换）。"""
 
     #: 门面/日志用：不指向任何网络地址
     base_url = "in-process://session"
     token = ""
 
-    # ---- 会话面 ----
+    # ---- /session 面 ----
     # （G115 收拢 2026-10-29：接待规则——attach-then-<动作> + mode 归一——
     # 唯一真源 = session_service 的 *_action 函数；本适配器只做参数搬运，
     # 带凭据换绑/归一的判断一律不住这里。锁 = test_session_reception。）
@@ -78,7 +78,7 @@ class LocalSessionHost:
         return _svc.get_kernel().reset()
 
     def respawn_for_paths(self) -> dict:
-        """切工作区后重挂会话（G4a）：与 SessionKernel 同名方法同鸭子面。"""
+        """切工作区后重挂 worker（G4a）：与 SessionKernel 同名方法同鸭子面。"""
         return _svc.get_kernel().respawn_for_paths()
 
     def attach(self, *, key: str = "") -> dict:

@@ -15,7 +15,7 @@ def save(sim, path) -> "Path":
     写盘走 ``genie.core.archive.simfile``（格式正典、原子替换）；返回最终路径。
 
     语义边界：这是**文档产物**，不是第二份可编辑状态——打开/编辑的
-    唯一真源永远是实例本身（``genie.open`` 会整份替换会话模型）。
+    唯一可编辑的永远是实例本身（``genie.open`` 会整份替换 worker 里的模型）。
     """
     from pathlib import Path
 

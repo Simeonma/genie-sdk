@@ -1,4 +1,8 @@
-"""sdk/genie/studio/kernel_worker — GUI Terminal 的常驻会话进程（真 SDK 执行面）。
+"""kernel_worker — Studio 的常驻执行子进程（真 SDK 执行面）。
+
+**它是唯一持有 ``f`` 的地方**（"模型"就在这儿的 ``sims`` / ``ns`` 里；
+术语见 ``studio/session/MODMAP.md`` §0）。Studio 只是界面与搬运：改模型
+只有下面两个原语能进，其余位置（快照 / 文档 / 环 / 事件 / 表单）都是只读副本。
 
 站长裁决（2026-10-10，terminal 战役）：主区下半是 terminal；它背后是
 一个**常驻** Python 进程，装真 genie SDK、连网关、带登录用户 key——
@@ -22,16 +26,16 @@
                                             原样 chunk。text 逐字原文，
                                             kind 只是注解；时间戳由父层
                                             _emit 统一打，worker 不带）
-  → {"ev":"cfg","cfg":{…},"origin":…}      会话 f 的 SimConfig 快照 + 来源标记
+  → {"ev":"cfg","cfg":{…},"origin":…}      当前模型的 SimConfig 快照 + 来源标记
   → {"ev":"done","id":N,"ok":bool,"err":…} 纯 busy 信号（err 供 API/agent
                                             消费；terminal 渲染唯一走 out
                                             流——禁止把 done.err 渲染进环）
-  → {"ev":"ack","id":-1,"ok":bool,"err":…}  控制面回执（attach/bind 的结果）：
+  → {"ev":"ack","id":-1,"ok":bool,"err":…}  控制面回执（attach 的结果）：
                                             **不是 op 完成**，父层不得据此清忙
 
 信任契约：这是用户 key 的**真执行面**——G174 后唯一执行引擎，无沙箱、
 无 dry 面（曾经的 preview 零网络轨已随同裁决退役）；卡死由父层 kill+重生
-（B2：输出历史跨重生保留在父层环落盘里，会话 f 由本进程新生时读
+（B2：输出历史跨重生保留在父层环落盘里，``f`` 由本进程新生时读
 session_state.json 自动重放，父层会在 terminal 注明）。**没有本地墙钟**
 （R41 定案 A+，2026-10-29）：等待时长只由两个真实机制管——用户停止
 （A2）与服务端作业超时；本地 `signal.alarm` 整块机制退役（它曾误杀
@@ -147,7 +151,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
             real_out.flush()
 
     ns: dict = {}
-    sims: list = []          # 会话期间创建的全部 Simulation（grating 式
+    sims: list = []          # worker 存活期间创建的全部 Simulation（grating 式
                              # 脚本每次 connect 开新实例——多实例按
                              # model_merge.merge_configs 合并成一份模型）
     sim = None
@@ -156,7 +160,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
     first_connect_note = True
     restored: list = []      # B2：本次新生由落盘重放出来的实例（重放判据）
     real_connect = genie._connect_direct   # 内部直连（公开 connect 已零参化）
-    # B2 会话态落盘路径：管理器经 GENIE_STATE_FILE 显式传递（系统文件
+    # B2 模型态落盘路径：管理器经 GENIE_STATE_FILE 显式传递（系统文件
     # 住系统空间，2026-10-13 搬家定案）；缺省回退 cwd 仅为独立调试形态
     # （_spawn_and_exec 等直驱 harness）。启动即解析为绝对路径——用户
     # 代码里 os.chdir 不影响恢复快照的读写落点。
@@ -165,28 +169,28 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
     # 工作区锚（2026-10-20 结果配额修复）：启动即定格为绝对路径——
     # 结果实际由 _auto_save_result 落 **worker cwd** 的 genie_results/
     # （$GENIE_RESULT_DIR 未设时），且用户代码可 os.chdir，故清理目标
-    # 只能锚定启动 cwd，不能锚定 state 目录（旧 bug：目标指向会话状态目录下的
+    # 只能锚定启动 cwd，不能锚定 state 目录（旧 bug：目标指向状态目录下的
     # genie_results，那个目录从未存在 → 配额从未生效）。
     workspace = Path.cwd()
 
     # session_connect 连出来的实例落这里。**build（脚本运行）期间临时改道**
-    # 到一个 build 私有的列表——脚本建的实例在成功之前不属于会话（见 exec）。
+    # 到一个 build 私有的列表——脚本建的实例在成功之前不属于当前模型（见 exec）。
     sink = {"sims": sims}
     _last_sweep: dict = {}   # 最近一次扫描的句柄（扫参页 Plot 按钮用）
 
     def _new_sim():
-        """新建一个会话实例（不自动入账——调用方决定落哪个 sink）。
+        """新建一个 worker 实例（不自动入账——调用方决定落哪个 sink）。
 
         零网关形态（离线/直驱 harness）用 client=None：connect("") 会抛
         ValueError，空串还会回落 GENIE_URL（串网关风险），故显式分支。
         """
         s = (real_connect(sess_url, sess_key) if sess_url
              else genie.Simulation(client=None))
-        # G182 P2：会话内 run 成功 → 写 .gensim 文档（不再落散落 h5）。
-        # 文档路径来自会话会话器（GENIE_DOC_PATH：打开过的文档或默认
+        # G182 P2：worker 内 run 成功 → 写 .gensim 文档（不再落散落 h5）。
+        # 文档路径来自管理器的路径解析（GENIE_DOC_PATH：打开过的文档或默认
         # <session>.gensim）；重挂后生效。sweep 点由下面的工厂显式清空。
         s._doc_path = os.environ.get("GENIE_DOC_PATH") or None
-        # G148 腿 A（R24c 批 4）：会话内 f.visualize → ev:plot 事件 →
+        # G148 腿 A（R24c 批 4）：worker 内 f.visualize → ev:plot 事件 →
         # GUI Plot 面板自动开卡。实例属性遮蔽 Simulation.visualize 的
         # class 面（组合根未接线时的报错指路版本）——同 session_connect
         # 的接管模式。
@@ -198,19 +202,19 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         return s
 
     # R24c（G148 批 4 同款接管模式）：sweep 的点实例走 _new_sim 工厂——
-    # 会话凭据 + visualize 注入随点免费；点实例不进 sink（非会话模型）。
+    # worker 凭据 + visualize 注入随点免费；点实例不进 sink（非当前模型）。
     # G168/R34（站长裁"汇总为王，点级降噪"）：sweep 点额外打标
     # ``_sweep_point``——run 补丁据此静默单作业级播报（提交/排队/进度/
     # job-done），终端只收每点一行终态 + 扫描级汇总（_on_sweep_event）。
     # 只包工厂注册这一处：_new_sim 另有 6 个调用点（replay/replace/
-    # run_model 等），那些是普通会话实例，不得降噪。
+    # run_model 等），那些是普通worker 实例，不得降噪。
     from genie.core import run as _sim_mod
     from genie.core import sweep as _sweep_mod
 
     def _sweep_point_sim():
         s = _new_sim()
         s._sweep_point = True
-        # G182 P2：点不得写会话文档（否则 N 个点互相覆盖同一个文件）。
+        # G182 P2：点不得写自动存档文档（否则 N 个点互相覆盖同一个文件）。
         # P4 会给每点设置 <sweeps>/<name>-NNNN.gensim——在那之前点落
         # runs/<job>.gensim（run 级默认）。
         s._doc_path = None
@@ -218,8 +222,8 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
 
     _sim_mod.hooks["sweep_sim_factory"] = _sweep_point_sim
 
-    # G182 P6：会话内扫描的 visualize —— 与单跑**同一条事件路**：合并结果
-    # 落会话结果目录（``<sweep_id>_results.h5``，面板按 job_id 照常定位），
+    # G182 P6：worker 内扫描的 visualize —— 与单跑**同一条事件路**：合并结果
+    # 落结果目录（``<sweep_id>_results.h5``，面板按 job_id 照常定位），
     # 再发一条 plot 事件（job_id = 扫描 id）。零 HTTP：worker 不回头打自己
     # 的门；面板侧零改动（参数轴由结果的 attrs 自带）。
     def _sweep_visualize(sw, mon, field=None):
@@ -235,8 +239,8 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
 
     _sweep_mod.hooks["visualize_sweep"] = _sweep_visualize
 
-    # 会话内 ``genie.open(path)``（2026-10-30 站长定案）：**整份替换**当前
-    # 会话模型——与 GUI「打开仿真」同一语义（用户心智：打开一个仿真 =
+    # worker 内 ``genie.open(path)``（2026-10-30 站长定案）：**整份替换**当前
+    # 当前模型——与 GUI「打开仿真」同一语义（用户心智：打开一个仿真 =
     # 换成它）。build（脚本运行）期间例外：返回载入配置的新实例参与合并，
     # 否则会把正在构造的模型踢掉。模型写入原语收成一处：op=replace 与
     # open 钩子共用本函数（提交成**一个实例**——与 build 同一条规则）。
@@ -358,10 +362,10 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         return out
 
     def _namespace(f=None) -> dict:
-        """会话命名空间——用户代码能看见的名字**只有这四个**。
+        """worker 命名空间——用户代码能看见的名字**只有这四个**。
 
         `run_model()` 是"提交当前模型"（= 工具栏 Run / POST /api/run）：
-        终端里 `f.run()` 会把当前会话模型锁在 done（之后要 `reopen()` 才能
+        终端里 `f.run()` 会把当前模型锁在 done（之后要 `reopen()` 才能
         改），要再跑一次当前模型就用它——它不动 `f`。
         """
         d = {"__name__": "__console__", "genie": genie,
@@ -388,7 +392,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         return nan_to_none(merge_configs(cfgs, ran))
 
     def current_config() -> dict:
-        """会话当前模型（合并后的线格式 dict）。"""
+        """当前模型（合并后的线格式 dict）。"""
         return _merged(session_insts())
 
     def _index_of(node: list, seg: str) -> int:
@@ -493,10 +497,10 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         raise ValueError(f"未知 verb {verb!r}（只认 {'/'.join(_VERBS)}）")
 
     def _session_run(*a, **kw):
-        """提交**当前会话模型**（f 一个字节不动）。
+        """提交**当前模型**（f 一个字节不动）。
 
         用一份临时实例承接提交（SDK 的"一实例一次提交"是传输层约束，不是
-        会话语义）。这就是工具栏 Run / POST /api/run 的实现，也是终端里
+        worker 语义）。这就是工具栏 Run / POST /api/run 的实现，也是终端里
         `run_model()` 的实现。
         """
         cfg = current_config()
@@ -508,14 +512,14 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         return s.run(*a, **kw)
 
     def session_connect(*a, **k):
-        """会话语境的 connect：调用方给的 URL/key（示例里多为占位符）
-        一律忽略——用会话凭据开一个**全新**实例并纳入合并集。"""
+        """worker 内 connect：调用方给的 URL/key（示例里多为占位符）
+        一律忽略——用 worker 的凭据开一个**全新**实例并纳入合并集。"""
         nonlocal first_connect_note
         s_new = _new_sim()
         sink["sims"].append(s_new)
         if first_connect_note:
             emit({"ev": "out", "kind": "note",
-                  "text": "（会话 connect：URL/key 由会话接管——全新 f）\n"})
+                  "text": "（connect 由执行进程接管：URL/key 忽略——全新 f）\n"})
             first_connect_note = False
         return s_new
 
@@ -535,20 +539,20 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         if key is not None:
             sess_key = key
         if restored and sim is None:
-            # B2 重生重放后首个 attach：会话 f 已由落盘重建——只更新凭据
+            # B2 重生重放后首个 attach：worker 里的 f 已由落盘重建——只更新凭据
             # 并接管 connect，不再另立新 f（genie.connect 本身零网络，另立
             # 的只是空 f；若顶掉恢复态，「服务重启后 f 还在」不成立）。
             sim = restored[-1]
             _reauth(sess_key)
-            genie.connect = session_connect   # 会话接管（worker 进程内补丁）
+            genie.connect = session_connect   # connect 接管（worker 进程内补丁）
             emit({"ev": "out", "kind": "note",
                   "text": "↺ 凭据已接管（模型来自落盘恢复）\n"})
         elif not session_insts():
             sim = _new_sim()
-            ready = ("会话已连接网关，f 就绪。\n" if sess_url else
-                     "（无网关地址：会话离线，只能建模不能提交）\n")
+            ready = ("执行进程已连上网关，模型就绪。\n" if sess_url else
+                     "（无网关地址：离线，只能建模不能提交）\n")
             sink["sims"].append(sim)
-            genie.connect = session_connect   # 会话接管（worker 进程内补丁）
+            genie.connect = session_connect   # connect 接管（worker 进程内补丁）
             ns.clear()
             ns.update(_namespace(sim))
             emit({"ev": "out", "kind": "note", "text": ready})
@@ -570,19 +574,19 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         snapshot("attach")
 
     def _reauth(key):
-        """把新凭据写进会话内全部实例的 Client（换 key 不换模型）。"""
+        """把新凭据写进 worker 内全部实例的 Client（换 key 不换模型）。"""
         for s in session_insts():
             cli = getattr(s, "_client", None)
             if cli is not None and hasattr(cli, "set_key"):
                 cli.set_key(key)
 
     def session_insts() -> list:
-        """会话实例全集（快照/落盘/提交同一口径）：sims 全量 + ns["f"]。"""
+        """worker 实例全集（快照/落盘/提交同一口径）：sims 全量 + ns["f"]。"""
         return _insts_of(ns, sims)
 
     def persist_state():
-        """会话 f 落盘（B2 恢复快照——**不是第二份可编辑设计状态**，
-        铁律 1 边界：唯一可编辑真源永远是会话进程内的 f，本文件只服务
+        """模型落盘（B2 恢复快照——**不是第二份可编辑设计状态**，
+        铁律 1 边界：唯一可编辑的东西永远是 worker 里的 f，本文件只服务
         「worker 重生 / session 服务重启」后的自动重放，从不回流编辑）。
         粒度在 worker 侧：逐实例 to_config 保真（manager 侧合并 cfg 会
         丢多实例拆分）。原子写范式参照 fdtd queue._atomic_json
@@ -599,7 +603,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
                            encoding="utf-8")
             os.chmod(tmp, 0o600)
             tmp.replace(state_path)
-        except Exception:   # noqa: BLE001 — 落盘失败不炸会话
+        except Exception:   # noqa: BLE001 — 落盘失败不炸 worker
             pass
 
     def replay_state():
@@ -612,10 +616,10 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         等随后的 attach 注入。零网关形态（Simulation(client=None)）用
         genie.Simulation(client=None)——connect("") 会抛 ValueError、空串
         还会回落 GENIE_URL 环境变量（串网关风险），故按显式 url 分支。
-        任何异常吞掉 + note，恢复失败绝不拦住会话。"""
+        任何异常吞掉 + note，恢复失败绝不拦住 worker。"""
         nonlocal sess_url, sess_key
         if not state_path.exists():
-            return                     # 全新会话（无落盘态）：静默，非失败
+            return                     # 全新状态目录（无落盘态）：静默，非失败
         try:
             st = json.loads(state_path.read_text(encoding="utf-8"))
             cfgs = st.get("sims") or []
@@ -637,10 +641,10 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
             sims.extend(restored)
             ns.clear()
             ns.update(_namespace(restored[-1]))
-            genie.connect = session_connect   # 会话接管（与 attach 同款补丁）
+            genie.connect = session_connect   # connect 接管（与 attach 同款补丁）
             emit({"ev": "out", "kind": "note",
-                  "text": f"↺ 已从落盘恢复 {len(restored)} 个仿真（上次会话态）\n"})
-            # 重启后**主动回流一次快照**：Studio 与我们会话同进程，重启后
+                  "text": f"↺ 已从落盘恢复 {len(restored)} 个仿真（上次模型态）\n"})
+            # 重启后**主动回流一次快照**：Studio 与 worker 同进程，重启后
             # 已开页面只会轮询；没有这一拍，页面看到的是"空模型"（假丢）。
             snapshot("restore")
         except Exception as e:   # noqa: BLE001 — 半途而废的恢复不留给 attach 判断
@@ -673,7 +677,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
             except Exception:   # noqa: BLE001 — 解析失败退化 raw
                 pass
             emit(ev)
-        except Exception as e:   # noqa: BLE001 — 快照失败不炸会话
+        except Exception as e:   # noqa: BLE001 — 快照失败不炸 worker
             emit({"ev": "out", "kind": "error",
                   "text": f"(cfg 快照失败: {e})\n"})
 
@@ -681,10 +685,10 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         """停止后的孤儿作业清理（best-effort，仅 StopExec 路径调）：
         f.run() 的等待是客户端轮询，被同步掐断后**后端作业还在**——它在
         独立进程组（start_new_session），SIGINT 传不到，会继续烧卡到
-        作业超时。遍历会话期全部 Simulation 候选（ns["f"] + sims），对
+        作业超时。遍历 worker 存活期全部 Simulation 候选（ns["f"] + sims），对
         已提交（_job_id 非空）的逐个调新公开方法 cancel()（后端已有
         /api/jobs/{id}/cancel；409=已终态按成功忽略）。异常全吞——清理
-        失败绝不炸会话。"""
+        失败绝不炸 worker。"""
         cap = _Out(emit)   # cancel() 内的 print 走同一捕获面——此刻 exec
                            # 的重定向已退出，裸 print 会直插 IPC 通道（协议
                            # 外裸奔行；虽然 pump 对非 JSON 行有兜底，但不脏它）
@@ -714,7 +718,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         # R29 C2（R30 S-B 最小修：只碰**有在途点**的句柄，终态句柄静默
         # 跳过——修前对已 done 的句柄也发"已取消"假 note；后台续跑的
         # 扫描若仍有在途点仍会被收（停止语义 = 掐断在途计算，跨 exec
-        # 的取舍随 G168 事件设计一并裁）。点实例不进会话 sink（不污染
+        # 的取舍随 G168 事件设计一并裁）。点实例不进本次 sink（不污染
         # 模型合并），修前停止/超时后在途点作业孤儿烧卡（A2）。
         try:
             from genie.core.sweep import active_handles as _active_sweeps
@@ -759,12 +763,12 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
             pass
 
     # ── 运行阶段提示（站长裁决「跑仿真/下载没提示，用户不知道在什么阶段」）：
-    # 给会话内所有 run() 注入缺省 progress（用户显式传则尊重用户），状态
+    # 给worker 内所有 run() 注入缺省 progress（用户显式传则尊重用户），状态
     # 变化才发言；下载前打点。worker 层运行时包装——零 SDK/内核文件改动。──
     _last_state = {"s": None, "phase": None}
     _last_step = {"n": None}
     def _emit_state(phase, job=None):
-        """会话生命周期状态事件（2026-10 站长裁决「状态监测架构收敛」）：
+        """worker 生命周期状态事件（2026-10 站长裁决「状态监测架构收敛」）：
         GUI 的按钮/进度条 = 本事件的纯投影——废除 termBusy/正则两处旁证。
         phase ∈ exec(脚本在跑) / submit(提交上传) / queue(云端排队) /
         run(计算) / download(取回结果) / idle。manager 跟踪现值并在
@@ -809,7 +813,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
     def _sim_run_with_progress(self, *a, **kw):
         # 2026-10-31 状态统一（C5 收口）：原先这里还有一枪"这个实例已经
         # 提交过"——SDK 的 run() 现在自己按状态机拒（done/failed → StateError），
-        # 会话面不再持有第二份判据与第二套措辞。
+        # 本面不再持有第二份判据与第二套措辞。
         if getattr(self, "_sweep_point", False):
             # G168/R34（站长裁"汇总为王，点级降噪"）：sweep 点不做单作业级
             # 播报——提交/排队/状态/进度/job-done 全静默（终端不刷 N 份
@@ -842,7 +846,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
             # 用户自己看得见，不需要第二套话。）
             raise
         # G13② 结果事件：run 成功（含自动下载落盘）→ job-done 进环，
-        # GUI 靠它切结果模式/按 job_id 读会话工作区的 h5（结果=会话状态）。
+        # GUI 靠它切结果模式 / 按 job_id 读 worker 工作区的 h5（结果 = 模型状态）。
         jid = getattr(self, "_job_id", None)
         _last_state["phase"] = None   # 下次 run 的 queue/run 转换重新发言
         _emit_state("exec")           # 生命周期回脚本执行（job-done 随后）
@@ -850,7 +854,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
               "text": f"✓ 作业 {jid} 完成——结果已就绪\n",
               "data": {"job_id": jid or "", "ok": True}})
         # G182 P2：自动存档已下沉到 Simulation.run（_auto_save_document）
-        # ——会话实例的 `_doc_path`（GENIE_DOC_PATH / 打开的文档）在
+        # ——worker 实例的 `_doc_path`（GENIE_DOC_PATH / 打开的文档）在
         # _new_sim 里设好，run 成功即写文档，不再由 worker 二次写。
         return out
     genie.core.run.Simulation.run = _sim_run_with_progress
@@ -858,9 +862,9 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
     _orig_fetch = _Client.fetch_result
     def _prune_results():
         # 云用户工作区配额（2026-10-13 站长裁决）：本地 SDK 用户不管；
-        # 会话侧（=云用户与本地 studio 的运行面）按 mtime 最旧先清到
+        # worker 侧（= 云用户与本地 studio 的运行面）按 mtime 最旧先清到
         # 限额内。GENIE_RESULT_QUOTA_GB 可调，缺省 2GB。
-        # 目标目录（O2）：GENIE_RESULT_DIR（= 本会话的结果目录，管理进程
+        # 目标目录（O2）：GENIE_RESULT_DIR（= 本进程的结果目录，管理进程
         # 显式传入）优先；SDK 直跑无此 env 时回退 cwd/genie_results
         # （老行为，workspace 锚见 main 头注）。
         from pathlib import Path as _P
@@ -913,7 +917,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
             # BaseException，顺序即语义。
             ok, err = False, "用户停止"
             emit({"ev": "out", "kind": "note",
-                  "text": "⏹ 已停止——会话仍在，可继续敲命令\n"})
+                  "text": "⏹ 已停止——模型仍在，可继续敲命令\n"})
             _cancel_orphan_jobs()   # 同步等待已断，后端作业在此收尸
         except BaseException as e:   # noqa: BLE001 — 用户代码异常回终端
             ok, err = False, f"{type(e).__name__}: {e}"
@@ -934,7 +938,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
             _emit_state("idle")
         return ok, err
 
-    # ── B2 重生重放：worker 新生且存在落盘状态 → 自动重建会话 f。放在
+    # ── B2 重生重放：worker 新生且存在落盘状态 → 自动重建worker 里的 f。放在
     # 进循环前：manager 重生后发来的 attach op 排在重放之后处理（attach 见
     # restored 分支——凭据接管，不顶掉恢复态）。 ──
     replay_state()
@@ -957,7 +961,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
                 emit({"ev": "ack", "id": -1, "ok": True, "err": ""})
             except Exception as e:   # noqa: BLE001 — 连接失败回终端，进程存活
                 emit({"ev": "out", "kind": "error",
-                      "text": "✗ 会话连接失败: "
+                      "text": "✗ 连接网关失败: "
                               + "".join(traceback.format_exception_only(e))})
                 emit({"ev": "ack", "id": -1, "ok": False, "err": str(e)})
         elif op in ("patch", "replace"):
@@ -979,7 +983,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
                         raise ValueError("model 须 dict（SimConfig JSON）")
                     if not sess_url and sim is None:
                         raise RuntimeError(
-                            "会话未绑定网关：先登录（或运行一次脚本）建立会话")
+                            "尚未绑定网关：先登录（或运行一次脚本）")
                     cfg_new = model_in
                     applied = ["*"]
                     attempted = ["*"]
@@ -1032,7 +1036,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
                 sess_url = msg["url"]     # 后端是部署属性：先记着，不建 f
             if sim is None and msg.get("key"):
                 # 兜底：已登录但还没 attach 过就直接执行（刷新竞态/旧客户端）。
-                # 无 key（离线/未登录）时**不建会话**——用户在代码里自己
+                # 无 key（离线/未登录）时**不建模型**——用户在代码里自己
                 # 建实例即可，别凭空多一个空 f 污染 cfg 快照。
                 attach({"url": sess_url, "key": msg.get("key")})
 

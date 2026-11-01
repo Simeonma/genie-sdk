@@ -1,4 +1,4 @@
-"""会话 worker 的运行时缝——唯一知道"worker 是个进程"的代码。
+"""worker 的运行时缝——唯一知道"worker 是个进程"的代码。
 
 上层 ``SessionKernel`` 只认这张方法表（协议解析、输出环、在途账本仍在它
 自己身上）：
@@ -15,7 +15,7 @@
 `LEDGER.md` G80 第 4 步。
 
 **为什么这层必须独立**：浏览器没有 ``subprocess`` / ``threading``。把
-"起进程 + 读管道"留在 ``SessionKernel`` 里，网页形态就只能复制一份会话
+"起进程 + 读管道"留在 ``SessionKernel`` 里，网页形态就只能复制一份 worker
 管理——那正是 G80 要避免的第二真源。
 """
 from __future__ import annotations
@@ -126,7 +126,7 @@ class PipeRuntime:
 class InprocRuntime:
     """同进程形态（Pyodide）：没有进程、没有线程，由调用方逐条驱动。
 
-    ``start()`` 让 ``kernel_worker`` 建好会话状态并把 ``_step`` 交出来
+    ``start()`` 让 ``kernel_worker`` 建好模型状态并把 ``_step`` 交出来
     （``main(..., expose=…)``）；``send()`` 把一条协议消息交给**同一个**
     ``_step``。执行逻辑与子进程形态是同一份代码——差别只有"谁来循环"。
     """
@@ -175,7 +175,7 @@ class InprocRuntime:
             return False
         try:
             self._step(json.dumps(obj, ensure_ascii=False) + "\n")
-        except Exception as e:         # noqa: BLE001 —— 会话不能静默死
+        except Exception as e:         # noqa: BLE001 —— worker 不能静默死
             self._on_err(f"{e!r}\n")
             return False
         return True

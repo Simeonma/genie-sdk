@@ -1,9 +1,9 @@
-"""``genie console`` — session 的终端客户端（G12 终局形态，2026-10-13）。
+"""``genie console`` — ``/session`` 面的终端客户端（G12 终局形态，2026-10-13）。
 
 你 shell 里的键盘，与 GUI terminal **平等**（Jupyter console 同款语义）：
-同一个 session kernel，浏览器和终端可以同时连——两把键盘排队执行、
-共享输出环。会话是专职进程、所有客户端平等（MCP/Jupyter/DAP 考据
-定案，决策档案 2026-10-13-session-local.md §6 补记）。
+同一个 worker、同一份模型，浏览器和终端可以同时连——两把键盘排队执行、
+共享输出环。所有客户端平等（MCP/Jupyter/DAP 考据定案，决策档案
+2026-10-13-session-local.md §6 补记）。
 
 协议复用 genie.studio.session.session_client（零新协议、零新 exec 实现）：
 
@@ -13,8 +13,8 @@
 - Ctrl-C：远端忙 → 发 /stop（SIGINT 掐 worker，A2 语义）；输入中 →
   清当前缓冲；Ctrl-D / exit / quit → 退出（session 不受影响）。
 
-O1 起会话地址与口令由调用方注入（``run_console(client, ...)``），不再从
-环境变量猜——``genie console`` 读本机门牌拿到 GUI 正在用的那个会话
+O1 起端口地址与口令由调用方注入（``run_console(client, ...)``），不再从
+环境变量猜——``genie console`` 读门牌拿到 GUI 正在用的那个本地端口
 （连同口令），于是"同一个 f"仍然成立。
 """
 from __future__ import annotations

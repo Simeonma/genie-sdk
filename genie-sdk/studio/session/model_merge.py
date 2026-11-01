@@ -1,9 +1,9 @@
-"""会话多实例模型合并 + JSON 安全化（G174 搬家件，2026-10-28 R33）。
+"""worker 多实例模型合并 + JSON 安全化（G174 搬家件，2026-10-28 R33）。
 
 来历：这两个纯函数原住 ``core/preview.py``（双消费方 = preview_script 与
 ``kernel_worker._merged``）。G174（站长三连裁决）把 preview 独立引擎整体
-退役后，preview_script 消费面消失——函数与执行引擎无关，是会话"提交/
-快照唯一取值口径"的底座，随迁移轮搬到会话层独立小模块（站长裁：不放
+退役后，preview_script 消费面消失——函数与执行引擎无关，是"提交/
+快照唯一取值口径"的底座，随迁移轮搬到执行面独立小模块（站长裁：不放
 kernel_worker 内联——那个文件是被 ``sys.executable <path>`` 直接 spawn
 的契约脚本，纯函数单独可 import 便于锁测试）。
 """
@@ -30,7 +30,7 @@ def merge_configs(cfgs: list[dict], ran: list[bool] | None = None) -> dict:
     行为与 to_config() 逐键同形）。domain/mesh/
     列表维持"后者覆盖/按序拼接"（每实例新配置语义，站长同轮裁）。
 
-    唯一消费方 = studio.kernel_worker._merged（会话提交/快照同一口径）。"""
+    唯一消费方 = studio.kernel_worker._merged（提交/快照同一口径）。"""
     if ran is not None and len(ran) != len(cfgs):
         raise ValueError(
             f"merge_configs: ran 长度须与 cfgs 一致"
@@ -65,7 +65,7 @@ def nan_to_none(v: Any) -> Any:
 
     polygon 哨兵的 Python 侧形态是 (nan, nan)，而**线格式是 [null, null]**
     （JSON 严格语法无 NaN 字面量）。消费方 = kernel_worker 的 cfg 事件
-    出口——会话快照直接序列化为 JSON（emit 的 json.dumps），出口处归一
+    出口——模型快照直接序列化为 JSON（emit 的 json.dumps），出口处归一
     回线格式正形，浏览器 JSON.parse 不丢整条 cfg 事件（R24 S1：单实例
     也必须过——修前 len==1 直通原文，裸 NaN 会炸严格解析）。"""
     if isinstance(v, float):

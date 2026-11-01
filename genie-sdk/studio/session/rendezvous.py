@@ -1,20 +1,21 @@
-"""genie/studio/rendezvous — 本机会话的"门牌"（O1）。
+"""genie/studio/rendezvous — 本机 Studio 的"门牌"（O1）。
 
-问题：会话由 ``genie studio`` 自己起在 **OS 分配的端口**上（这样不会抢端口、
-也不会误连上一个进程留下的旧会话）。于是别的客户端（``genie console``、
-第二个 Studio）没法靠猜端口找到它。
+问题：Studio 的 ``/session`` 面起在 **OS 分配的端口**上（这样不会抢端口、
+也不会误连上一个进程留下的旧 worker）。于是别的客户端（``genie console``、
+MCP、第二个 Studio）没法靠猜端口找到它。
 
-答案：**一个门牌文件**，由会话的拥有者写、别人读。
+答案：**一个门牌文件**，由 Studio 写、跨进程客户端读。
 
     ~/.genie/studio.json  {url, token, pid, started_at}
 
 三条纪律：
 
 1. **只描述，不决策**：读到的地址 + 口令直接拿来拨号；读不到就自己起。
-2. **不做存活探测**：门牌里的 pid 只作排障信息；死掉的门牌表现为"连不上"，
-   调用方按"服务不可达"处理（不猜、不复用）。
-3. **单写者**：只有会话拥有者写；退出时删。多开第二个 Studio 时后写者赢
-   ——但每个 Studio 都有自己的会话，门牌只是"最近一个可连的"。
+2. **read() 不探活，alive() 探活**：`read()` 只回答"门牌上写了什么"；
+   "有没有活着的"由 `alive()` 回答（`read()` + `/health`），一处实现。
+   死门牌表现为"连不上"，调用方按"不可达"处理（不猜、不复用）。
+3. **单写者**：只有 Studio 写；退出时删（只删自己 pid 的牌）。多开第二个
+   Studio 时后写者赢——门牌只是"最近一个可连的"。
 
 env ``GENIE_RENDEZVOUS`` 可整体改路径（测试隔离用）。
 """
@@ -54,7 +55,7 @@ def write(*, url: str, token: str = "") -> None:
 
 
 def read() -> dict | None:
-    """读门牌；不存在/坏文件 → None（调用方按"没有会话"处理）。
+    """读门牌；不存在/坏文件 → None（调用方按"没有 Studio"处理）。
 
     **纯读、不探活**：牌在 ≠ 牌后面那个进程还在。要"有没有活着的"用
     ``alive()``——两个问题两个函数（2026-11-01 收口：原来探活还另有一份
@@ -70,7 +71,7 @@ def read() -> dict | None:
 
 
 def alive(timeout: float = 1.5) -> dict | None:
-    """读门牌并探活；没牌/死牌/读不了 → None。**"有没有活着的会话"的唯一答案。**
+    """读门牌并探活；没牌/死牌/读不了 → None。**"有没有活着的 Studio"的唯一答案。**
 
     死牌不删：门牌可能属于另一个进程（它只是暂时没响应/正在重启），
     删了会踩掉别人的；判死只影响这一次调用。
@@ -83,7 +84,7 @@ def alive(timeout: float = 1.5) -> dict | None:
         if requests.get(card["url"].rstrip("/") + "/health",
                         timeout=timeout).status_code != 200:
             return None
-    except Exception:        # noqa: BLE001 —— 死门牌 = 没有会话
+    except Exception:        # noqa: BLE001 —— 死门牌 = 没有 Studio
         return None
     return card
 
