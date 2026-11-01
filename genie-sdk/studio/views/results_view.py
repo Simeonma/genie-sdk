@@ -153,21 +153,17 @@ def series(source: Path, mon: str, field: str, maxpoints: int = 1200,
 
 
 def results_dir(base: Path, session_id: str | None = None) -> Path:
-    """结果目录：``<base>/genie_results/``，O2 起再按 session 分一层。
+    """结果目录：``<base>/genie_results/<session_id>/``（一律带一层）。
 
     分层的理由：结果 = 会话状态。两个 session 的结果混在一个目录里，
     按 mtime 回退取"最新"会把别人的文件当成自己的（G58/G66 定案后
     已删 latest_result——结果一律按显式 job_id 取，不猜）。
 
-    例外：``None`` / ``""`` / ``"default"`` 保持**平铺**（O2 之前的布局，
-    也是旧客户端的缺省会话）——升级不动存量，旧调用零改动。
+    2026-11-01 删掉"default 平铺"例外（站长裁：不留旧布局兼容）。
     """
-    d = base / "genie_results"
     # 字面 "default" 而非 import DEFAULT_SESSION：本模块被 worker 子进程
     # 使用，不该为常量把 fastapi 拉进执行面。
-    if session_id in (None, "", "default"):
-        return d
-    return d / session_id
+    return base / "genie_results" / (session_id or "default")
 
 
 def result_path(base: Path, job_id: str,

@@ -6,8 +6,7 @@
 
 解析优先级（唯一口径 = ``core.paths.workspace_root``）：
 
-1. ``GENIE_SCRIPTS_DIR``（显式 env，CI/特殊场景；测试隔离也靠它。
-   旧名 ``GENIE_SESSION_CWD`` 仍兼容，2026-11-01 起文档只写新名）；
+1. ``GENIE_SCRIPTS_DIR``（显式 env，CI/特殊场景；测试隔离也靠它）；
 2. ``~/.genie/workspace.json`` 的 ``root``（本模块写的持久设置）；
 3. 缺省 ``~/data/genie/scripts``（存量用户原地不动）。
 

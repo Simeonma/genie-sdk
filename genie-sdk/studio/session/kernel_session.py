@@ -53,14 +53,12 @@ def _session_root() -> Path:
 
 
 def _session_dir(session_id: str) -> Path:
-    """会话目录：``session/<session_id>/``。
+    """会话目录：``session/<session_id>/``（一律带一层，**没有平铺例外**）。
 
-    **兼容例外**（O2）：``session_id == "default"`` 用平铺的 ``session/``
-    ——这是 O2 之前唯一的布局，也是旧客户端的缺省会话。于是"升级不动存量"：
-    存量模型原地被 default 会话继续用，GUI 的具名会话则各占一层目录。
+    2026-11-01 删掉"default 平铺"的旧布局兼容：站长裁不留兼容，老安装的
+    会话快照从头开始。
     """
-    root = _session_root()
-    return root if session_id in ("", DEFAULT_SESSION) else root / session_id
+    return _session_root() / (session_id or DEFAULT_SESSION)
 
 
 def scripts_dir() -> Path:
@@ -78,10 +76,10 @@ def scripts_dir() -> Path:
 def results_dir(session_id: str) -> Path:
     """本会话的结果目录（= worker 的 GENIE_RESULT_DIR，也是 GUI 读取点）。
 
-    同样有 default 例外（平铺），理由同 ``_session_dir``。
+    一律 ``<root>/genie_results/<session_id>``——两个模型的结果不互相污染，
+    且没有"default 平铺"例外（2026-11-01 删）。
     """
-    d = scripts_dir() / "genie_results"
-    return d if session_id in ("", DEFAULT_SESSION) else d / session_id
+    return scripts_dir() / "genie_results" / (session_id or DEFAULT_SESSION)
 
 
 def doc_path(session_id: str) -> Path:
@@ -166,7 +164,6 @@ class SessionKernel:
         os.chmod(_s, 0o700)
         self._ring_path = _s / "log.jsonl"
         self._state_path = _s / "session_state.json"
-        self._migrate_legacy()
         self._gc_sessions()
         self._ring_fh = None                   # 常开追加句柄（首条 emit 打开）
         self._restore_ring()                   # seq 续接：起点 = 文件最大 seq
@@ -402,29 +399,6 @@ class SessionKernel:
             self._respawn()
 
     # ---- 目录生命周期（O2：一 session 一目录）----
-
-    def _migrate_legacy(self) -> None:
-        """把平铺旧布局（``session/session_state.json``）搬进**第一个**
-        具名会话目录。
-
-        只对具名会话（非 default）生效：default 会话本身就住在平铺路径上，
-        搬它等于自己搬自己。升级后用户第一次登录会建立具名会话，它认领
-        升级前的模型——不会凭空消失；搬移（``replace``）而非复制，防二次
-        认领。
-        """
-        if self._session_id in ("", DEFAULT_SESSION):
-            return
-        legacy = _session_root()
-        if not legacy.is_dir() or self._state_path.exists():
-            return
-        for name in ("session_state.json", "log.jsonl"):
-            src = legacy / name
-            if not src.is_file():
-                continue
-            try:
-                src.replace(_session_dir(self._session_id) / name)
-            except OSError:
-                pass
 
     def _gc_sessions(self) -> None:
         """保留最近的 _KEEP_SESSIONS 个会话目录，且只清 7 天前的。

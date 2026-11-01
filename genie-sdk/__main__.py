@@ -217,8 +217,7 @@ def cmd_workspace(args: argparse.Namespace) -> int:
             for r in rec:
                 print("  " + r)
         if ws.source() == "env":
-            print("· 环境变量 GENIE_SCRIPTS_DIR 优先（旧名 GENIE_SESSION_CWD 兼容）"
-                  "——要改请改环境变量或先移除它")
+            print("· 环境变量 GENIE_SCRIPTS_DIR 优先——要改请改环境变量或先移除它")
         return 0
     try:
         p = ws.set_root(args.path)
@@ -228,8 +227,7 @@ def cmd_workspace(args: argparse.Namespace) -> int:
     print(f"✓ 工作区已设为：{p}")
     print("· 之后的结果/脚本/自动存档 .gensim 都落在这里")
     if ws.source() == "env":
-        print("⚠ 但本机设了 GENIE_SCRIPTS_DIR（旧名 GENIE_SESSION_CWD），"
-              "环境变量仍优先——实际生效的是它")
+        print("⚠ 但本机设了 GENIE_SCRIPTS_DIR，环境变量仍优先——实际生效的是它")
     print("· 已开着的 Studio 需重启会话（File → Workspace… 会自动重挂）")
     return 0
 
