@@ -18,7 +18,7 @@ from typing import Any, get_args, get_origin
 from pydantic import BaseModel
 
 from ..model.builder import Domain, Geometry, Materials, Mesh, Monitor, Source
-from ...models.errors import GenieConfigError, GenieJobError
+from ...models.errors import GenieConfigError, GenieError, GenieJobError
 from ...models import DomainSpec, LorentzMatSpec, MeshSpec, RunSpec, SimConfig
 from ..job_state import StateError
 from ..sweep import SweepHandle
@@ -379,6 +379,14 @@ class Simulation:
         """
         cfg = self.to_config()
         _validate_for_submit(cfg)
+        if self._client is None:
+            # 2026-11-02 G208：凭据只属于"和云端说话"的动作。模型可以在
+            # 无凭据状态建好、改好；提交这一刻才需要登录。
+            # 用 GenieError（不是 ConfigError）：这是**会话级**条件，不是
+            # 某个点的配置错误——扫描据此把它归为环境级、只报一次。
+            raise GenieError(
+                "提交需要登录（编辑不需要）——在 Studio 里登录后再 Run，"
+                "模型与你的改动都还在")
         self._job_id = self._client.submit(cfg)
         return self
 

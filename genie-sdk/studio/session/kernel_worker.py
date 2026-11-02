@@ -577,12 +577,39 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
         # 假象（空壳快照 vs 真模型快照同路径）。
         snapshot("attach")
 
+    def ensure_model():
+        """保证 worker 里有一份模型——**不需要凭据**（2026-11-02 G208）。
+
+        编辑是纯本地动作：没模型就建一个（`_new_sim` 在无网关时用
+        `Simulation(client=None)`），能不能提交是另一件事。
+        """
+        nonlocal sim
+        insts = session_insts()
+        if insts:
+            if sim is None:
+                sim = ns.get("f") or insts[-1]
+            return sim
+        sim = _new_sim()
+        sink["sims"].append(sim)
+        genie.connect = session_connect
+        ns.clear()
+        ns.update(_namespace(sim))
+        return sim
+
     def _reauth(key):
-        """把新凭据写进 worker 内全部实例的 Client（换 key 不换模型）。"""
+        """把凭据写进 worker 内全部实例（换 key 不换模型；离线模型在此补 client）。
+
+        2026-11-02 G208：模型可以先在无凭据状态建出来、改好——提交之前
+        这一刻才需要 client。补 client = **给现有实例挂上**，绝不新建实例
+        （新建会顶掉用户已经改过的配置）。
+        """
         for s in session_insts():
             cli = getattr(s, "_client", None)
             if cli is not None and hasattr(cli, "set_key"):
                 cli.set_key(key)
+            elif cli is None and sess_url:
+                from genie.net.client import Client   # 绝对 import：本文件被当脚本 spawn
+                s._client = Client(sess_url, key)
 
     def session_insts() -> list:
         """worker 实例全集（快照/落盘/提交同一口径）：sims 全量 + ns["f"]。"""
@@ -1002,10 +1029,8 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
             #   replace —— 整份模型换成给定的一份（.gensim 导入等搬运）。
             # 都是**服务端权威**：客户端只发它改了什么，不再发整份文档。
             eid = msg.get("id", -1)
-            if msg.get("url") and not sess_url:
-                sess_url = msg["url"]
-            if sim is None and msg.get("key"):
-                attach({"url": sess_url, "key": msg.get("key")})
+            # 2026-11-02 G208：编辑**不读凭据、不解析网关、不要求登录**。
+            ensure_model()
             applied: list = []
             attempted: list = []
             try:
@@ -1013,9 +1038,7 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
                     model_in = msg.get("model")
                     if not isinstance(model_in, dict):
                         raise ValueError("model 须 dict（SimConfig JSON）")
-                    if not sess_url and sim is None:
-                        raise RuntimeError(
-                            "尚未绑定网关：先登录（或运行一次脚本）")
+                    # 2026-11-02 G208：整份替换是纯数据搬运，不看网关。
                     cfg_new = model_in
                     applied = ["*"]
                     attempted = ["*"]
@@ -1073,14 +1096,16 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
             eid = msg.get("id", 0)
             if msg.get("url") and not sess_url:
                 sess_url = msg["url"]     # 后端是部署属性：先记着，不建 f
-            if sim is None and msg.get("key"):
-                # 兜底：已登录但还没 attach 过就直接执行（刷新竞态/旧客户端）。
-                # 无 key（离线/未登录）时**不建模型**——用户在代码里自己
-                # 建实例即可，别凭空多一个空 f 污染 cfg 快照。
-                attach({"url": sess_url, "key": msg.get("key")})
+            if msg.get("key") and getattr(sim, "_client", None) is None:
+                # G208：模型可能是在无凭据状态建/改出来的——这里只给它补
+                # client（不换实例），脚本里的 f.run() 才有东西可用。
+                attach({"url": msg.get("url") or sess_url,
+                        "key": msg.get("key")})
 
             if op == "run":
                 # 提交当前模型：**不改模型**（f 一个字节不动）。
+                # G208：凭据只在提交这一步需要——判据在 `core._submit`，
+                # 这里不预判（空模型 / 坏配置照旧先报它们自己的错）。
                 # timeout_s 只作为**作业超时**上行（服务端语义），
                 # 不再兼任本地等待墙钟（R41/A+）。
                 ok, err = _guarded(
@@ -1159,8 +1184,9 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
             eid = msg.get("id", 0)
             if msg.get("url") and not sess_url:
                 sess_url = msg["url"]
-            if sim is None and msg.get("key"):
-                attach({"url": sess_url, "key": msg.get("key")})
+            if msg.get("key") and getattr(sim, "_client", None) is None:
+                attach({"url": msg.get("url") or sess_url,
+                        "key": msg.get("key")})
             try:
                 if op == "sweep":
                     if sim is None:

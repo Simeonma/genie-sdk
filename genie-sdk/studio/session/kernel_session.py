@@ -295,8 +295,8 @@ class SessionKernel:
         eid = self._next_id
         self._next_id += 1
         self._begin(eid, "patch")
-        self._send({"op": "patch", "id": eid, "ops": list(ops or []),
-                    "url": resolve_gateway(), "key": self._key})
+        # G208：编辑不带凭据/网关——模型与身份无关，提交才需要。
+        self._send({"op": "patch", "id": eid, "ops": list(ops or [])})
         return eid
 
     def replace(self, model: dict) -> int:
@@ -305,8 +305,8 @@ class SessionKernel:
         eid = self._next_id
         self._next_id += 1
         self._begin(eid, "replace")
-        self._send({"op": "replace", "id": eid, "model": model,
-                    "url": resolve_gateway(), "key": self._key})
+        # G208：整份替换是纯数据搬运，不带凭据/网关。
+        self._send({"op": "replace", "id": eid, "model": model})
         return eid
 
     def stop(self) -> bool:
