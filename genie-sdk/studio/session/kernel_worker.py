@@ -252,6 +252,13 @@ def main(readline=None, emit_fn=None, expose=None) -> None:
 
     def _replace_model(cfg_new, *, origin=None):
         nonlocal ns, sims, sim
+        # 2026-11-02 审计补洞（3.4 的旁路）：整份替换 = 换一个**新的**
+        # editing 实例，于是 running 态那道"不许改模型"的守卫被绕过——
+        # 在跑的作业会随旧实例一起被丢掉，云端还在烧 GPU 却再也收不到
+        # 终态。这里显式拒绝：等它结束、或先停止，再换。
+        if any(getattr(s, "state", "") == "running" for s in session_insts()):
+            raise RuntimeError(
+                "有作业在跑（running）——等它结束或先停止/取消，再替换模型")
         one = _new_sim()
         one.load_config(cfg_new)
         ns["f"] = one
