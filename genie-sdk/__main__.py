@@ -205,7 +205,7 @@ def cmd_logout(args: argparse.Namespace) -> int:
     from genie.net.client import Client
     from genie.net.config import clear_config, resolve_credential, resolve_gateway
 
-    key = resolve_credential(None, "GENIE_API_KEY", "api_key")
+    key = resolve_credential("GENIE_API_KEY", "api_key")
     if not key:
         print("· 本机没有已存的 token，无需登出")
         return 0

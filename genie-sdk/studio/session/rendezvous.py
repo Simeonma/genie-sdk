@@ -10,8 +10,8 @@
 三条纪律：
 
 1. **只描述，不决策**：读到的地址 + 口令直接拿来拨号；读不到就自己起。
-2. **read() 不探活，alive() 探活**：`read()` 只回答"门牌上写了什么"；
-   "有没有活着的"由 `alive()` 回答（`read()` + `/health`），一处实现。
+2. **_read() 不探活，alive() 探活**：`_read()` 只回答"门牌上写了什么"；
+   "有没有活着的"由 `alive()` 回答（`_read()` + `/health`），一处实现。
    死门牌表现为"连不上"，调用方按"不可达"处理（不猜、不复用）。
 3. **单写者**：只有 Studio 写；退出时删（只删自己 pid 的牌）。多开第二个
    Studio 时后写者赢——门牌只是"最近一个可连的"。
@@ -53,7 +53,7 @@ def write(*, url: str, token: str = "") -> None:
         pass
 
 
-def read() -> dict | None:
+def _read() -> dict | None:
     """读门牌；不存在/坏文件 → None（调用方按"没有 Studio"处理）。
 
     **纯读、不探活**：牌在 ≠ 牌后面那个进程还在。要"有没有活着的"用
@@ -75,7 +75,7 @@ def alive(timeout: float = 1.5) -> dict | None:
     死牌不删：门牌可能属于另一个进程（它只是暂时没响应/正在重启），
     删了会踩掉别人的；判死只影响这一次调用。
     """
-    card = read()
+    card = _read()
     if not card:
         return None
     try:
@@ -90,7 +90,7 @@ def alive(timeout: float = 1.5) -> dict | None:
 
 def clear() -> None:
     """删门牌（只在"这份门牌是我写的"时删，避免踩掉别人的）。"""
-    cur = read() or {}
+    cur = _read() or {}
     if cur.get("pid") not in (None, os.getpid()):
         return
     try:

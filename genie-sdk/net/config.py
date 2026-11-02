@@ -4,12 +4,11 @@
 的内部件（0600），脚本/用户文档都不该直接碰它；``genie login`` 与 Studio
 登录闸（经 worker 的 ``gateway_forward`` 截获）是仅有的两个写入者。
 
-- 路径 ``~/.genie/credentials.json``（2026-10-23 由 config.json 迁入：
-  首次读到旧文件即收养并删除）；
+- 路径 ``~/.genie/credentials.json``；
 - ``gateway`` 地址也住这里（``genie connect <url>`` 写入；env 覆盖；
   公开域名定案后 ``DEFAULT_GATEWAY`` 兜底——内网 IP 不进公开面红线）；
-- 凭据解析优先级：显式参数 > env（GENIE_URL / GENIE_API_KEY /
-  GENIE_USERNAME）> 本文件 > DEFAULT_GATEWAY。
+- 凭据解析优先级：env（GENIE_URL / GENIE_API_KEY / GENIE_USERNAME）>
+  本文件 > DEFAULT_GATEWAY。
 
 分层：net（IO 层）。密码**从不**经过本模块——只有 token。
 """
@@ -22,8 +21,7 @@ from pathlib import Path
 #: 缺省网关。None = 未定案：无参 connect 会得到"下一步动作"式报错而非猜测。
 DEFAULT_GATEWAY: str | None = None
 
-_OLD_NAME = "config.json"
-_NEW_NAME = "credentials.json"
+_NAME = "credentials.json"
 
 
 def _store_dir() -> Path:
@@ -32,23 +30,8 @@ def _store_dir() -> Path:
 
 
 def config_path() -> Path:
-    """凭据文件路径（``~/.genie/credentials.json``；旧名 config.json 自动迁）。"""
-    d = _store_dir()
-    new = d / _NEW_NAME
-    if not new.exists():
-        old = d / _OLD_NAME
-        if old.exists():
-            try:
-                new.write_text(old.read_text(encoding="utf-8"),
-                               encoding="utf-8")
-                try:
-                    new.chmod(0o600)
-                except OSError:
-                    pass
-                old.unlink()
-            except OSError:       # 迁移失败 = 继续用旧文件，别拦登录
-                return old
-    return new
+    """凭据文件路径（``~/.genie/credentials.json``）。"""
+    return _store_dir() / _NAME
 
 
 def load_config() -> dict:
@@ -139,9 +122,7 @@ def resolve_gateway(explicit: str | None = None) -> str:
         "（写进本机配置，一次即可）")
 
 
-def resolve_credential(explicit: str | None, env_name: str,
-                       config_key: str) -> str | None:
-    """凭据解析：显式参数 > env > 凭据仓。缺省返回 None（不猜）。"""
-    return (explicit
-            or os.environ.get(env_name) or None
+def resolve_credential(env_name: str, config_key: str) -> str | None:
+    """凭据解析：env > 凭据仓。缺省返回 None（不猜）。"""
+    return (os.environ.get(env_name) or None
             or load_config().get(config_key) or None)

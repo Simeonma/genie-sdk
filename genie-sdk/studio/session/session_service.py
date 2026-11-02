@@ -403,7 +403,6 @@ _GW_ALLOW = ("whoami", "api/auth/", "api/jobs", "api/health",
 # 登录截获（下方 _capture_login）即时更新内存 + 落盘。
 # **仅本机单用户入口启用**（enable_cred_broker）：多用户云宿主上开它会
 # 把"第一个登录者"的 token 变成全机共享兜底——跨用户串号，绝对不行。
-_CRED: dict | None = None
 _CRED_BROKER = False
 
 
@@ -423,17 +422,15 @@ def _stored_cred() -> dict:
     解析口径 = ``net.config.resolve_credential``（显式 > env > 凭据仓）——
     与 SDK 面**同一条链**。2026-10-31 收口：修前这里直接读凭据仓、不看
     env，于是 ``GENIE_API_KEY`` 预置的机器会出现"SDK 能提交、GUI 说未登录"
-    （同一问题两个答案）。缓存 ``_CRED`` 仍只在登录截获/换绑时刷新。
+    （同一问题两个答案）。现在每次读链，不再有进程内缓存。
     """
-    global _CRED
-    if _CRED is None:
-        from genie.net.config import resolve_credential
-        key = resolve_credential(None, "GENIE_API_KEY", "api_key")
-        _CRED = ({"api_key": key,
-                  "username": resolve_credential(
-                      None, "GENIE_USERNAME", "username") or ""}
-                 if key else {})
-    return _CRED
+    from genie.net.config import resolve_credential
+    key = resolve_credential("GENIE_API_KEY", "api_key")
+    if not key:
+        return {}
+    return {"api_key": key,
+            "username": resolve_credential("GENIE_USERNAME",
+                                           "username") or ""}
 
 
 def _capture_login(data: bytes, content: bytes) -> None:
@@ -442,7 +439,6 @@ def _capture_login(data: bytes, content: bytes) -> None:
     GUI 登录闸与任何经 /gw 的登录都从这儿过（gateway_forward 是唯一咽喉），
     于是"人在哪个面输密码"对凭据仓透明。
     """
-    global _CRED
     try:
         body = json.loads(data or b"{}")
         resp = json.loads(content)
@@ -452,7 +448,6 @@ def _capture_login(data: bytes, content: bytes) -> None:
         username = str(body.get("username") or body.get("name") or "")
         from genie.net.config import save_config
         save_config(api_key=token, username=username or None)
-        _CRED = {"api_key": token, "username": username}
     except Exception:   # noqa: BLE001 —— 截获失败绝不拦登录本身
         pass
 

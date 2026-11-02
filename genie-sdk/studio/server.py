@@ -205,7 +205,6 @@ def create_app(*, static_dir: str | Path | None = None,
             from genie.net.config import clear_config
             from genie.studio.session import session_service as _ss
             clear_config("api_key", "username")
-            _ss._CRED = {}
             return {"ok": True}
 
         # 工具面（库清单 / 材料拟合）——2026-10-27 起纯本地实现（G19b
