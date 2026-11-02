@@ -369,13 +369,12 @@ class Simulation:
 
     # ---- 生命周期 ----
 
-    def _submit(self) -> "Simulation":
-        """序列化配置 → POST /api/jobs → 记住 job_id（run 的内部第一步，
-        不做产品面——提交只经 run()）。提交前本地预检一次（与服务端同一双
-        手的 resolve + validate，fail-fast；payload 始终原文 dump）。
+    def _submit(self) -> None:
+        """唯一的提交闸：序列化 → 预检（3.1 同一份判定）→ 凭据检查 →
+        POST /api/jobs → 记 job_id。
 
-        2026-10-31 状态统一：原先这里还有"已提交就拒"——状态机接管后
-        不可达（只有 editing 能进 run()），那条判据退役。
+        只从 ``run()`` 进来（状态机保证 ``editing``）；不返回任何东西——
+        "提交成功"的观察面是 ``job_id`` 与 ``state == "running"``。
         """
         cfg = self.to_config()
         _validate_for_submit(cfg)
@@ -388,7 +387,6 @@ class Simulation:
                 "提交需要登录（编辑不需要）——在 Studio 里登录后再 Run，"
                 "模型与你的改动都还在")
         self._job_id = self._client.submit(cfg)
-        return self
 
     def run(self, *, gpu: int | None = None,
             timeout_s: int | None = None, poll_interval: float = 1.0,
