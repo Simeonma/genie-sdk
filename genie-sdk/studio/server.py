@@ -640,8 +640,6 @@ def create_app(*, static_dir: str | Path | None = None,
                     cfg = simfile.read_cfg(tmp.name)
                 except simfile.SimfileError as e:
                     raise HTTPException(status_code=422, detail=str(e))
-                except simfile.SimfileError as e:
-                    raise HTTPException(status_code=422, detail=str(e))
 
                 # 先验 cfg（genie.models 同一双手——与 /api/validate 同源）
                 from genie.models.resolve import validate_for_ui

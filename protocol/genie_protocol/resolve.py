@@ -229,9 +229,10 @@ def validate_resolved(resolved: dict, expr_at: dict) -> SimConfig:
 def validate_for_ui(cfg: dict) -> list[dict]:
     """设计态预检的**唯一实现**：返回错误清单（空 = 通过）。
 
-    消费方（此前各抄一份八行，2026-10-18 接口整理轮收口）：
-    ``/api/validate``（本地 Studio、云宿主、公共服务网关）、``.gensim``
-    导入前的配置校验、宿主 agent 的 ``validate_cfg`` 工具。
+    消费方（全仓只有这三个，都是 in-process 直接调）：
+    ``studio/server.py::api_validate``（GUI 红框，400ms 防抖）、
+    ``core/run::_validate_for_submit``（**提交闸**：同一份判定 + 出口话术）、
+    ``studio/server.py`` 的 ``.gensim`` 导入前校验。
 
     与内核 ``parse_config`` 的关系 = 同一双手、少一步：这里跑
     「参数键名 → 拓扑求值 → 结构/值守卫」，**不跑资源守卫**（那属内核

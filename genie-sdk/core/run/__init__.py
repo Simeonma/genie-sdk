@@ -128,10 +128,10 @@ def _validate_for_submit(cfg: dict) -> None:
 
     与服务端 parse **同一双手**（``genie.models.resolve``）：表达式串先
     resolve 再校验（float 字段吃不了 str），失败抛 ``GenieConfigError``。
-    判定本体 = ``validate_for_ui``——与 /api/validate、宿主 agent 的
-    validate_cfg 同一个实现（2026-10-18 接口整理轮收口：此前五份拷贝
-    对参数键名检查的处理并不一致）。线格式只有一份模型，不存在字段
-    同步问题。上行 payload 不受影响——始终是原文 dump（表达式串原文
+    判定本体 = ``validate_for_ui``——与 GUI 红框（``/api/validate``）和
+    ``.gensim`` 导入是同一个实现；这里只多做一件事：把错误翻成能照做
+    的一句话（``domain.total_time`` 缺省）。线格式只有一份模型，不存在
+    字段同步问题。上行 payload 不受影响——始终是原文 dump（表达式串原文
     上行，求值只在服务端）。"""
     from ...models.resolve import validate_for_ui
 
