@@ -53,8 +53,8 @@ on expiry, log in again in the same surface as before.
   none (`f._client is None`) — running there is refused by design. Do the run
   inside Studio.
 - A `Simulation` can only be submitted once — re-running an already-submitted
-  instance raises `RuntimeError`; inside Studio the toolbar Run / `run_model()`
-  submit a **temporary copy**, so your editable model never locks.
+  instance raises `RuntimeError`; inside Studio the toolbar Run
+  submits a **temporary copy**, so your editable model never locks.
 - Plots are GUI-only: `f.visualize(...)` inside Studio emits a `plot` event to
   the Plot panel; there is no external push channel (removed 2026-11-02).
 
