@@ -53,24 +53,11 @@ __version__ = "2.1.1"
 
 
 # ── 组合根（G1 分层契约，2026-10-11 定案）───────────────────────────
-# core 只依赖 models；上层能力（画图注入等）在此一次性
-# 注入 core 的 hooks——``import genie`` 即接线，core 永不反向 import 上层。
-# （2026-10-27 G19b 翻转：材质库 HTTP 回退 hook 已退役，材质库纯本地。）
+# core 只依赖 models；上层能力在此一次性注入 core 的 hooks。
+# 2026-11-02：最后一个 hook（外部 visualize 推送）随"一个执行面"删除，
+# 组合根现在没有需要接线的东西——留着这行注释，等真有上层能力再加。
 # 分层守卫 = tests/sdk/test_layering.py。
-def _wire_core_hooks() -> None:
-    from .core import run as _simulate
-    from .core import sweep as _sweep
 
-    # 2026-10-27 G19b 翻转：材质库 HTTP 回退（remote_nk_fetch）退役——
-    # 材质库纯本地（genie/core/nkdata 随包分发），材质面不再接线。
-    # 2026-10-28 G174：preview 的 connect 交换钩子（_swap_connect）随
-    # 零网络预览引擎一并退役。
-    # 2026-10-28 R36：expert_factory 钩子随专家面（net/expert.py、
-    # f.expert、expert_post）整体退役——问/托不是产品主链的一环
-    # （存在权清理，见 WAR_LOG R36；网关 /expert/* 端点的归宿归服务仓）。
-
-
-_wire_core_hooks()
 
 
 def _alive_card() -> dict | None:
@@ -120,17 +107,13 @@ __all__ = [
 ]
 
 
-def connect(base_url: str | None = None, api_key: str | None = None,
-            username: str | None = None, password: str | None = None, *,
-            timeout: float = 30.0) -> Simulation:
-    """**只能在 Studio 里用**（2026-11-02 G204：执行面只有一个）。
+def connect() -> Simulation:
+    """**只能在 Studio 里用**：worker 会接管这个符号，建一个新实例。
 
-    在 Studio 的脚本编辑器 / 终端里，这个符号被 worker 接管——它建一个
-    **新的实例**并纳入当前模型（配方里 ``genie.connect()`` 仍可写）。
-
-    在 Studio 外它不可用：唯一执行面是 worker，没有"自己进程拨网关"这
-    条路了。外面只想**建模**（不跑）用 ``genie.Simulation()`` /
-    ``genie.open(路径)``；要**跑**就在 Studio 里写配方。
+    在 Studio 的脚本编辑器 / 终端里，``genie.connect()`` 由 worker 接管
+    （零参——参数一律被忽略，凭据由 worker 持有）。在外面它直接拒绝：
+    唯一执行面是 worker。外面只想**建模**（不跑）用
+    ``genie.Simulation()`` / ``genie.open(路径)``；要**跑**就在 Studio 里写配方。
     """
     from .models.errors import GenieConfigError
     raise GenieConfigError(
@@ -149,8 +132,8 @@ def open(path) -> Simulation:
     """打开一个 ``.gensim`` 仿真文件 → 载入其配置的 Simulation。
 
     **worker 内**（Studio 终端 / agent）：整份替换当前模型并返回活实例
-    ——与图形界面「打开仿真」同一语义（2026-10-30 站长定案）。worker 外：
-    新建实例载入配置（配好凭据即可直接 ``f.run()``）。两条轨都会把
+    ——与图形界面「打开仿真」同一语义。worker 外：新建一个**没有 client**
+    的实例载入配置（只能建模 / 另存，不能跑）。两条轨都会把
     ``_doc_path`` 钉到这个文件：之后 ``run()`` 成功**原地更新它**
     （G182：文档是结果产物）。
 
