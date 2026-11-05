@@ -1,14 +1,19 @@
-"""genie.host.card — 作业卡片（皮在浏览器；数据走环、停止键同门）。
+"""genie.host.card — job cards (the skin lives in the browser; data travels the ring, the stop control shares the same entry point).
 
-Q5.3 补晚终版 / Q2.2-3：卡片数据 = 环里 worker 等待循环刷的
-``out(kind=progress)`` rollup（host 只搬运、不问网关——本包零拨号）；
-**停止键 = 整批一颗**，与 ``f.cancel`` 同一扇门（session 拦截入口 →
-经 host/gw 直拨网关）。一批一卡（单跑 = 批长 1 亦一张）；「提交后出现、
-全批完成且用户关闭后消失」与批内明细展开的皮细节随 GUI 壳落码。
+Card data = the ``out(kind=progress)``
+rollup that the worker's wait loop refreshes into the ring (the host only
+ferries it, never asks the gateway — this package dials nothing); **one
+stop control per batch**, sharing the same entry point as ``f.cancel`` (the
+session interception entry → dials the gateway directly via host/gw). One
+card per batch (a single run = a batch of length 1 is also one card); skin
+details — "appears after submit, disappears once the whole batch completes
+and the user closes it", plus the per-batch detail expansion — are staged
+in code along with the GUI shell.
 
-词面注记：``"out"`` / ``"progress"`` 是环载荷的既定词（ipc 图 §4——
-前端（含本包与 GUI JS）不得另立字段名；host 不 import ipc，字面与
-GUI JS 同源对齐，ipc 图 §7 的跨语言对账挂账在册）。
+Lexical note: ``"out"`` / ``"progress"`` are the established words of the
+ring payload (the frontend — this package and the GUI JS included — must
+not coin its own field names; host does not import ipc, the literals are
+aligned with the GUI JS against the same source).
 """
 from __future__ import annotations
 
@@ -16,13 +21,14 @@ __all__ = ["stop", "snapshot"]
 
 
 def stop(session) -> list:
-    """整批一颗停止键：与 ``f.cancel`` 同门（session 拦截入口——
-    ``cancel_inflight`` → host 回调经 ``/gw`` 直拨；忙闲皆灵）。"""
+    """One stop control per batch: the same entry point as ``f.cancel`` (the
+    session interception entry — ``cancel_inflight`` → the host callback
+    dials directly via ``/gw``; effective whether busy or idle)."""
     return session.cancel_inflight()
 
 
 def snapshot(events) -> dict | None:
-    """环投影 → 最新一条 progress rollup（卡片数据；无则 None）。"""
+    """Ring projection → the latest progress rollup (card data; None if there is none)."""
     data = None
     for e in events:
         if e.get("ev") == "out" and e.get("kind") == "progress":

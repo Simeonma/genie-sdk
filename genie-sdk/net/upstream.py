@@ -1,8 +1,11 @@
-"""genie.net.upstream — host→网关代拨门面（唯一拨网关的代码）。
+"""genie.net.upstream — the host→gateway proxy-dialing facade (the only code
+that dials the gateway).
 
-代理形（net/MODMAP §1）：显式 ``gateway_url`` + 头 + 体；HTTP 状态**原样
-透传**（4xx 不抛——归一分类是 host /gw 的事，Q2.2-5A）；响应可流式。
-零凭据：URL 与头由调用方（host/gw）显式传入（Q2.1；cli 不拨网关——Q6.9）。
+Proxy shape: explicit ``gateway_url`` + headers + body; HTTP status
+**passes through as-is** (4xx does not raise — status→code normalization is
+host /gw's business); responses can stream. Zero credentials: the URL and
+headers are passed in explicitly by the caller (host/gw; the cli does not
+dial the gateway).
 """
 from __future__ import annotations
 
@@ -12,7 +15,8 @@ __all__ = ["Upstream"]
 
 
 class Upstream:
-    """代拨门面。host/gw 构造时注入云 token 头，之后逐请求转发。"""
+    """Proxy-dialing facade. host/gw injects the cloud token header at
+    construction, then forwards per request."""
 
     def __init__(self, gateway_url: str, *, headers: dict | None = None):
         self._base = gateway_url.rstrip("/")
@@ -20,7 +24,8 @@ class Upstream:
 
     def request(self, method: str, path: str, *,
                 headers: dict | None = None, body: bytes | None = None):
-        """一次代拨 → ``Response``（.status 原样、.read(n) 流式）。"""
+        """One proxy-dialed call → ``Response`` (.status as-is, .read(n)
+        streaming)."""
         h = dict(self._headers)
         if headers:
             h.update(headers)

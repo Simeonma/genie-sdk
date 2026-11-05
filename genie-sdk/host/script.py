@@ -1,10 +1,12 @@
-"""genie.host.script — 脚本文本（工作区 ``script.py``）+ 编辑器回填状态。
+"""genie.host.script — script text (the workspace ``script.py``) + editor backfill state.
 
-Q5.4：脚本是工作区文件（打字即落盘——防抖在浏览器，服务端**收即写**；
-Ctrl+S 保存 = 同一个动作的仪式版）；Q3.5：回填状态机——**最后写入者
-生效**、编辑器有焦点时不覆盖（回 ``hold``）、失焦后下一拍拉最新。
-显式动词：**打开 / 另存为** = ``open_as``（换编辑目标，路径跟随——同
-模型 ``_save()`` 姿势）。无 dirty 状态、无 diff 合并；busy 不拦读。
+The script is a workspace file (save-on-keystroke — the debounce
+lives in the browser, the server side **writes on receipt**; a Ctrl+S save
+= the ceremonial version of the same action). The backfill state
+machine — **last writer wins**, no overwrite while focused (reply
+``hold``), and the tick after blur pulls the latest. Explicit verb:
+**open / save as** = ``open_as`` (switch the edit target; the path follows).
+No dirty state, no diff merging; busy does not block reads.
 """
 from __future__ import annotations
 
@@ -14,18 +16,19 @@ __all__ = ["ScriptState"]
 
 
 class ScriptState:
-    """编辑器后端的全部状态：目标文件 + 文本 + 版本号（写入单调递增，
-    浏览器拿它判断「要不要应用这次回填」）。"""
+    """All state of the editor backend: target file + text + version number
+    (monotonically increasing on write; the browser uses it to decide
+    "whether to apply this backfill")."""
 
     def __init__(self, workspace, filename: str = "script.py"):
         self.path = Path(workspace) / filename
-        # 打开工作区自动载入（Q5.4）；不存在则从空文本开始
+        # Auto-load when the workspace opens; start from empty text if it does not exist
         self._text = (self.path.read_text(encoding="utf-8")
                       if self.path.exists() else "")
         self.version = 1 if self._text else 0
 
     def write(self, text: str) -> int:
-        """打字即落盘 / 保存（立即写盘 + 版本 +1；最后写入者生效）。"""
+        """Save-on-keystroke / save (write to disk at once + version +1; last writer wins)."""
         self._text = str(text)
         self.version += 1
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -33,14 +36,15 @@ class ScriptState:
         return self.version
 
     def read(self, *, focused: bool) -> dict:
-        """回填一拍：有焦点 → ``{"hold": True}``（编辑器保自己的文本）；
-        无焦点 → 最新文本（失焦后下一拍拉最新）。"""
+        """One backfill tick: focused → ``{"hold": True}`` (the editor keeps
+        its own text); unfocused → the latest text (the tick after blur
+        pulls the latest)."""
         if focused:
             return {"hold": True, "version": self.version}
         return {"text": self._text, "version": self.version}
 
     def open_as(self, path) -> int:
-        """打开 / 另存为：换编辑目标文件，路径跟随。"""
+        """Open / save as: switch the target file being edited; the path follows."""
         self.path = Path(path)
         self._text = (self.path.read_text(encoding="utf-8")
                       if self.path.exists() else "")

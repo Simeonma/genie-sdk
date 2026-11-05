@@ -1,15 +1,10 @@
-"""genie_protocol.estimate — 资源估算单一真源（G19a，2026-10-16）。
+"""genie_protocol.estimate — the single source of truth for resource
+estimation: total cell count / dt / step count.
 
-网格总量 / dt / 步数的估算手，原生于内核 serve（fdtd/serve/schema.py
-的 estimate_cells 家族 + G18 的 _estimate_steps）；G3 方向 2 裁决把它
-移植 models 层成为单一真源——内核 serve 反向 import 本模块（共享模型
-薄壳先例，genie 仍不 import fdtd），估算从此单一尺子。（历史消费者
-Studio preview 已于 2026-10-28 随 G174 退役；同日的 mesh_preview_stats
-摘要函数随其消费者一并删除——R36 存在权清理。现役消费方 = 内核守卫。）
-
-全部纯数学（无 cupy/fdtd 依赖）。估算是守卫面不是预言：渐变过渡带
-可比名义 factor 更细（内核 Mesh.refine docstring），真实步数以 build
-后 f.n_steps 为准。
+All pure math (no simulation-engine dependencies). Estimation is a guard
+surface, not a prophecy: graded transition bands can be finer than the
+nominal factor; the authoritative step count is the simulation's own step
+count after build.
 """
 from __future__ import annotations
 
@@ -18,7 +13,7 @@ import math
 __all__ = ["C0_PHYS", "estimate_cells_domain_mesh",
            "estimate_steps_domain_mesh"]
 
-C0_PHYS = 299792458.0          # 真空光速 SI（fdtd 导出同名常数同值）
+C0_PHYS = 299792458.0          # vacuum speed of light, SI (m/s)
 
 
 def _axis_cells(rng, h: float) -> int:
@@ -26,11 +21,11 @@ def _axis_cells(rng, h: float) -> int:
 
 
 def estimate_cells_domain_mesh(domain, mesh) -> int:
-    """网格总量估算（含 refine 区加密增量）——逐字移植内核正典体
-    （fdtd/serve/schema.py，2026-08-30 Phase A 拆出形态）。
+    """Total cell count estimation (including the refinement increment of
+    refine regions).
 
-    ``domain``/``mesh`` = 共享线格式模型（DomainSpec/MeshSpec，属性
-    访问），kernel serve 守卫同参。
+    ``domain``/``mesh`` = wire-format models (DomainSpec/MeshSpec,
+    attribute access).
     """
     dx = mesh.dx
     dy = mesh.dy or mesh.dx
@@ -61,10 +56,12 @@ def estimate_cells_domain_mesh(domain, mesh) -> int:
 
 
 def _refined_min_cell(mesh) -> float:
-    """min_cell = 各轴基格距 ÷ 该轴 refine 因子累计积（两把估算尺的
-    单一公式源——n_steps_est 与 dt_est 必须同口径，refine 下自洽：
-    dt_est × n_steps_est ≥ total_time。不追渐变膨胀，同内核
-    _estimate_steps 口径：守卫面宁紧勿松的估算，见模块头）。"""
+    """min_cell = each axis's base cell size ÷ that axis's cumulative
+    product of refine factors — the single formula source for the two
+    estimation rulers: n_steps_est and dt_est must share one basis and
+    stay self-consistent under refine (dt_est × n_steps_est ≥ total_time).
+    Does not chase graded-band inflation: an estimation for a guard
+    surface that errs tight rather than loose (see the module header)."""
     fx = fy = fz = 1
     for r in mesh.refine:
         fs = [r.factor] * 3 if isinstance(r.factor, int) else list(r.factor)
@@ -74,12 +71,11 @@ def _refined_min_cell(mesh) -> float:
 
 
 def _dt_estimate(domain, mesh) -> float:
-    """时间步上界估计：dt = cfl/√3 · min_cell（内核 mesh.py:142 正典
-    公式；sim/SI 经 ref_length 消去后 steps = √3·c₀·T/(cfl·min_cell_SI)）。"""
+    """Time-step upper-bound estimate: dt = cfl/√3 · min_cell (after
+    sim/SI unit cancellation, steps = √3·c₀·T/(cfl·min_cell_SI))."""
     return domain.cfl * _refined_min_cell(mesh) / (math.sqrt(3.0) * C0_PHYS)
 
 
 def estimate_steps_domain_mesh(domain, mesh) -> int:
-    """total_time → 步数预估算（G18 换算正典的 models 面镜像）。"""
+    """total_time → step-count pre-estimation."""
     return max(1, math.ceil(domain.total_time / _dt_estimate(domain, mesh)))
-

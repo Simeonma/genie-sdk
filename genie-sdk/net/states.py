@@ -1,11 +1,12 @@
-"""genie.net.states — 作业终态词表（唯一一份）。
+"""genie.net.states — the job terminal-state vocabulary (the single copy).
 
-消费者 = worker/run 等待循环（Q2.2-1A / 终版 2026-11-04）：每秒自查
-``job_status`` 得进度与状态 → ``TERMINAL_OK`` 收结果、``TERMINAL_BAD``
-抛 ``GenieJobError``、都不在则继续等。``canceled`` 与 ``killed`` 皆终态
-BAD（带外取消网关可能标任一，worker 措辞统一 canceled——Q2.2-3）；
-值清单对网关（genie-service）的作业状态机核对；core / worker
-不得另写第二份（``test_terminal_vocab_single_source`` 锁）。
+Consumer = the worker/run wait loop: poll ``job_status`` once per second for
+progress and state → ``TERMINAL_OK`` collects the result, ``TERMINAL_BAD``
+raises ``GenieJobError``, neither present means keep waiting. Both
+``canceled`` and ``killed`` are terminal BAD (an out-of-band cancel may be
+labeled either by the gateway; the worker's wording is unified to canceled);
+the value list is locked by tests against the gateway's job state machine;
+core / worker must not write a second copy.
 """
 from __future__ import annotations
 

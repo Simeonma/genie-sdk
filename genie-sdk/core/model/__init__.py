@@ -1,4 +1,4 @@
-"""genie.core.model — f 的语义（core 侧本体）。地图：``model/MODMAP.md``。"""
+"""genie.core.model -- the semantics of f (the core-side body)."""
 from .draft import DRAFT_OF, to_wire
 from .handle import Model
 

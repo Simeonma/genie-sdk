@@ -1,18 +1,21 @@
-"""genie.core.archive — `.gensim` 文档容器原语。
+"""genie.core.archive — `.gensim` document container primitives.
 
-契约 → ``MODMAP.md``（站长逐条核毕 2026-11-04；批 6 扩批 N）：
+Contract:
 
-- 三成员布局 ``simconfig.json + results/ + state.json``（Q4.1）；
-- 压缩按成员分策略：结果 h5 一律 STORED、小成员 DEFLATED（Q2.2-1）；
-- 原子落盘 = 写 temp 完整文档再 rename；中途失败原文件完好、temp 清理
-  （Q2.2-1「temp doc + rename」，``test_gensim_atomic_write`` 锁）；
-- 结果成员流式写、不整包缓冲（``test_gensim_stream_write`` 锁）；
-- **只保留当前批**（Q4.2 下午补注）：批内每个 job 各一个
-  ``results/<job>.h5`` 成员，落位（无 results）即作废旧批；
-  ``inject_result`` = 「灌一个成员 + 更新 state」一步原子（Q4.3 补 2 ③）；
-- **对成员内容不透明**（不解释、不校验语义；h5 归 results、恢复模型归
-  worker）；**零 genie 依赖**（仅标准库，``test_archive_zero_genie_imports``
-  锁）；**不长业务状态机、不读环境**（路径显式传入）。
+- Three-member layout ``simconfig.json + results/ + state.json``;
+- Per-member compression policy: result h5 always STORED, small members
+  DEFLATED;
+- Atomic persistence = write the complete document to temp, then rename;
+  on mid-way failure the original file stays intact and temp is cleaned up;
+- Result members are written as streams, no whole-payload buffering;
+- **Only the current batch is kept**: one ``results/<job>.h5`` member per
+  job in the batch; staging (no results) invalidates the old batch;
+  ``inject_result`` = "inject one member + update state" as a single
+  atomic step;
+- **Opaque to member content** (no interpretation, no semantic validation;
+  h5 belongs to results, model restoration belongs to worker); **zero
+  genie dependencies** (standard library only); **carries no business
+  state machine, reads no environment** (paths are passed in explicitly).
 """
 from __future__ import annotations
 
@@ -25,25 +28,32 @@ from typing import Iterable
 
 __all__ = ["STATE_KEYS", "Writer", "save", "inject_result", "read_config",
            "read_state", "result_jobs", "extract_result", "read_recipes",
-           "write_recipes", "inject_post", "remove_post", "post_names"]
+           "write_recipes", "read_sweeps", "write_sweeps", "inject_post",
+           "remove_post", "post_names"]
 
 _CONFIG_MEMBER = "simconfig.json"
 _STATE_MEMBER = "state.json"
 _RESULT_PREFIX = "results/"
 _RESULT_SUFFIX = ".h5"
-#: Q11 post 成员（五拍 2026-11-05，档为正本）：档根配方成员
-#: ``post_analyze.json``（具名条目 ``{name: {code, script}}``）+
-#: ``post/<name>.npz`` 产出成员（名即键——收窄后档恒单结果）。
+#: Post members (the document is the authoritative copy): the recipe
+#: member at the document root ``post_analyze.json`` (named entries
+#: ``{name: {code, script}}``) plus ``post/<name>.npz`` output members
+#: (the name is the key — one output member per name).
 _RECIPE_MEMBER = "post_analyze.json"
+#: Named sweep definitions (Q10): ``sweeps.json`` at the document root —
+#: ``{name: {parameters, mode, n_gpu, on_failure}}``; the authoritative
+#: copy lives in the main document (never sent over the wire).
+_SWEEPS_MEMBER = "sweeps.json"
 _POST_PREFIX = "post/"
 _POST_SUFFIX = ".npz"
-_COPY_CHUNK = 1 << 20                      # 流式复制块（照搬结果成员用）
+_COPY_CHUNK = 1 << 20                      # streaming copy chunk size (used when carrying over result members)
 
-#: state.json 键集（站长拍定 2026-11-04；批 6 补第四栏，Q4.3 补 2 ②）：
-#: format=格式版本（无此键 = v1 旧档）、allocator=发号器值（Q1.2.5）、
-#: digest=保存时模型指纹（Q1.3 dirty 基准；落位即写 = 落位算一次保存）、
-#: inflight=在飞批痕迹（本批 job id 清单；成功终态清空、失败/取消停留）。
-#: job 绑定不进——results/ 成员的条目名即绑定（Q4.2）。
+#: state.json key set: format = format version (key absent = v1 legacy
+#: document), allocator = id allocator value, digest = model fingerprint
+#: at save time (written at staging = staging counts as one save),
+#: inflight = in-flight batch trace (this batch's job id list; cleared on
+#: a successful terminal state, kept on failure / cancel). The job binding
+#: does not go in here — the results/ member's entry name is the binding.
 STATE_KEYS = ("format", "allocator", "digest", "inflight")
 
 
@@ -58,18 +68,21 @@ def _check_state(state: dict) -> dict:
 
 
 class Writer:
-    """原子写整份 `.gensim`：temp 落盘 → 成功才 rename（Q2.2-1）。
+    """Atomically write a whole `.gensim`: persist to temp → rename only
+    on success.
 
-    用法（worker/run 的常规保存与「run 成功自动存」都走这里）::
+    Usage (both worker/run regular saves and "auto-save on run success"
+    go through here)::
 
         with Writer(path) as w:
             w.write_config(cfg)
             w.write_state({"format": 2, "allocator": 25, "digest": "…"})
-            w.carry_result(old_path)             # 模型改动保存：结果照搬
-            w.stream_result(job_id, chunk_iter)  # 新结果：流式写（二选一）
+            w.carry_result(old_path)             # save after model changes: results carried over
+            w.stream_result(job_id, chunk_iter)  # new result: streamed write (either one of the two)
 
-    异常退出 = 磁盘上原 `.gensim` 逐字节完好、temp 残件清理。
-    一文档最多一个结果成员（Q4.2；形状守卫，不是业务时序）。
+    Abnormal exit = the original `.gensim` on disk is byte-for-byte intact;
+    temp leftovers are cleaned up. At most one result member per document
+    (a shape guard, not business timing/sequencing).
     """
 
     def __init__(self, path) -> None:
@@ -78,7 +91,7 @@ class Writer:
         self._zf: zipfile.ZipFile | None = None
         self._result_names: set = set()
 
-    # -- 生命周期 -----------------------------------------------------
+    # -- lifecycle ------------------------------------------------------
 
     def __enter__(self) -> "Writer":
         fd, tmp = tempfile.mkstemp(dir=str(self._path.parent),
@@ -92,7 +105,7 @@ class Writer:
     def __exit__(self, exc_type, exc, tb) -> bool:
         tmp, zf = self._tmp, self._zf
         self._tmp = self._zf = None
-        if exc_type is not None:                       # 失败：清 temp，原文件不动
+        if exc_type is not None:      # failure: clean up temp, leave the original file untouched
             try:
                 if zf is not None:
                     zf.close()
@@ -101,20 +114,22 @@ class Writer:
             return False
         try:
             zf.close()
-            os.replace(tmp, self._path)                # 原子替换
+            os.replace(tmp, self._path)   # atomic replace
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise
         return False
 
-    # -- 成员写入 -----------------------------------------------------
+    # -- member writes --------------------------------------------------
 
     def write_config(self, cfg: dict) -> None:
-        """simconfig.json（小成员，DEFLATED）。内容不透明：dict 直接序列化。"""
+        """simconfig.json (small member, DEFLATED). Content is opaque: the
+        dict is serialized as-is."""
         self._write_small(_CONFIG_MEMBER, cfg)
 
     def write_state(self, state: dict) -> None:
-        """state.json（小成员，DEFLATED）。只认四栏形状（STATE_KEYS）。"""
+        """state.json (small member, DEFLATED). Only the four-key shape is
+        accepted (STATE_KEYS)."""
         self._write_small(_STATE_MEMBER, _check_state(state))
 
     def _write_small(self, member: str, obj: dict) -> None:
@@ -123,11 +138,18 @@ class Writer:
                           compress_type=zipfile.ZIP_DEFLATED)
 
     def write_recipes(self, recipes: dict) -> None:
-        """``post_analyze.json``（档根小成员，DEFLATED）——Q11 具名配方
-        集合 ``{name: {code, script}}``（Q11 五拍条目形态），内容不透明；
-        ≥1 条才写（空 = 不写该
-        成员 = 清除语义）。"""
+        """``post_analyze.json`` (small member at the document root,
+        DEFLATED) — the named recipe set ``{name: {code, script}}``;
+        content is opaque; written only when there is >= 1 entry (empty =
+        the member is not written = clear semantics)."""
         self._write_small(_RECIPE_MEMBER, recipes)
+
+    def write_sweeps(self, sweeps: dict) -> None:
+        """``sweeps.json`` (small member at the document root, DEFLATED) —
+        the named sweep definitions ``{name: {parameters, mode, n_gpu,
+        on_failure}}``; content is opaque; written only when there is
+        >= 1 entry (empty = the member is not written)."""
+        self._write_small(_SWEEPS_MEMBER, sweeps)
 
     def _claim_result(self, name: str) -> None:
         if name in self._result_names:
@@ -136,21 +158,24 @@ class Writer:
                 f"(one member per job, no re-inject in one write)")
 
     def stream_result(self, job_id: str, chunks: Iterable[bytes]) -> None:
-        """`results/<job>.h5`：STORED、流式（逐块写，不整包缓冲）。
-        批内每个 job 各一个成员（Q4.2 下午补注）；同名重复灌入拒收。"""
+        """`results/<job>.h5`: STORED, streamed (written chunk by chunk,
+        no whole-payload buffering). One member per job in the batch;
+        re-injecting the same name is rejected."""
         name = _RESULT_PREFIX + job_id + _RESULT_SUFFIX
         self._claim_result(name)
-        # ZipFile.open(w) 的成员压缩 = 构造器的 ZIP_STORED（缺省）
+        # Member compression for ZipFile.open(w) = the constructor's ZIP_STORED (the default)
         with self._zf.open(name, "w") as fh:
             for chunk in chunks:
                 fh.write(chunk)
         self._result_names.add(name)
 
     def carry_result(self, source) -> None:
-        """从现有 `.gensim` 照搬**全部**结果成员 + `post/*.npz` 产出成员
-        （常规保存：模型改了，结果没动——当前批照搬，Q4.2 下午补注；
-        post 产出随结果同款照搬，Q11 细节 9）。源文件无相关成员 =
-        静默无操作。流式复制，不整包缓冲。"""
+        """Carry over **all** result members + `post/*.npz` output members
+        from an existing `.gensim` (regular save: the model changed, the
+        results did not — the current batch is carried over; post outputs
+        are carried over the same way as results). No matching members in
+        the source = a silent no-op. Copied as a stream, no whole-payload
+        buffering."""
         src = Path(source)
         if not src.exists():
             return
@@ -173,23 +198,30 @@ class Writer:
 
 
 def save(path, *, simconfig: dict, state: dict,
-         carry_result_from=None, result=None, post_recipes=None) -> None:
-    """一步保存（Writer 的组合壳；落位 = 本函数无结果参数的那一档）。
-    ``result = (job_id, chunks)`` 写新结果（流式）；
-    ``carry_result_from = 路径`` 照搬旧结果（含 post 产出）；
-    ``post_recipes = {name: {code, script}}`` 写配方成员（None / 空 =
-    不写 =
-    清除语义；内存现值由调用方传入，Q11 三拍）；result 与 carry 互斥
-    （用法形状，非成员上限——批 N 由 Writer 多次 ``stream_result`` /
-    多次 ``inject_result`` 达成）。"""
+         carry_result_from=None, result=None, post_recipes=None,
+         sweeps=None) -> None:
+    """One-step save (a composition shell over Writer; staging = this
+    function called without result arguments). ``result =
+    (job_id, chunks)`` writes a new result (streamed);
+    ``carry_result_from = path`` carries over old results (post outputs
+    included); ``post_recipes = {name: {code, script}}`` writes the recipe
+    member (None / empty = not written = clear semantics; the current
+    in-memory value is passed in by the caller); ``sweeps = {name: def}``
+    writes the sweep-definitions member the same way; result and carry are
+    mutually exclusive (a usage-shape rule, not a member cap — multiple
+    members are achieved through repeated ``stream_result`` /
+    ``inject_result`` calls on Writer)."""
     if carry_result_from is not None and result is not None:
         raise ValueError("save: result and carry_result_from are mutually "
-                         "exclusive (用法形状；批 N 走多次 stream/inject)")
+                         "exclusive (a usage-shape rule; batch N uses "
+                         "repeated stream/inject)")
     with Writer(path) as w:
         w.write_config(simconfig)
         w.write_state(state)
         if post_recipes:
             w.write_recipes(post_recipes)
+        if sweeps:
+            w.write_sweeps(sweeps)
         if carry_result_from is not None:
             w.carry_result(carry_result_from)
         if result is not None:
@@ -197,25 +229,27 @@ def save(path, *, simconfig: dict, state: dict,
             w.stream_result(job_id, chunks)
 
 
-# ── 读取 ---------------------------------------------------------------
+# ── reading ───────────────────────────────────────────────────────────
 
 
 def read_config(path) -> dict:
-    """simconfig.json → dict（内容不透明：校验与恢复归调用方）。"""
+    """simconfig.json → dict (content is opaque: validation and
+    restoration belong to the caller)."""
     with zipfile.ZipFile(path) as z:
         return json.loads(z.read(_CONFIG_MEMBER).decode("utf-8"))
 
 
 def read_state(path) -> dict:
-    """state.json → dict；键集不是四键（如 v1 旧档）→ ValueError。"""
+    """state.json → dict; a key set other than the four keys (e.g. a v1
+    legacy document) → ValueError."""
     with zipfile.ZipFile(path) as z:
         state = json.loads(z.read(_STATE_MEMBER).decode("utf-8"))
     return _check_state(state)
 
 
 def result_jobs(path) -> "list[str]":
-    """results/ 全部成员的 job id（排序返回）——**条目名即 job 绑定**
-    （Q4.2；批 N = 当前批全体成员）。"""
+    """Job ids of all results/ members (returned sorted) — **the entry
+    name is the job binding**."""
     with zipfile.ZipFile(path) as z:
         names = [n for n in z.namelist()
                  if n.startswith(_RESULT_PREFIX) and n.endswith(_RESULT_SUFFIX)]
@@ -223,18 +257,28 @@ def result_jobs(path) -> "list[str]":
 
 
 def read_recipes(path) -> dict:
-    """``post_analyze.json`` → ``{name: {code, script}}``（五拍条目）；
-    成员缺席 → ``{}``
-    （Q11 三拍；内容不透明，恢复归 worker）。"""
+    """``post_analyze.json`` → ``{name: {code, script}}``; member absent
+    → ``{}`` (content is opaque, restoration belongs to worker)."""
     with zipfile.ZipFile(path) as z:
         if _RECIPE_MEMBER not in z.namelist():
             return {}
         return json.loads(z.read(_RECIPE_MEMBER).decode("utf-8"))
 
 
+def read_sweeps(path) -> dict:
+    """``sweeps.json`` → ``{name: {parameters, mode, n_gpu,
+    on_failure}}``; member absent → ``{}`` (content is opaque,
+    restoration belongs to worker)."""
+    with zipfile.ZipFile(path) as z:
+        if _SWEEPS_MEMBER not in z.namelist():
+            return {}
+        return json.loads(z.read(_SWEEPS_MEMBER).decode("utf-8"))
+
+
 def post_names(path) -> "list[str]":
-    """post/ 全部产出成员的配方名（排序）——名即键（Q11 三拍；GUI
-    直读 npz 的口子，v1 无读动词）。"""
+    """Recipe names of all post/ output members (sorted) — the name is the
+    key (the opening for the GUI to read npz directly; no read verb in
+    v1)."""
     with zipfile.ZipFile(path) as z:
         names = [n for n in z.namelist()
                  if n.startswith(_POST_PREFIX) and n.endswith(_POST_SUFFIX)]
@@ -242,9 +286,11 @@ def post_names(path) -> "list[str]":
 
 
 def extract_result(path, dest_dir, job_id=None) -> Path:
-    """把结果成员解到 ``dest_dir/<job>.h5`` 并返回路径（Q2.2-1「读缓存，
-    不是外部存储」：生命周期归调用方，读完删）。流式，不整包缓冲。
-    ``job_id=None`` = 恰一个成员时解它，零个或多于一个 → ValueError。"""
+    """Extract the result member to ``dest_dir/<job>.h5`` and return the
+    path ("read cache, not external storage": the lifecycle belongs to
+    the caller — delete after reading). Streamed, no whole-payload
+    buffering. ``job_id=None`` = with exactly one member, extract that
+    one; zero or more than one → ValueError."""
     jobs = result_jobs(path)
     if job_id is None:
         if len(jobs) != 1:
@@ -264,14 +310,16 @@ def extract_result(path, dest_dir, job_id=None) -> Path:
     return dest
 
 
-# ── 终态灌入（Q4.3 补 2 ③）─────────────────────────────────────────
+# ── terminal-state injection ──────────────────────────────────────────
 
 
 def inject_result(path, job_id: str, chunks: Iterable[bytes],
                   state: dict) -> None:
-    """往现有 `.gensim` 灌**一个** `results/<job>.h5` 成员 + 更新
-    state——一步原子（temp + rename；语义上不重写模型：simconfig 与
-    既有成员原样照搬）。中途失败 = 原文档逐字节完好、temp 清理。"""
+    """Inject **one** `results/<job>.h5` member into an existing `.gensim`
+    + update state — a single atomic step (temp + rename; semantically the
+    model is not rewritten: simconfig and existing members are carried
+    over unchanged). Mid-way failure = the original document is
+    byte-for-byte intact, temp cleaned up."""
     path = Path(path)
     _check_state(state)
     member = _RESULT_PREFIX + job_id + _RESULT_SUFFIX
@@ -284,21 +332,21 @@ def inject_result(path, job_id: str, chunks: Iterable[bytes],
             for info in src.infolist():
                 if info.filename == _STATE_MEMBER \
                         or info.filename == member:
-                    continue                        # state 重写；成员不重灌
+                    continue                  # state rewritten; member not re-injected
                 if info.filename.startswith(_RESULT_PREFIX):
                     with src.open(info) as r, dst.open(info.filename, "w") as w:
-                        while True:                # 结果成员：流式照搬（STORED）
+                        while True:          # result member: streamed carry-over (STORED)
                             buf = r.read(_COPY_CHUNK)
                             if not buf:
                                 break
                             w.write(buf)
-                else:                              # 小成员：按原压缩照搬
+                else:                        # small member: carried over with its original compression
                     dst.writestr(info, src.read(info.filename),
                                  compress_type=info.compress_type)
             data = json.dumps(state, ensure_ascii=False, indent=1).encode("utf-8")
             dst.writestr(_STATE_MEMBER, data,
                          compress_type=zipfile.ZIP_DEFLATED)
-            with dst.open(member, "w") as fh:      # 新结果：流式（STORED）
+            with dst.open(member, "w") as fh:   # new result: streamed (STORED)
                 for chunk in chunks:
                     fh.write(chunk)
         os.replace(tmp, path)
@@ -308,10 +356,12 @@ def inject_result(path, job_id: str, chunks: Iterable[bytes],
 
 
 def inject_post(path, name: str, data: bytes) -> None:
-    """往现有 `.gensim` 灌 / 换一个 ``post/<name>.npz`` 成员——一步原子
-    （temp + rename；Q11 三拍：state 不动，simconfig 与既有成员原样
-    照搬；**同名换新** = 重跑语义）。中途失败 = 原文档逐字节完好、
-    temp 清理。npz 已是压缩内容 → STORED。"""
+    """Inject / replace one ``post/<name>.npz`` member in an existing
+    `.gensim` — a single atomic step (temp + rename; state untouched,
+    simconfig and existing members carried over unchanged;
+    **same-name replacement** = re-run semantics). Mid-way failure = the
+    original document is byte-for-byte intact, temp cleaned up. npz is
+    already compressed content → STORED."""
     path = Path(path)
     member = _POST_PREFIX + name + _POST_SUFFIX
     fd, tmp = tempfile.mkstemp(dir=str(path.parent),
@@ -322,16 +372,16 @@ def inject_post(path, name: str, data: bytes) -> None:
                 zipfile.ZipFile(tmp, "w", allowZip64=True) as dst:
             for info in src.infolist():
                 if info.filename == member:
-                    continue                    # 同名换新（重跑）
+                    continue                 # same-name replacement (re-run)
                 if info.filename.startswith(_RESULT_PREFIX) \
                         or info.filename.startswith(_POST_PREFIX):
                     with src.open(info) as r, dst.open(info.filename, "w") as w:
-                        while True:            # 大成员：流式照搬（STORED）
+                        while True:          # large member: streamed carry-over (STORED)
                             buf = r.read(_COPY_CHUNK)
                             if not buf:
                                 break
                             w.write(buf)
-                else:                          # 小成员：按原压缩照搬
+                else:                        # small member: carried over with its original compression
                     dst.writestr(info, src.read(info.filename),
                                  compress_type=info.compress_type)
             dst.writestr(member, data,
@@ -342,11 +392,11 @@ def inject_post(path, name: str, data: bytes) -> None:
         raise
 
 
-def write_recipes(path, recipes: dict) -> None:
-    """把配方集合原子写进现有 `.gensim`（**只换** ``post_analyze.json``
-    成员；Q11 三拍 = ``f.update_post_analyze`` 的立即入档）。空 dict =
-    移除该成员。其余成员（模型 / state / results / post 产出）原样
-    照搬。"""
+def _rewrite_small(path, member: str, obj) -> None:
+    """Atomically replace one small JSON member in an existing `.gensim`
+    (**replaces only** that member; an empty / falsy ``obj`` removes it).
+    All other members (model / state / results / post outputs) are carried
+    over unchanged. Shared by the recipe set and the sweep definitions."""
     path = Path(path)
     fd, tmp = tempfile.mkstemp(dir=str(path.parent),
                                prefix=path.name + ".", suffix=".tmp")
@@ -355,23 +405,23 @@ def write_recipes(path, recipes: dict) -> None:
         with zipfile.ZipFile(path) as src, \
                 zipfile.ZipFile(tmp, "w", allowZip64=True) as dst:
             for info in src.infolist():
-                if info.filename == _RECIPE_MEMBER:
-                    continue                    # 配方成员换新
+                if info.filename == member:
+                    continue                 # target member replaced
                 if info.filename.startswith(_RESULT_PREFIX) \
                         or info.filename.startswith(_POST_PREFIX):
                     with src.open(info) as r, dst.open(info.filename, "w") as w:
-                        while True:            # 大成员：流式照搬（STORED）
+                        while True:          # large member: streamed carry-over (STORED)
                             buf = r.read(_COPY_CHUNK)
                             if not buf:
                                 break
                             w.write(buf)
-                else:                          # 小成员：按原压缩照搬
+                else:                        # small member: carried over with its original compression
                     dst.writestr(info, src.read(info.filename),
                                  compress_type=info.compress_type)
-            if recipes:
-                data = json.dumps(recipes, ensure_ascii=False,
+            if obj:
+                data = json.dumps(obj, ensure_ascii=False,
                                   indent=1).encode("utf-8")
-                dst.writestr(_RECIPE_MEMBER, data,
+                dst.writestr(member, data,
                              compress_type=zipfile.ZIP_DEFLATED)
         os.replace(tmp, path)
     except BaseException:
@@ -379,9 +429,26 @@ def write_recipes(path, recipes: dict) -> None:
         raise
 
 
+def write_recipes(path, recipes: dict) -> None:
+    """Atomically write the recipe set into an existing `.gensim`
+    (**replaces only** the ``post_analyze.json`` member;
+    ``f.update_post_analyze`` writes into the document immediately).
+    An empty dict removes the member."""
+    _rewrite_small(path, _RECIPE_MEMBER, recipes)
+
+
+def write_sweeps(path, sweeps: dict) -> None:
+    """Atomically write the sweep definitions into an existing `.gensim`
+    (**replaces only** the ``sweeps.json`` member; the param_sweep verbs
+    write into the document immediately). An empty dict removes the
+    member."""
+    _rewrite_small(path, _SWEEPS_MEMBER, sweeps)
+
+
 def remove_post(path, name: str) -> None:
-    """从现有 `.gensim` 移除 ``post/<name>.npz`` 成员——一步原子
-    （Q11 delete 的档同步；成员缺席 = 无操作）。其余成员原样照搬。"""
+    """Remove a ``post/<name>.npz`` member from an existing `.gensim` — a
+    single atomic step (member absent = no-op). All other members are
+    carried over unchanged."""
     path = Path(path)
     member = _POST_PREFIX + name + _POST_SUFFIX
     with zipfile.ZipFile(path) as z:
@@ -395,16 +462,16 @@ def remove_post(path, name: str) -> None:
                 zipfile.ZipFile(tmp, "w", allowZip64=True) as dst:
             for info in src.infolist():
                 if info.filename == member:
-                    continue                    # 移除目标
+                    continue                 # removal target
                 if info.filename.startswith(_RESULT_PREFIX) \
                         or info.filename.startswith(_POST_PREFIX):
                     with src.open(info) as r, dst.open(info.filename, "w") as w:
-                        while True:            # 大成员：流式照搬（STORED）
+                        while True:          # large member: streamed carry-over (STORED)
                             buf = r.read(_COPY_CHUNK)
                             if not buf:
                                 break
                             w.write(buf)
-                else:                          # 小成员：按原压缩照搬
+                else:                        # small member: carried over with its original compression
                     dst.writestr(info, src.read(info.filename),
                                  compress_type=info.compress_type)
         os.replace(tmp, path)

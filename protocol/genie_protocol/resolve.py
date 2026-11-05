@@ -1,14 +1,11 @@
-"""genie_protocol.resolve — 参数解析（COMSOL 式参数替换 + 求值结果校验）。
+"""genie_protocol.resolve — parameter resolution (COMSOL-style parameter
+substitution + evaluation-result validation).
 
-> 2026-10 迁移阶段 1a：自内核 ``fdtd/serve/schema.py`` 1063-1285 行逐字
-> 迁入，**跳过 parse_config 编排**——它的尾巴上调内核资源守卫
-> ``validate_resources``（部署策略），编排壳留在内核薄壳里。消费方：
-> 内核 ``fdtd/serve/schema.parse_config`` 与 sweep 逐点校验；SDK 侧
-> 阶段 2 起 builder→SimConfig 校验复用同一双手。
-
-两段校验语义（内核原文）：求值必须在前（表达式字符串过不了数值字段
-的类型层），值守卫在求值结果上跑即达成同一语义；幂等锚——无数值槽
-字符串时输出与输入逐值相等（老配置零扰动）。
+Two-stage validation semantics: evaluation must come first (an expression
+string cannot pass the type layer of a numeric field), and running the
+value guard on the evaluation result achieves the same semantics;
+idempotency anchor — with no numeric-slot strings, the output is
+value-by-value equal to the input (zero disturbance to legacy configs).
 """
 from __future__ import annotations
 
@@ -28,7 +25,7 @@ __all__ = ["unwrap_annotation", "discriminator_name", "select_union_member",
 
 
 def unwrap_annotation(ann) -> tuple[object, tuple | None]:
-    """剥 Annotated：返回 (裸注解, metadata 元组)。"""
+    """Strip Annotated: return (bare annotation, metadata tuple)."""
     meta = getattr(ann, "__metadata__", None)
     if meta is not None:
         ann = ann.__origin__
@@ -36,19 +33,19 @@ def unwrap_annotation(ann) -> tuple[object, tuple | None]:
 
 
 def discriminator_name(meta) -> str | None:
-    """Annotated[Union[...], Field(discriminator=...)] 的判别名。"""
+    """The discriminator name of Annotated[Union[...], Field(discriminator=...)]."""
     for m in meta or ():
         d = getattr(m, "discriminator", None)
         if isinstance(d, str):
             return d
-        d = getattr(d, "discriminator", None)   # Discriminator 对象形态
+        d = getattr(d, "discriminator", None)   # Discriminator object form
         if isinstance(d, str):
             return d
     return None
 
 
 def select_union_member(members, disc_value):
-    """按 discriminator 字面值选 Union 成员（各成员 type=Literal[...]）。"""
+    """Select the Union member by discriminator literal value (each member has type=Literal[...])."""
     for m in members:
         if m in (float, int, str, bool, type(None)):
             continue
@@ -62,7 +59,7 @@ def select_union_member(members, disc_value):
 
 
 def _path_str(path) -> str:
-    """路径段 → 配置内路径串：("source",0,"freq") → "source[0].freq"。"""
+    """Path segments → in-config path string: ("source",0,"freq") → "source[0].freq"."""
     out = ""
     for seg in path:
         out += f"[{seg}]" if isinstance(seg, int) else (("." + seg) if out else seg)
@@ -70,11 +67,14 @@ def _path_str(path) -> str:
 
 
 def _resolve_value(ann, value, path, env, expr_at):
-    """按 SimConfig 注解伴走原始 dict 树，数值槽字符串 → 表达式求值。
+    """Walk the raw dict tree alongside the SimConfig annotations;
+    numeric-slot strings → expression evaluation.
 
-    返回（可能是新的）标量值；容器就地改（调用方对 dict/list 元素回写）。
-    非数值槽（str 字段、bool、Literal 等）不触碰——幂等锚：无数值槽
-    字符串时输出与输入逐值相等（老配置零扰动）。
+    Returns the (possibly new) scalar value; containers are modified in
+    place (the caller writes dict/list elements back). Non-numeric slots
+    (str fields, bool, Literal, etc.) are left untouched — idempotency
+    anchor: with no numeric-slot strings, the output is value-by-value
+    equal to the input (zero disturbance to legacy configs).
     """
     ann, meta = unwrap_annotation(ann)
     members = (get_args(ann)
@@ -85,11 +85,11 @@ def _resolve_value(ann, value, path, env, expr_at):
             sub = select_union_member(members, value.get(disc))
             if sub is not None:
                 return _resolve_value(sub, value, path, env, expr_at)
-            return value          # 未知判别值 → 留给 pydantic 422
+            return value          # unknown discriminator value → left to pydantic 422
         nonnone = [m for m in members if m is not type(None)]
-        if len(nonnone) == 1:     # Optional[X] 退包
+        if len(nonnone) == 1:     # unwrap Optional[X]
             return _resolve_value(nonnone[0], value, path, env, expr_at)
-        # NumOrTensor 类（数值 ∪ tuple/list）：str → 求值；序列 → 逐元
+        # NumOrTensor-like (numeric ∪ tuple/list): str → evaluate; sequences → element-wise
         if isinstance(value, str) and any(m in (float, int) for m in nonnone):
             return _eval_slot(value, path, env, expr_at)
         if isinstance(value, (list, tuple)):
@@ -103,7 +103,7 @@ def _resolve_value(ann, value, path, env, expr_at):
     if isinstance(ann, type) and issubclass(ann, BaseModel):
         if isinstance(value, dict):
             for fname, finfo in ann.model_fields.items():
-                if fname == "parameters":    # 参数节由拓扑求值整段处理
+                if fname == "parameters":    # the parameters section is handled wholesale by topological evaluation
                     continue
                 if fname in value:
                     value[fname] = _resolve_value(
@@ -114,9 +114,9 @@ def _resolve_value(ann, value, path, env, expr_at):
     if origin is tuple:
         args = get_args(ann)
         if isinstance(value, (list, tuple)):
-            # G122（R16）：不就地改写——Python 调用方传 tuple 时
-            # `value[i]=` 炸裸 TypeError；建新容器（list 进 list 出、
-            # tuple 进 tuple 出）。
+            # Do not rewrite in place — when a Python caller passes a
+            # tuple, `value[i]=` blows up with a bare TypeError; build a
+            # new container (list in, list out; tuple in, tuple out).
             out = list(value)
             for i, v in enumerate(out):
                 elem = (args[i] if i < len(args)
@@ -138,11 +138,11 @@ def _resolve_value(ann, value, path, env, expr_at):
             return {k: _resolve_value(val_ann, v, path + [k], env, expr_at)
                     for k, v in value.items()}
         return value
-    return value                      # str/bool/Literal/未知形态：不触碰
+    return value                      # str/bool/Literal/unknown shapes: untouched
 
 
 def _resolve_seq_elem(v, path, env, expr_at):
-    """NumOrTensor 序列元素：str → 求值；嵌套 list（3×3 张量行）逐元。"""
+    """NumOrTensor sequence element: str → evaluate; nested lists (3×3 tensor rows) element-wise."""
     if isinstance(v, str):
         return _eval_slot(v, path, env, expr_at)
     if isinstance(v, list):
@@ -152,7 +152,7 @@ def _resolve_seq_elem(v, path, env, expr_at):
 
 
 def _eval_slot(expr: str, path, env, expr_at) -> float:
-    """单个数值槽表达式求值；错误带配置内路径（如 source[0].freq）。"""
+    """Evaluate a single numeric-slot expression; errors carry the in-config path (e.g. source[0].freq)."""
     try:
         v = eval_expr(expr, env)
     except ExprError as e:
@@ -165,8 +165,10 @@ def _eval_slot(expr: str, path, env, expr_at) -> float:
 
 
 def resolve_parameters_detailed(raw: dict) -> tuple[dict, dict]:
-    """resolve_parameters 的内部形态：额外返回 {路径段元组: 表达式原文}
-    （两段校验第二段守卫错误指路"表达式 t 的求值结果"用）。"""
+    """The internal form of resolve_parameters: additionally returns
+    {path-segment tuple: original expression text} (used by the second
+    stage of the two-stage validation to point guard errors at "the
+    evaluation result of expression t")."""
     out = copy.deepcopy(raw)
     expr_at: dict = {}
     raw_params = out.get("parameters")
@@ -184,35 +186,43 @@ def resolve_parameters_detailed(raw: dict) -> tuple[dict, dict]:
 
 
 def resolve_parameters(raw: dict) -> dict:
-    """COMSOL 式参数替换：参数节拓扑求值 → 全数值字段的表达式槽求值。
+    """COMSOL-style parameter substitution: topological evaluation of the
+    parameters section → expression-slot evaluation over all numeric fields.
 
-    - 参数节（``parameters``）：值=数值或表达式串（环境=其余参数，
-      声明序无关；环 → ExprError("cycle") 带环链；未知名 → 列可用名）；
-    - 数值字段（含 Optional/带约束 Annotated/tuple 内元素/dict 值/
-      NumOrTensor 张量元）：原值为 str → 按参数环境求值，错误带配置内
-      路径（如 ``source[0].freq``）；
-    - **幂等**：无数值槽字符串时输出与输入逐值相等（老配置零扰动）。
-    纯函数：不改动入参（deepcopy 后伴走）。
+    - Parameters section (``parameters``): values are numbers or expression
+      strings (environment = the other parameters, declaration order
+      irrelevant; cycles → ExprError("cycle") with the cycle chain; unknown
+      names → lists the available names);
+    - Numeric fields (including Optional / constrained Annotated / tuple
+      elements / dict values / NumOrTensor tensor elements): when the
+      original value is a str → evaluate against the parameter environment,
+      errors carrying the in-config path (e.g. ``source[0].freq``);
+    - **Idempotent**: with no numeric-slot strings, the output is
+      value-by-value equal to the input (zero disturbance to legacy
+      configs).
+    Pure function: does not modify its input (deepcopy first, then walk
+    along).
     """
     return resolve_parameters_detailed(raw)[0]
 
 
 def check_raw_param_keys(data: dict) -> None:
-    """参数键名前置检查（求值前拦——名字错的表达式不值得求值）。"""
+    """Upfront check of parameter key names (intercept before evaluation — an expression with a bad name is not worth evaluating)."""
     params = data.get("parameters")
     if not params:
         return
     for k in params:
         if not valid_param_name(k):
-            # G151：整段文案复用 expr.param_name_error（构造性单源）
+            # reuse the full wording from expr.param_name_error (single source)
             raise ExprError("syntax", param_name_error(k))
 
 def validate_resolved(resolved: dict, expr_at: dict) -> SimConfig:
-    """求值结果的模型校验（parse_config 与 sweep 逐点校验共用）。
+    """Model validation of the evaluation result.
 
-    失败位置若是表达式槽 → ExprError(kind="guard") 指路
-    "表达式 t 的求值结果"（被既有值守卫拦下）；否则原样 ValidationError
-    （真结构/字面量错）。"""
+    If the failing location is an expression slot → ExprError(kind="guard")
+    pointing at "the evaluation result of expression t" (intercepted by the
+    existing value guard); otherwise the ValidationError propagates as-is
+    (a real structural / literal error)."""
     try:
         return SimConfig.model_validate(resolved)
     except ValidationError as e:
@@ -227,26 +237,18 @@ def validate_resolved(resolved: dict, expr_at: dict) -> SimConfig:
 
 
 def validate_for_ui(cfg: dict) -> list[dict]:
-    """设计态预检的**唯一实现**：返回错误清单（空 = 通过）。
+    """Design-time preflight: returns the error list (empty = passed).
 
-    消费方（v2 布局，2026-11-03 更新）：host 的提交闸与表单防抖（经
-    ``/gw``，Q2.2）、worker 的 run（``core/run::_validate_for_submit``
-    的后继）、网关 ``api.py`` 的提交前校验（``api.py:429``）——都是
-    in-process 直接调，唯一实现在这里。
-
-    与内核 ``parse_config`` 的关系 = 同一双手、少一步：这里跑
-    「参数键名 → 拓扑求值 → 结构/值守卫」，**不跑资源守卫**（那属内核
-    部署策略，阈值不进 SDK）。返回形状 ``[{loc, msg}]``——``loc`` 是
-    配置内路径（如 ``source[0].freq``），空串表示全局错误。
-
-    收口前 agent 路径漏了 ``check_raw_param_keys``：同一份非法参数名的
-    配置，UI 红框、agent 工具却说 OK——这类"宣言与实现不同步"正是本
-    函数存在的理由（DISCIPLINE §5：改判定只改这里）。
+    This runs "parameter key names → topological evaluation → structural /
+    value guards" and **does not run the resource guard** (resource
+    thresholds are deployment policy and do not enter the SDK). Return
+    shape ``[{loc, msg}]`` — ``loc`` is the in-config path (e.g.
+    ``source[0].freq``); the empty string means a global error.
     """
     if not isinstance(cfg, dict):
         return [{"loc": "", "msg": "cfg must be an object (SimConfig JSON)"}]
     try:
-        check_raw_param_keys(cfg)                     # 名字错在求值前拦
+        check_raw_param_keys(cfg)                     # intercept bad names before evaluation
         resolved, expr_at = resolve_parameters_detailed(cfg)
         validate_resolved(resolved, expr_at)
     except ValidationError as e:
@@ -254,13 +256,6 @@ def validate_for_ui(cfg: dict) -> list[dict]:
                 for er in e.errors()]
     except ExprError as e:
         return [{"loc": "", "msg": f"{e.kind}: {e.msg}"}]
-    except Exception as e:  # noqa: BLE001 —— 其余解析失败同样按红框语义回
+    except Exception as e:  # noqa: BLE001 — other resolution failures also come back as red-box semantics
         return [{"loc": "", "msg": f"{getattr(e, 'kind', 'error')}: {e}"}]
     return []
-
-
-# ── 兼容别名（2026-10-18 接口整理轮已删除）────────────────────────────
-# 曾在此保留 `_check_raw_param_keys` / `_resolve_parameters_impl` /
-# `_validate_resolved` 等 `_` 前缀别名，供内核薄壳过渡期 import。内核已
-# 改用公共名（genie-fdtd:fdtd/serve/schema.py、sweep.py），双名字表随之
-# 删除——新增消费方一律用公共名，见 SERVICE.md 历史 D9。

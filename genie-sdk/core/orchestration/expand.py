@@ -1,22 +1,25 @@
-"""genie.core.sweep — SweepSpec 展开器（SDK 本地驱动件，不上线）。
+"""genie.core.orchestration.expand — the SweepSpec expander (the sweep
+driver's pure piece; never sent over the wire).
 
-**2026-11-03 自 ``genie_protocol`` 迁入（DECISIONS Q7.1）**：远方（relay 网关 /
-BSCC 内核）零消费者，扫参展开是驱动层的活——SweepSpec 根本不上线（客户端展开后
-提交的是逐点普通配置）。行为与语义逐字保留，仅模型定义与常量随迁；原线格式位置
-（``_wire.py``）同版删除。
+Expands a base SimConfig JSON + SweepSpec into per-point **resolved**
+configs:
 
-把 base SimConfig JSON + SweepSpec 展开为逐点**已解析**配置：
+- Pure expansion, zero scheduling: parameter substitution, product/zip
+  combination, per-point deep copy + per-point re-resolution;
+- name-axis semantics: ``name`` must be inside the base
+  ``parameters`` key set (if not → SweepExpandError listing the available
+  names); expansion = per-point ``parameters[name]=v`` → re-resolve via
+  ``resolve_parameters`` — every expression slot referencing that
+  parameter is re-evaluated in lockstep, point by point;
+- Per-point errors carry **which point (1-based) + the axis name** and
+  hint at the number of valid prefix points;
+- Returns concrete numeric configs that can be POSTed to /api/jobs
+  directly.
 
-- 纯展开零调度：参数替换、product/zip 组合、逐点深拷贝 + 逐点重解析；
-- name 轴语义不变：``name`` 必须在 base ``parameters`` 键集内（不在 →
-  SweepExpandError 列可用名）；展开 = 逐点 ``parameters[name]=v`` →
-  ``resolve_parameters`` 重解析——引用该参数的全部表达式槽逐点联动；
-- 逐点错误带**第几点（1 基）+ 轴名**，提示合法前缀数量；
-- 返回可直接 POST /api/jobs 的具体数字配置。
-
-v2 语境（Q2.2 收口 2026-11-04）：驱动经内部原语 ``f._submit`` / ``f._wait`` /
-``f._cancel`` 编排（公开面是融合的 ``f.submit``）；本模块是扫参这类驱动的
-展开手，不是调度器。
+The public entry is the dict-of-sequences verb ``f.add_param_sweep`` /
+``f.run_param_sweep`` (worker); ``SweepSpec`` is internal — the verbs
+construct it from plain sequences. Migrated verbatim from
+``core/sweep.py`` (Q10): behavior preserved word for word.
 """
 from __future__ import annotations
 
@@ -33,29 +36,34 @@ from genie_protocol.resolve import resolve_parameters_detailed, validate_resolve
 __all__ = ["SweepSpec", "SweepAxisSpec", "SweepExpandError",
            "expand_sweep", "validate_sweep_config"]
 
-MAX_SWEEP_POINTS = 512           # sweep 展开点数上限（随 Q7.1 迁入，SDK 本地常量）
-MAX_SWEEP_AXES = 32              # sweep 参数轴数上限
+MAX_SWEEP_POINTS = 512           # cap on expanded sweep points (SDK-local constant)
+MAX_SWEEP_AXES = 32              # cap on sweep parameter axes
 
 
 class _StrictModel(BaseModel):
-    """随迁的线格式纪律：未知字段一律拒绝（原 ``genie_protocol._wire`` 同款）。"""
+    """Wire-format discipline: unknown fields are always rejected."""
 
     model_config = ConfigDict(extra="forbid")
 
 
 class SweepAxisSpec(_StrictModel):
-    """单参数扫描轴（**参数名寻址**，2026-10 破坏性改版语义随迁）。
+    """A single-parameter sweep axis (**addressed by parameter name**).
 
-    - ``name``：**参数名**——必须是基底配置 ``parameters`` 键集内的
-      名（不在 → 422 列可用名）；展开语义 = 逐点 ``parameters[name]=v``
-      后重解析（引用该参数的全部表达式槽逐点联动重求值）；
-    - 取值三选一互斥：``values``（显式列表；str 成员按**表达式串**
-      逐点求值——非枚举型，未定义名会在逐点解析报 unknown_name）|
-      ``linspace`` = [start, stop, n]（数值，含端点，n>=2）|
-      ``logspace`` = [start, stop, n]（10^x，同规则）；
-      多给/全缺 → 策展错误指路；``linspace/logspace`` 的
-      start==stop 拒收（单值轴请直接 values=[x]——退化区间是笔误的
-      温床，宁拒不放行）。
+    - ``name``: a **parameter name** — it must be a name inside the base
+      config's ``parameters`` key set (if not → 422 listing the available
+      names); expansion semantics = re-resolve after per-point
+      ``parameters[name]=v`` (every expression slot referencing that
+      parameter is re-evaluated in lockstep, point by point);
+    - Values: exactly one of three mutually exclusive choices: ``values``
+      (an explicit list; str members are evaluated per point as
+      **expression strings** — not enum-style, an undefined name surfaces
+      as unknown_name during per-point resolution) | ``linspace`` =
+      [start, stop, n] (numeric, endpoints included, n>=2) | ``logspace``
+      = [start, stop, n] (10^x, same rules); more than one given / all
+      missing → a curation error pointing the way; start==stop for
+      ``linspace/logspace`` is rejected (for a single-value axis use
+      values=[x] directly — degenerate ranges are a breeding ground for
+      typos; reject rather than let them through).
     """
 
     name: str = Field(min_length=1, max_length=64)
@@ -102,11 +110,12 @@ class SweepAxisSpec(_StrictModel):
         return self
 
     def value_list(self) -> list:
-        """该轴的取值序列（values 原样；linspace/logspace 按公式展开）。
+        """This axis's sequence of values (values as-is; linspace/logspace
+        expanded by formula).
 
-        logspace 展开值查有限（G124⑤：start=400 → 10**400=inf，此前
-        不查即穿）。linspace 不查数值合理性——DISCIPLINE §5：输入数值
-        的正确性由用户负责（R21 曾加对称检查，站长 2026-10-27 裁回退）。"""
+        logspace expanded values are checked for finiteness (start=400 →
+        10**400=inf is rejected). linspace does not check numeric sanity —
+        the correctness of input numbers is the user's responsibility."""
         if self.values is not None:
             return list(self.values)
         start, stop, n = self.linspace if self.linspace else self.logspace
@@ -117,7 +126,7 @@ class SweepAxisSpec(_StrictModel):
         for i in range(n):
             try:
                 vals.append(10 ** (start + i * (stop - start) / (n - 1)))
-            except OverflowError:   # G124⑤：10**400 直接 OverflowError
+            except OverflowError:   # 10**400 raises OverflowError directly
                 raise ValueError(
                     f"logspace [{start}, {stop}] produces values out of "
                     f"float range (10^x overflow) — narrow the range"
@@ -130,14 +139,16 @@ class SweepAxisSpec(_StrictModel):
 
 
 class SweepSpec(_StrictModel):
-    """顶层参数扫描**定义**（纯本地值；P2-α 起源 + R39 C+ 纯化语义随迁）。
+    """The top-level parameter sweep **definition** (purely local values).
 
-    - ``parameters``：1..32 轴（SweepAxisSpec）；
-    - ``mode``：``product``（默认，笛卡尔积）| ``zip``（各轴等长逐点
-      配对，长度不等 → 错误）；
-    - 展开点数上限 512（超限报点数/上限）。
+    - ``parameters``: 1..32 axes (SweepAxisSpec);
+    - ``mode``: ``product`` (default, Cartesian product) | ``zip``
+      (equal-length per-point pairing across axes; unequal lengths →
+      error);
+    - Cap of 512 on the expanded point count (exceeding it reports the
+      point count / the cap).
 
-    R39（G169 站长裁 C+）语义随迁：执行旋钮不进规格——SweepSpec 是纯定义。
+    Execution knobs stay out of the spec — SweepSpec is a pure definition.
     """
 
     parameters: list[SweepAxisSpec] = Field(min_length=1,
@@ -166,17 +177,21 @@ class SweepSpec(_StrictModel):
 
 
 class SweepExpandError(ValueError):
-    """展开期错误（轴名不在参数表 / 逐点解析校验失败）。
+    """Expansion-time error (axis name not in the parameter table /
+    per-point resolution validation failed).
 
-    与旧服务端 422 策展错误同档：payload 形状/取值错，非资源守卫。"""
+    Payload shape/value errors, not resource guards.
+    """
 
 
 def expand_sweep(base: dict, sweep: SweepSpec) -> list[dict]:
-    """展开：每点 = deepcopy(base) + 各轴值写进 parameters[name]。
+    """Expand: each point = deepcopy(base) + each axis's value written
+    into parameters[name].
 
-    product（默认）= 笛卡尔积，axis 顺序为最外层循环；zip = 各轴
-    等长逐点配对。纯函数：不改 base、**不解析表达式**（解析与逐点
-    校验归 validate_sweep_config）。
+    product (default) = Cartesian product, with axis order as the
+    outermost loop; zip = equal-length per-point pairing across axes.
+    Pure function: does not modify base, **does not resolve expressions**
+    (resolution and per-point validation belong to validate_sweep_config).
     """
     axes = [(a.name, a.value_list()) for a in sweep.parameters]
     if sweep.mode == "zip":
@@ -196,9 +211,10 @@ def expand_sweep(base: dict, sweep: SweepSpec) -> list[dict]:
 def _check_axis_names(sweep: SweepSpec, base: dict) -> None:
     known = base.get("parameters") or {}
     if not isinstance(known, dict):
-        # 2026-10-27 R21 复审 C1 随迁：parameters=5 之类畸形 base 在
-        # sorted(known) 抛裸 TypeError，逃出 SweepExpandError 错误契约
-        # （expand_sweep 的 setdefault 同样会崩——守卫收在最前一道）。
+        # A malformed base such as parameters=5 would otherwise raise a
+        # bare TypeError at sorted(known), escaping the SweepExpandError
+        # error contract (expand_sweep's setdefault would crash the same
+        # way — this guard is the earliest gate).
         raise SweepExpandError(
             f"base config 'parameters' must be a mapping of parameter "
             f"names, got {type(known).__name__}")
@@ -218,11 +234,13 @@ def _first_validation_msg(e: ValidationError) -> str:
 
 
 def validate_sweep_config(sweep: SweepSpec, base: dict) -> list[dict]:
-    """提交端校验：轴名检查 + 展开 + 逐点求值解析 + 两段校验。
+    """Submission-side validation: axis-name checks + expansion +
+    per-point evaluation/resolution + two-stage validation.
 
-    任一点非法 → SweepExpandError 带**第几个点（1 基）+ 轴名 + 原因**
-    （错误信息含"此前 N-1 点均合法"提示）。全部合法 → 返回**已解析**
-    的逐点配置列表（可直接 POST /api/jobs）。
+    Any invalid point → SweepExpandError carrying **which point (1-based)
+    + axis names + reason** (the message includes a "the first N-1 points
+    were valid" hint). All valid → returns the list of **resolved**
+    per-point configs (directly POSTable to /api/jobs).
     """
     _check_axis_names(sweep, base)
     axis_names = [a.name for a in sweep.parameters]

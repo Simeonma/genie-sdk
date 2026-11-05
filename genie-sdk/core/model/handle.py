@@ -1,10 +1,11 @@
-"""genie.core.model.handle — Model（core 侧 f 本体）+ 集合视图 + 短引用 + 发号器。
+"""genie.core.model.handle -- Model (the core-side f body) + collection
+views + short references + the id allocator.
 
-契约 → ``../MODMAP.md``。禁令 1：Model 不长动作（submit / _submit /
-_wait / _cancel / 联网 / 落盘一概没有——动作面住 worker/run，Q2.2 终版；
-``test_model_has_no_run`` 锁，随 worker 批改名 test_model_has_no_actions）；
-禁令 4：短引用不缓存
-item 对象，每次属性访问按 id 解析回 draft——删除后自然失效。
+Model grows no actions: no submit / _submit / _wait / _cancel /
+networking / persistence at all -- the action surface lives in
+worker/run (locked by tests). Short references do not cache item
+objects -- every attribute access resolves back to the draft by id,
+so they naturally become invalid once the item is removed.
 """
 from __future__ import annotations
 
@@ -46,9 +47,11 @@ _MON: dict = {
 
 
 class _Allocator:
-    """全局发号器（四类共用一套）：单调递增、删除不复用、不可重置、
-    不可手工设值；``raise_to`` 是唯一外部输入口（打开文档「取最大」，
-    禁令 5）；``last_id`` 是唯一只读口（保存写 state.json，批 4）。"""
+    """Global id allocator (one shared by all four kinds): monotonically
+    increasing, ids are never reused after removal, cannot be reset,
+    cannot be set by hand; ``raise_to`` is the only external input
+    (opening a document "takes the max"); ``last_id`` is the only
+    read-only port (saving writes state.json)."""
 
     __slots__ = ("_next",)
 
@@ -66,15 +69,17 @@ class _Allocator:
 
     @property
     def last_id(self) -> int:
-        """最高已发（或已抬到）的 id——保存值（``state.json`` 的
-        ``allocator`` 键，Q1.2.5 / archive 图四栏）。"""
+        """The highest issued (or raised-to) id -- the value saved
+        as the ``allocator`` key of ``state.json``."""
         return self._next - 1
 
 
 class _Ref:
-    """短引用（Q1.4）：构造时解析一次地址（name→id），之后每次属性访问
-    按 id 回 draft 解析——改名不失效、删除后报「找不到」。不是必须保存
-    的变量。"""
+    """Short reference: resolves the address once at
+    construction (name→id); afterwards every attribute access
+    resolves back to the draft by id -- unaffected by renames,
+    raises "not found" after removal. Not a variable that must be
+    kept."""
 
     __slots__ = ("_view", "_id")
 
@@ -101,8 +106,8 @@ class _Ref:
 
 
 class _CollectionView:
-    """四类 item 集合视图（Q1.4）：``add_*`` 只带地址、``remove(name|id)``、
-    ``[name|id]`` 双寻址（Q1.2.4）。"""
+    """Collection view over the four item kinds: ``add_*`` takes only
+    an address, ``remove(name|id)``, ``[name|id]`` dual addressing."""
 
     def __init__(self, owner: "Model", label: str, items: list,
                  kinds: dict) -> None:
@@ -139,12 +144,13 @@ class _CollectionView:
 
     def _add(self, kind: str, name, node=None) -> str:
         iid = self._model._alloc.issue()
-        # Q1.4 窄例外（2026-11-05）：材料 add 可收**整节点**——只收
-        # mat_from_nk / assemble_nk 的产出物形态（type 校验 + 字段整装，
-        # draft 的 validate_assignment 把关），永不逐字段 kwargs。
-        # node 作第一参（add_lorentz(node)）的简写：dict 落在 name 位
-        # 就换位——两种写法 add_lorentz(node) / add_lorentz('n', node)
-        # 都通。
+        # Narrow exception: material add accepts a
+        # **whole node** -- only the output form of mat_from_nk /
+        # assemble_nk (type check + fields set whole, guarded by the
+        # draft's validate_assignment), never per-field kwargs.
+        # Shorthand with node as the first argument (add_lorentz(node)):
+        # a dict landing in the name slot is swapped into place -- both
+        # spellings add_lorentz(node) / add_lorentz('n', node) work.
         if isinstance(name, dict) and node is None:
             name, node = None, name
         if node is not None:
@@ -166,7 +172,7 @@ class _CollectionView:
             for k, v in node.items():
                 if k in ("type", "id", "name"):
                     continue
-                setattr(item, k, v)     # 未知字段被 draft（extra=forbid）拦
+                setattr(item, k, v)     # unknown fields are blocked by the draft (extra=forbid)
         self._items.append(item)
         return name
 
@@ -176,7 +182,7 @@ class _CollectionView:
     def __len__(self):
         return len(self._items)
 
-    # add_*：命令只带地址（Q1.4 规则 2；test_add_takes_address_only 锁）
+    # add_*: commands take only an address (locked by tests)
     def add_box(self, name=None):            return self._add("box", name)
     def add_sphere(self, name=None):         return self._add("sphere", name)
     def add_cylinder(self, name=None):       return self._add("cylinder", name)
@@ -200,14 +206,18 @@ class _CollectionView:
 
 
 class Model:
-    """core 侧的 f 本体（Q1.4 统一 f；Q6.10 语义住 core、值住 worker）。
+    """The core-side f body (semantics live in core, values live in
+    worker).
 
-    - 字段值只从 ``=`` 进；命令只带地址；
-    - domain / mesh 单例直改；geom / mat / src / mon 集合视图；
-    - parameters 键值；boundary 等字典字段整份或逐键赋值皆可；
-    - 升格 ``to_config()`` 必经 ``validate_for_ui``（Q4.4）；
-    - **无 submit / _submit / _wait / _cancel / 联网 / 落盘**（禁令 1；
-      动作面住 worker/run）。
+    - Field values enter only via ``=``; commands take only an address;
+    - domain / mesh by direct singleton assignment; geom / mat / src /
+      mon as collection views;
+    - parameters as key-value pairs; dict fields such as boundary
+      accept whole-value or per-key assignment;
+    - promotion ``to_config()`` must go through ``validate_for_ui``
+      (the single validation surface);
+    - **no submit / _submit / _wait / _cancel / networking /
+      persistence** (the action surface lives in worker/run).
     """
 
     def __init__(self) -> None:
@@ -226,8 +236,10 @@ class Model:
         self.mon = _CollectionView(self, "mon", self._monitor, _MON)
 
     def to_config(self) -> dict:
-        """升格：draft → SimConfig 形状 dict（剔 None）。调用方必经
-        ``genie_protocol.resolve.validate_for_ui``（Q4.4：校验面只有一个）。"""
+        """Promotion: draft → a dict in the SimConfig shape (Nones
+        stripped). The caller must then go through
+        ``genie_protocol.resolve.validate_for_ui`` (the single
+        validation surface)."""
         return {
             "domain": to_wire(self.domain),
             "mesh": to_wire(self.mesh),
@@ -241,15 +253,18 @@ class Model:
 
     @property
     def last_id(self) -> int:
-        """发号器只读口（批 4，Q1.2.5）：worker 保存写 ``state.json``
-        的 ``allocator`` 键（archive 图四栏）。只读——``raise_to``（打开
-        文档取最大）仍是唯一输入口（禁令 5）。"""
+        """The id allocator's read-only port: when saving, the worker
+        writes the ``allocator`` key of ``state.json``. Read-only --
+        ``raise_to`` (take the max when opening a document) remains
+        the only input port."""
         return self._alloc.last_id
 
     @classmethod
     def from_config(cls, cfg: dict, *, next_id: int | None = None) -> "Model":
-        """打开文档：线格式 dict → Model。发号器取 max(next_id, 最大 item id)
-        （Q1.2.5；next_id = state.json 记录值，防删除最大 id 后复用）。"""
+        """Open a document: wire-format dict → Model. The id allocator
+        takes max(next_id, highest item id) (next_id is the
+        value recorded in state.json, preventing reuse after the
+        highest id is removed)."""
         m = cls()
         m.domain = DomainDraft.model_validate(cfg.get("domain") or {})
         m.mesh = MeshDraft.model_validate(cfg.get("mesh") or {})

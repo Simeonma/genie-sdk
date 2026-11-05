@@ -1,19 +1,26 @@
-"""genie.host.app — HTTP 面（浏览器 + agent）+ 门牌 + 会话装配。
+"""genie.host.app — HTTP surface (browser + agent) + studio plate + session wiring.
 
-Q6.4 内容面 URL 三条（``/`` / ``/manual/`` / ``/examples/``）+ ``/static/*``；
-会话面（环投影 / exec 下行 / 取消 / 重启 / 脚本读写——经 session；
-「重启 worker」入口 = ``POST /restart``）；agent 面 = 同一组动词挂
-``/session/*`` 前缀、带本地 session token（门牌递送，Q2.1）；``/gw``
-归 ``host/gw``（纯代理）。门牌 ``~/.genie/studio.json``（Q3.2：0600、
-只删自己 pid、无默认端口——绑 ``127.0.0.1:0`` 系统分配，不扫描）。
+Content routes: three URLs (``/`` / ``/manual/`` / ``/examples/``) +
+``/static/*``; session routes (ring projection / exec downstream / cancel /
+restart / script read-write — via session; the "restart worker" entry
+point = ``POST /restart``); the agent surface = the same set of verbs
+mounted under the ``/session/*`` prefix, carrying a local session token
+(delivered via the studio plate); ``/gw`` belongs to ``host/gw`` (a
+pure proxy). Studio plate ``~/.genie/studio.json``: 0600, only
+removes its own pid, no default port — binds ``127.0.0.1:0`` and lets the
+system assign; no scanning.
 
-表单 delta 生成（Q1.1 / Q1.1.2 / **Q1.1.4：生成住本处**）：浏览器只发
-结构化薄意图（collection / kind / id / field / value）→ ``form_delta``
-产一行 Python（值一律 ``repr`` 字面量、不拼字符串；**字段类型问
-protocol——反射真源，不抄第二份表**：collection→SimConfig 字段、
-kind→判别 union 成员、tuple 注解→JSON list 收成 tuple）→ session 发
-``exec(echo=False)``（Q3.6 终端不回显）。加结构 / 删结构意图随 GUI 壳
-真需求长（Q1.1：``f.geom.add_box('name')`` 后逐字段赋值）。
+**Form delta generation lives here**: the browser sends only a structured
+thin intent (collection / kind / id /
+field / value) → ``form_delta`` produces one line of Python (values are
+always ``repr`` literals, never concatenated strings; **field types are
+asked of protocol — field-type reflection against the source of truth, no
+second copied table**: collection→SimConfig field, kind→discriminated
+union member, tuple annotation→JSON list collapsed into a tuple) → the
+session dispatches ``exec(echo=False)`` (terminal does not echo).
+Add-structure / remove-structure intents grow with the GUI shell's real
+needs (``f.geom.add_box('name')`` followed by field-by-field
+assignment).
 """
 from __future__ import annotations
 
@@ -38,7 +45,7 @@ from genie.session import Session
 __all__ = ["App", "form_delta", "write_plate", "read_plate", "remove_plate",
            "SESSION_TOKEN_HEADER", "DEFAULT_PLATE"]
 
-#: agent 面的本地 session token 头（浏览器同源不带——Q2.1）
+#: Local session token header for the agent surface (same-origin browser requests carry none)
 SESSION_TOKEN_HEADER = "X-Genie-Session-Token"
 
 DEFAULT_PLATE = os.path.join(os.path.expanduser("~"), ".genie", "studio.json")
@@ -46,7 +53,7 @@ DEFAULT_PLATE = os.path.join(os.path.expanduser("~"), ".genie", "studio.json")
 _STATIC_ROOT = Path(__file__).resolve().parent.parent / "static"
 
 
-# ── 门牌（Q3.2）──────────────────────────────────────────────────
+# ── studio plate ─────────────────────────────────────────────────────────
 
 def write_plate(path, port: int, token: str) -> None:
     data = {"pid": os.getpid(), "port": port, "token": token}
@@ -57,7 +64,7 @@ def write_plate(path, port: int, token: str) -> None:
 
 
 def read_plate(path) -> dict | None:
-    """读门牌（agent/cli 的口粮）；无牌 / 坏牌 → None。"""
+    """Read the studio plate (what agent/cli consumes); missing / bad plate → None."""
     p = str(path)
     if not os.path.exists(p):
         return None
@@ -70,7 +77,7 @@ def read_plate(path) -> dict | None:
 
 
 def remove_plate(path) -> None:
-    """只删自己 pid 的牌（别人的 / 坏牌不动）。"""
+    """Removes the plate only if it carries its own pid (others' / bad plates are left untouched)."""
     p = str(path)
     if not os.path.exists(p):
         return
@@ -83,17 +90,17 @@ def remove_plate(path) -> None:
         os.remove(p)
 
 
-# ── 表单 delta 生成（Q1.1.2 / Q1.1.4）───────────────────────────
+# ── form delta generation ────────────────────────────────────────────────
 
-#: f 集合属性名 → SimConfig 字段名（反射入口；不抄模型字段清单）
+#: f collection attribute name → SimConfig field name (reflection entry; no copied model field list)
 _F_ATTR = {"domain": "domain", "mesh": "mesh", "geom": "geometry",
            "mat": "materials", "src": "source", "mon": "monitor"}
 
 
 def _resolve_spec(coll: str, kind):
-    """collection（+kind）→ protocol 的 Spec 类（全部反射真源）。"""
+    """collection (+kind) → the protocol's Spec class (all via reflection against the source of truth)."""
     ann = _wire.SimConfig.model_fields[_F_ATTR[coll]].annotation
-    if get_origin(ann) is list:                 # 集合字段：list[Annotated[...]]
+    if get_origin(ann) is list:                 # collection field: list[Annotated[...]]
         ann = get_args(ann)[0]
     args = get_args(ann)
     if args and len(args) == 2 and isinstance(args[1], FieldInfo):
@@ -103,11 +110,11 @@ def _resolve_spec(coll: str, kind):
             if fld is not None and fld.default == kind:
                 return cls
         raise ValueError(f"unknown kind {kind!r} for {coll}")
-    return ann                                 # 单例：注解即模型类
+    return ann                                 # singleton: the annotation is the model class
 
 
 def _coerce(ann, value):
-    """JSON 值 → 模型注解形（tuple 注解收 list 成 tuple；其余原样）。"""
+    """JSON value → model-annotation shape (a tuple annotation collapses a list into a tuple; the rest pass through)."""
     if get_origin(ann) is Union:
         for a in get_args(ann):
             if get_origin(a) is tuple:
@@ -122,7 +129,7 @@ def _coerce(ann, value):
 
 
 def form_delta(intent: dict) -> str:
-    """浏览器薄意图 → 一行 Python delta（唯一公开面；脏值锁见 §5）。"""
+    """Browser thin intent → a one-line Python delta (the only public surface)."""
     coll = intent.get("collection")
     field = intent.get("field")
     if coll not in _F_ATTR or not isinstance(field, str) \
@@ -137,7 +144,7 @@ def form_delta(intent: dict) -> str:
     return f"f.{coll}[{int(intent['id'])}].{field} = {value!r}"
 
 
-# ── App（HTTP 面 + session 装配）────────────────────────────────
+# ── App (HTTP surface + session wiring) ────────────────────────────────
 
 _PLACEHOLDER = {
     "/": "Genie Studio",
@@ -146,20 +153,20 @@ _PLACEHOLDER = {
 }
 
 
-#: 云网关缺省（公开线 1.0.0a1，站长拍 2026-11-05）：生产唯一入口；
-#: 换网关走 env ``GENIE_BACKEND``（cli 层读）。
+#: Default cloud gateway: the sole entry point in production; switching
+#: gateways goes through env ``GENIE_BACKEND`` (read at the cli layer).
 DEFAULT_GATEWAY = "https://genie-optics.com"
 
 
 class App:
-    """一个 Studio 进程的全部装配。用法::
+    """All the wiring of one Studio process. Usage::
 
-        app = App(workspace, gateway_url="https://gw.example")  # None = 未接
-        app.start()                  # 绑 127.0.0.1:0 → session → 门牌
+        app = App(workspace, gateway_url="https://gw.example")  # None = not connected
+        app.start()                  # bind 127.0.0.1:0 → session → studio plate
         ...                          # http://127.0.0.1:{app.port}
-        app.stop()                   # 撤自己的牌 + 收 worker + 关服务
+        app.stop()                   # withdraw own plate + reap worker + stop server
 
-    ``worker_cmd`` 是测试缝（假 worker；生产只有 ``python -m genie.worker``）。
+    ``worker_cmd`` is a test seam (fake worker; production has only ``python -m genie.worker``).
     """
 
     def __init__(self, workspace, *, gateway_url=None, port: int = 0,
@@ -170,14 +177,14 @@ class App:
         self.plate_path = str(plate_path) if plate_path else DEFAULT_PLATE
         self.cred_path = str(cred_path) if cred_path else cred.DEFAULT_PATH
         self.worker_cmd = worker_cmd
-        self.token = secrets.token_hex(16)          # 本地 session token（随机）
-        self.worker_token = secrets.token_hex(16)   # spawn 随机（Q2.1）
+        self.token = secrets.token_hex(16)          # local session token (per-start random)
+        self.worker_token = secrets.token_hex(16)   # random at spawn
         self.script = ScriptState(self.workspace)
         self.session = None
         self.port = None
         self._srv = None
 
-    # -- 生命周期 ----------------------------------------------------
+    # -- lifecycle ----------------------------------------------------
 
     def start(self) -> None:
         outer = self
@@ -190,7 +197,7 @@ class App:
                                         _Handler)
         self._srv.daemon_threads = True
         self.port = self._srv.server_address[1]
-        # 先绑端口再 spawn：GENIE_GW_BASE_URL 要含真端口（session 图 §1）
+        # Bind the port before spawning: GENIE_GW_BASE_URL must carry the real port
         self.session = Session(
             self.workspace,
             gw_base_url=f"http://127.0.0.1:{self.port}/gw",
@@ -202,7 +209,7 @@ class App:
         write_plate(self.plate_path, self.port, self.token)
 
     def stop(self) -> None:
-        remove_plate(self.plate_path)               # 只删自己 pid
+        remove_plate(self.plate_path)               # only removes its own pid
         if self.session is not None:
             self.session.close()
             self.session = None
@@ -211,7 +218,7 @@ class App:
             self._srv.server_close()
             self._srv = None
 
-    # -- 取消回调（session → /gw 同一扇门）--------------------------
+    # -- cancel callback (session → /gw, the same entry point) --------------------------
 
     def _cancel_via_gw(self, job_ids) -> None:
         hdrs = gw.upstream_headers(cred.load_token(path=self.cred_path))
@@ -226,14 +233,14 @@ class App:
 
 
 class _RouteHandler(BaseHTTPRequestHandler):
-    """路由薄层：内容面 / 会话面（浏览器）+ /session（agent）+ /gw。"""
+    """Thin routing layer: content routes / session routes (browser) + /session (agent) + /gw."""
     app: "App"
     protocol_version = "HTTP/1.0"
 
-    def log_message(self, *a):                      # 静默
+    def log_message(self, *a):                      # silent
         pass
 
-    # -- 应答助手 ----------------------------------------------------
+    # -- response helpers ----------------------------------------------------
 
     def _send(self, status: int, data: bytes, ctype: str) -> None:
         self.send_response(status)
@@ -258,7 +265,7 @@ class _RouteHandler(BaseHTTPRequestHandler):
         except ValueError:
             return {}
 
-    # -- 分派 --------------------------------------------------------
+    # -- dispatch --------------------------------------------------------
 
     def do_GET(self):
         self._route("GET")
@@ -271,7 +278,7 @@ class _RouteHandler(BaseHTTPRequestHandler):
             self._dispatch(method)
         except BrokenPipeError:
             pass
-        except Exception as e:                      # noqa: BLE001 —— 单请求兜底
+        except Exception as e:                      # noqa: BLE001 — per-request backstop
             try:
                 self._json(500, {"error": str(e)})
             except OSError:
@@ -288,7 +295,7 @@ class _RouteHandler(BaseHTTPRequestHandler):
                 return self._json(401, {"error": "session token required"})
             return self._verbs(app, method,
                                path[len("/session"):] or "/", parsed)
-        if method == "POST":                        # 浏览器面防跨站（同源不带）
+        if method == "POST":                        # cross-site guard on the browser surface (same-origin sends none)
             origin = self.headers.get("Origin")
             if origin and origin != f"http://127.0.0.1:{app.port}":
                 return self._json(403, {"error": "cross-origin"})
@@ -305,21 +312,21 @@ class _RouteHandler(BaseHTTPRequestHandler):
         self.send_response(res.status)
         self.send_header("Content-Type", res.content_type)
         self.end_headers()
-        for chunk in res.chunks:                    # 流式透传
+        for chunk in res.chunks:                    # streaming passthrough
             self.wfile.write(chunk)
 
     def _verbs(self, app, method: str, path: str, parsed):
         q = parse_qs(parsed.query)
         if method == "GET":
-            if path == "/events":                   # 环投影（300ms 单拍）
+            if path == "/events":                   # ring projection (single 300ms tick)
                 since = int(q.get("since", ["0"])[0])
                 epoch, nxt, evs = app.session.events(since)
                 return self._json(200, {"epoch": epoch, "since": nxt,
                                         "events": evs})
-            if path == "/script":                   # 编辑器回填（Q3.5）
+            if path == "/script":                   # editor backfill
                 focused = q.get("focus", ["0"])[0] == "1"
                 return self._json(200, app.script.read(focused=focused))
-            if path in _PLACEHOLDER:                # 内容面三条（Q6.4）
+            if path in _PLACEHOLDER:                # the three content routes
                 name = _PLACEHOLDER[path]
                 return self._html(200, _page(name), "text/html; charset=utf-8")
             if path.startswith("/static/"):
@@ -327,21 +334,21 @@ class _RouteHandler(BaseHTTPRequestHandler):
             return self._json(404, {"error": "no route"})
 
         body = self._read_json()
-        if path == "/exec":                         # exec 下行（表单/终端/Run）
+        if path == "/exec":                         # exec downstream (form/terminal/Run)
             rid = app.session.submit_exec(
                 body.get("code", ""), fresh=bool(body.get("fresh")),
                 echo=bool(body.get("echo", True)))
             return self._json(200,
                               {"id": rid} if rid is not None else {"busy": True})
-        if path == "/cancel":                       # 卡片停止键 / f.cancel 同门
+        if path == "/cancel":                       # job card stop control / f.cancel, the same entry point
             return self._json(200, {"canceled": card.stop(app.session)})
-        if path == "/restart":                      # 「重启 worker」入口
+        if path == "/restart":                      # the "restart worker" entry point
             app.session.restart_worker()
             return self._json(200, {"ok": True})
-        if path == "/script":                       # 打字即落盘 / Ctrl+S
+        if path == "/script":                       # save-on-keystroke / Ctrl+S
             return self._json(200, {"version": app.script.write(
                 body.get("text", ""))})
-        if path == "/script/target":                # 打开 / 另存为
+        if path == "/script/target":                # open / save as
             ver = app.script.open_as(body.get("path", ""))
             return self._json(200, {"version": ver,
                                     "path": str(app.script.path)})
@@ -365,4 +372,4 @@ class _RouteHandler(BaseHTTPRequestHandler):
 def _page(name: str) -> str:
     return (f"<!doctype html><html><head><meta charset='utf-8'>"
             f"<title>{name}</title></head><body><h1>{name}</h1>"
-            f"<p>GUI 壳随 static/ 落地（Q6.4）。</p></body></html>")
+            f"<p>The GUI shell arrives with static/.</p></body></html>")

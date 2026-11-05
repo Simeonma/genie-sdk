@@ -1,47 +1,52 @@
 # GENIE SDK
 
-用 Python 写光子 FDTD 仿真：脚本建模 → 一键提交云端 GPU → 结果随档
-`.gensim` → `post_analyze` 自定义后处理随档分享。
+Build photonic FDTD simulations in Python: scriptable modeling → one-click
+submission to cloud GPUs → results saved into a portable `.gensim`
+document → custom `post_analyze` post-processing travels with it.
 
-## 安装
+## Install
 
-需要 Python ≥ 3.10：
+Requires Python ≥ 3.10:
 
 ```
 pip install genie-sdk
 ```
 
-预发布期也可从源码装：
+During the prerelease phase you can also install from source:
 
 ```
 pip install git+https://github.com/Simeonma/genie-sdk.git
 ```
 
-## 连接云端（怎么连网址工作）
+## Connect to the cloud
 
-GENIE 的仿真跑在云端 GPU 集群，服务入口 `https://genie-optics.com`。
-你需要一个服务 token（向管理员申请），登录一次即可——凭据只写本地
-`~/.genie/credentials.json`（权限 0600），不会上传别处：
+GENIE simulations run on a cloud GPU cluster; the service endpoint is
+`https://genie-optics.com`. You need a service token (request one from
+your administrator). Log in once — credentials are written only to the
+local `~/.genie/credentials.json` (permission 0600) and are never
+uploaded anywhere:
 
 ```
-genie login <你的token>
+genie login <your-token>
 ```
 
-- 换网关：设环境变量 `GENIE_BACKEND=https://…` 再启动（缺省即
-  genie-optics.com）；
-- 撤销凭据：`genie logout`。
+- Switch gateway: set the environment variable
+  `GENIE_BACKEND=https://…` before launching (the default is the
+  endpoint above);
+- Revoke credentials: `genie logout`.
 
-## 启动 Studio
+## Launch Studio
 
 ```
 genie studio
 ```
 
-启动后把浏览器打开它打印的地址（形如 `http://127.0.0.1:<端口>`）——
-左上是脚本编辑器，直接写 Python 驱动模型；`Ctrl+C` 退出。指定端口用
-`genie studio --port 8777`（缺省系统自动分配）。
+Open the printed address in your browser (something like
+`http://127.0.0.1:<port>`) — the script editor at the top left drives the
+model directly with Python; exit with `Ctrl+C`. To pick a fixed port use
+`genie studio --port 8777` (by default the system assigns one).
 
-最小脚本（贴进编辑器运行）：
+Minimal script (paste into the editor and run):
 
 ```python
 f.domain.x_range = (-1e-6, 1e-6)
@@ -49,7 +54,7 @@ f.domain.y_range = (-1e-6, 1e-6)
 f.domain.z_range = (-1e-6, 1e-6)
 f.domain.total_time = 60e-15
 f.mesh.dx = 40e-9
-f.mat.add_lorentz(f.mat_from_nk("Au"))        # 材料库一条龙
+f.mat.add_lorentz(f.mat_from_nk("Au"))        # material library in one step
 f.geom.add_box("wg")
 f.geom["wg"].material = "Au"
 f.geom["wg"].x_range = (-5e-7, 5e-7)
@@ -62,17 +67,33 @@ f.mon.add_freq("tr")
 f.mon["tr"].field = "Ex"
 f.mon["tr"].freq = {"center": 300e12, "bw": 120e12, "n": 200}
 
-f.submit()          # 提交云端，结果自动存回本地 .gensim
-r = f.results()     # 读结果（SimData）
+f.submit()          # submit to the cloud; the result is saved back into the local .gensim
+r = f.results()     # read the results (SimData)
 ```
 
-## 命令速查
+## Parameter sweeps
 
-| 命令 | 作用 |
+Define a named sweep, run it as one batch, read the results as a cube
+(the sweep axes lead the field dimensions; failed points are NaN):
+
+```python
+f.add_param_sweep("grid", {"x": [2e-6, 3e-6, 4e-6]})
+sw = f.run_param_sweep("grid")     # blocks until the whole batch finishes
+sw.get_freq("tr")                  # fields shaped (3, ...) — one leading axis
+sw.run_post_analyze("Q")           # re-run a post_analyze recipe over all points
+```
+
+Each point is a plain `.gensim` document under `parameter_sweep_grid/`,
+with an `index.json` account beside them.
+
+## Command reference
+
+| Command | Purpose |
 |---|---|
-| `genie login <token>` | 登录云端（写本地凭据） |
-| `genie studio` | 启动本地 Studio（裸 `genie` 同义） |
-| `genie connect` | 报告当前 Studio 地址与 token（agent 接入用） |
-| `genie logout` | 撤销云凭据 |
+| `genie login <token>` | Log in to the cloud (stores the token locally) |
+| `genie studio` | Launch the local Studio (bare `genie` is equivalent) |
+| `genie connect` | Print the current Studio address and token (for agents) |
+| `genie logout` | Revoke cloud credentials |
 
-完整文档建设中（1.0.0 alpha）。问题反馈：你的服务管理员。
+Full documentation is on its way (1.0.0 alpha). For issues, contact your
+service administrator.

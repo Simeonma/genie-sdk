@@ -8,21 +8,29 @@ version = "2.0.0b3"
 description = "GENIE wire-format protocol layer - SimConfig models, expression evaluator, resolver, estimator (single source shared by SDK client, gateway and compute kernel)"
 requires-python = ">=3.10"
 dependencies = [
-    # _wire/resolve 是 pydantic v2 模型；expr 纯标准库（懒加载不触发 pydantic）
-    # 2.0.0b1 断代：sweep_expand/errors 迁 genie-sdk（Q7.1）；timeout 退役（Q7.2）。
-    # 2.0.0b2 攒批（2026-11-05 发版）：run.gpu 改名 n_gpu（Q7.4）+
-    # 注释清账；网关侧批形两端点不进 protocol（HTTP 体形状，住 genie-service）。
-    # 2.0.0b3（2026-11-05 发版）：Q7.5——monitor field 缺省（time/freq
-    # = 'all'、index = 'both'）+ down_sample 自 _MonitorMixin 下移
-    # TimeMonSpec（freq/index 带 = 校验期 422）。
+    # _wire/resolve are pydantic v2 models; expr is pure stdlib (lazy import,
+    # does not pull pydantic).
+    # 2.0.0b1 breaking: sweep_expand/errors moved into genie-sdk (Q7.1);
+    #   timeout retired (Q7.2).
+    # 2.0.0b2 batch (released 2026-11-05): run.gpu renamed to n_gpu (Q7.4) +
+    #   comment cleanup; the gateway-side batch endpoints are NOT in protocol
+    #   (HTTP body shapes live in genie-service).
+    # 2.0.0b3 (released 2026-11-05): Q7.5 — monitor field defaults
+    #   (time/freq = 'all', index = 'both') + down_sample moved from
+    #   _MonitorMixin down to TimeMonSpec (freq/index carrying it = 422 at
+    #   validation).
     "pydantic>=2,<3",
 ]
 license = "Apache-2.0"
-# 许可文本随包（2026-10-25）：a1 轮子只有 License-Expression、没有 LICENSE 文件，
-# 装到机器上等于只拿到一句 SPDX 标识。协议层是独立分发包，得有自己的那份文本。
+# The license text ships with the package (2026-10-25): the a1 wheel carried
+# only a License-Expression and no LICENSE file, so an installed copy amounted
+# to a bare SPDX identifier. The protocol layer is an independently
+# distributed package and needs its own copy of the text.
 license-files = ["LICENSE"]
 
-# 协议层 = 独立分发身份（自己的 wheel/版本），源码住 SDK 仓 protocol/ 子目录
-# （挨着 JS 镜像保原子变更——详见 docs/ARCHITECTURE.md「协议层」节）。
+# The protocol layer = an independent distribution identity (its own wheel /
+# version); the source lives in the SDK repo's protocol/ subdirectory (next
+# to the JS mirror, keeping changes atomic — see docs/ARCHITECTURE.md,
+# "Protocol layer").
 [tool.setuptools]
 packages = ["genie_protocol"]

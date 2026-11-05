@@ -1,22 +1,21 @@
-"""genie_protocol._wire — SimConfig 线格式的唯一真源（全部 pydantic 模型）。
+"""genie_protocol._wire — the single source of truth for the SimConfig
+wire format (all pydantic models).
 
-> 2026-10 迁移阶段 1a：自内核 ``fdtd/serve/schema.py`` 81-935 行逐字迁入
-> （framework.md §三 / migration-plan.md 阶段 1，站长已确认）。内核侧
-> 同步变薄壳（重导出 + 资源守卫 + translate），SDK 与内核 import 的
-> 是**同一份类对象**——不存在同步问题，锁测试退役。
+> The kernel side is a thin shell (re-exports + resource guards +
+> translate); the SDK and the kernel import the **same class objects** —
+> no synchronization problem exists.
 >
-> 拆分说明：原 schema.py 92-115 常量块中，**线格式常量**（FACES /
-> MAX_GPU_PER_RUN / 字段名集合）随模型住这里；**部署策略阈值**
-> （MAX_CELLS / MAX_STEPS / MAX_MONITORS / MAX_MONITOR_SAMPLES）是
-> 服务端资源守卫的配置，留在内核 serve 层，不进 SDK。
-> DEFAULT_TIMEOUT_S / MAX_SWEEP_* 已随 2.0.0b1 退役，MAX_TIMEOUT_S
-> 守卫同轮删（Q7.1 / Q7.2）。
+> **Wire-format constants** (FACES / MAX_GPU_PER_RUN / field-name sets)
+> live here with the models; **deployment policy thresholds** (MAX_CELLS
+> / MAX_STEPS / MAX_MONITORS / MAX_MONITOR_SAMPLES) are configuration of
+> the server-side resource guards and stay in the kernel serve layer, out
+> of the SDK.
 >
-> 懒加载纪律（2026-10 站长定案：浏览器镜像零新增依赖）：本模块由本包
-> ``__init__.py`` 的 ``__getattr__`` 按需加载——``import genie_protocol.expr``
-> 不得拉起 pydantic。
+> Lazy-loading discipline: this module is loaded on demand by this
+> package's ``__init__.py`` ``__getattr__`` — ``import
+> genie_protocol.expr`` must not pull in pydantic.
 
-线格式 JSON 形状示例（内核 schema.py 原文档头逐字保留）::
+Example wire-format JSON shape::
 
     {
       "domain":   {"x_range": [-1e-6, 1e-6], "y_range": [-1e-6, 1e-6],
@@ -39,8 +38,9 @@
       "run":      {"n_gpu": 1}
     }
 
-**禁止**任何形式的可执行内容：模型只接受数/串/列表/字典，
-无 eval/exec/pickle，polarization 复数用 [re, im] 对表达。数值一律 SI。
+**Executable content of any kind is forbidden**: models accept only
+numbers/strings/lists/dicts, there is no eval/exec/pickle, and complex
+polarization values are expressed as [re, im] pairs. All values are SI.
 """
 from __future__ import annotations
 
@@ -48,8 +48,9 @@ import math
 import os
 import re
 
-# 监视器名白名单（G141）：ASCII [\w\-]{1,64}——名字是 h5 组名与结果
-# 键 t@<名>.<字段> 的地址段，点/空格会造成解析歧义。
+# Monitor name whitelist: ASCII [\w\-]{1,64} — the name is an h5
+# group name and the address segment of the result key t@<name>.<field>;
+# dots/spaces would create parsing ambiguity.
 _MONITOR_NAME_RE = re.compile(r"[\w\-]{1,64}", re.ASCII)
 from typing import Annotated, Literal, Optional, Union
 
@@ -66,8 +67,10 @@ from .expr import param_name_error, valid_param_name
 
 
 def _walk_finite(v, path: str) -> None:
-    """数值 isfinite 全量游走（G118 一双手）：float 逐个查；容器递归；
-    None/str/bool/嵌套模型跳过（模型自带本守卫）。"""
+    """Full isfinite walk over numeric values: floats are checked one
+    by one; containers recurse;
+    None/str/bool/nested models are skipped (models carry this guard
+    themselves)."""
     if v is None or isinstance(v, (bool, str)):
         return
     if isinstance(v, float):
@@ -81,24 +84,27 @@ def _walk_finite(v, path: str) -> None:
             _walk_finite(x, path)
 
 
-# isfinite 全量游走的唯一豁免：vertices 的 (nan, nan) 哨兵对
-# （_ser_vertices_json 序列化为 [null,null]，2026-10-15 事故定案）。
+# The only exemption to the full isfinite walk: the (nan, nan) sentinel
+# pair of vertices (_ser_vertices_json serializes it as [null,null]).
 _NAN_OK_FIELDS = frozenset({"vertices"})
 
 
 class _StrictModel(BaseModel):
-    """线格式纪律（P1 定案 2026-09）：未知字段一律 422 拒绝。
+    """Wire-format discipline: unknown fields are always rejected with
+    422.
 
-    pydantic 默认 ``extra="ignore"`` 曾意味着：可选字段拼错（如
-    ``prioraty``）被**静默丢弃**，仿真以默认值跑完——静默的错误物理。
-    严格化后所有客户端（curl/UI/SDK/agent）统一大声报错；存量
-    payload 均为已校验的干净形状，回归全绿（见 test_schema.py）。
+    The pydantic default ``extra="ignore"`` would let a misspelled
+    optional field (e.g. ``prioraty``) be **silently dropped** and the
+    simulation run to the end on defaults — silently wrong physics.
+    Strict mode makes all clients (curl/UI/SDK/agent) fail loudly and
+    uniformly.
 
-    数值字段全量 isfinite（G118，R16 轮）：NaN/Inf 一律拒——``gt/ge``
-    约束拦不住 inf（``inf > 0`` 成立），NaN 比较全 False 只被"恰有
-    数值约束的字段"顺带拦住。这是 2026-08-31 "eps=inf 穿 >0 静默
-    build" 教训的推广（当年只修了 eps 系）。唯一豁免 =
-    ``vertices`` 的 (nan, nan) 哨兵对（序列化为 [null, null]）。"""
+    Full isfinite over numeric fields: NaN/Inf are always rejected —
+    ``gt/ge`` constraints cannot stop inf (``inf > 0`` holds), and NaN
+    comparisons are all False, caught only incidentally by fields that
+    "happen to have a numeric constraint". The only exemption = the
+    (nan, nan) sentinel pair of ``vertices`` (serialized as
+    [null, null])."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -112,16 +118,19 @@ class _StrictModel(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# 线格式常量（自内核 schema.py 92-115 拆出；资源守卫阈值留内核 serve 层）
+# Wire-format constants (resource guard thresholds stay in the kernel
+# serve layer)
 # ---------------------------------------------------------------------------
 
 
 def _env_int(name: str, default: int) -> int:
-    """环境变量取正整数（内核 serve 的 MAX_CELLS / MAX_STEPS 正典出处）。
+    """Read a positive integer from an environment variable (the
+    canonical source of kernel serve's MAX_CELLS / MAX_STEPS).
 
-    G124⑥ 下界防呆：FDTD_MAX_SWEEP_POINTS=-1 之类误配此前透传，一切
-    sweep 请求 422——非正数回退缺省。（MAX_SWEEP_POINTS 已随 2.0.0b1
-    迁 genie.core.sweep，Q7.1；本函数因内核仍在消费而保留。）"""
+    Lower-bound foolproofing: a misconfiguration such as
+    FDTD_MAX_SWEEP_POINTS=-1 would pass through and 422 every request —
+    non-positive values fall back to the default. (The kernel still
+    consumes this helper.)"""
     try:
         v = int(os.environ.get(name, default))
     except (TypeError, ValueError):
@@ -129,19 +138,20 @@ def _env_int(name: str, default: int) -> int:
     return v if v >= 1 else default
 
 
-# 单作业卡数上限（R22 G154 站长裁：提为协议常量，fdtd serve
-# demand.MAX_RANKS import 同一值——上限只有一个出处，改一处双方生效。
-# 2026-10-31 站长令 4→8：默认算力 BSCC 单节点 8×V100-SXM2-32GB，
-# 单作业可整节点调度；跨节点不在本常量射程）。
+# Cap on GPU cards per job. fdtd serve demand.MAX_RANKS imports the same
+# value — the cap has a single source, and one change takes effect on
+# both sides. The default compute is a single node with
+# 8×V100-SXM2-32GB and a job may be scheduled a whole node; cross-node
+# is beyond this constant's scope.
 MAX_GPU_PER_RUN = 8
-# DEFAULT_TIMEOUT_S / MAX_SWEEP_POINTS / MAX_SWEEP_AXES 已随 2.0.0b1
-# 退役（Q7.2 删 timeout；Q7.1 sweep 迁 genie.core.sweep）。
 
 FACES = ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max")
 BC_KINDS = ("pec", "pmc", "periodic", "pml", "bloch")
-# from_library 材料拟合默认值（G2 归一正典）：线格式默认（LibraryMatSpec）、
-# SDK 渲染器的"等于默认则省略"判据、builder.add_from_library 签名、
-# material.fit_nk 签名——四处的单一来源，禁再手抄字面量。
+# from_library material fitting defaults: the single source for the
+# wire-format defaults (LibraryMatSpec), the SDK renderer's "omit when
+# equal to default" criterion, the builder.add_from_library signature,
+# and the material.fit_nk signature — hand-copying the literals is
+# forbidden.
 LIBRARY_FIT_DEFAULTS = {
     "fit_range": (400e-9, 800e-9),
     "n_drude": 0,
@@ -153,16 +163,16 @@ _INDEX_FIELD_SET = ("eps", "mu", "both")
 
 
 # ---------------------------------------------------------------------------
-# 基础类型
+# Basic types
 # ---------------------------------------------------------------------------
 
 Range2 = tuple[float, float]
 Vec3 = tuple[float, float, float]
-# 材料 eps 系值形状（2026-09 材料张量提案落地）：标量=iso（三轴同值，
-# 语义不变，存量 payload 零扰动）| 3 元=对角各轴独立（Phase2 ③）|
-# 3×3=完整张量（行优先嵌套 list[list[float]]，非对角对称=互易介质）。
-# 极点参数（PoleSpec）为纯标量：iso（无 α/β）| rank-1（+α/β 方向）——
-# 三轴 3元 速记已按站长裁决移除（2026-09 pole-direction 提案，选项 A）。
+# Value shapes of the material eps family: scalar = iso (same value on
+# all three axes) | 3-element = diagonal with independent axes | 3×3 =
+# full tensor (row-major nested list[list[float]]; symmetric
+# off-diagonal = reciprocal medium). Pole parameters (PoleSpec) are pure
+# scalars: iso (no α/β) | rank-1 (+α/β direction).
 NumOrTensor = Union[float, tuple[float, float, float], list[list[float]]]
 
 
@@ -176,10 +186,14 @@ def _check_range(v: tuple[float, float]) -> tuple[float, float]:
 
 
 def _check_tensor_sym(v):
-    """3×3 张量守卫：形状 3×3、逐元有限、主对角 > 0、对称（相对容差
-    1e-6）。镜像内核 _inf_to_tensor 的对称写与 _require_positive_diagonal
-    的主对角>0 口径；非对角允许负——各向异性耦合可负是 L1 定案，物理
-    稳定性的 schema 层防线只查主对角>0（正定性由引擎侧负责，同内核）。"""
+    """3×3 tensor guard: shape 3×3, every element finite, main diagonal
+    > 0, symmetric (relative tolerance 1e-6). Mirrors the kernel's
+    symmetric write in _inf_to_tensor and the main-diagonal>0 criterion
+    of _require_positive_diagonal; off-diagonal entries may be negative —
+    negative anisotropic coupling is legal, and the
+    schema-layer defense for physical stability only checks main
+    diagonal > 0 (positive-definiteness is the engine's responsibility,
+    same as the kernel)."""
     if len(v) != 3 or any(len(row) != 3 for row in v):
         raise ValueError(
             "tensor must be 3x3 (row-major nested list[list[float]])")
@@ -203,12 +217,15 @@ def _check_tensor_sym(v):
 
 
 def _check_finite_pos(v):
-    """eps 系（eps/mu/eps_inf/mu_inf）逐元守卫：标量/3 元对角 = **有限且
-    > 0**（镜像本地 _require_positive_diagonal，含 isfinite：eps=inf 曾穿
-    ">0" 静默 build 再 NaN 污染全仿真，2026-08-31v 内核实证）；3×3 张量 =
-    逐元有限 + 主对角>0 + 对称（_check_tensor_sym，非对角允许负）。两类
-    payload 都从 driver 期失败提前到 422，合法有限 payload 零扰动。"""
-    if isinstance(v, list):          # 3×3 张量
+    """Per-element guard for the eps family (eps/mu/eps_inf/mu_inf):
+    scalar / 3-element diagonal = **finite and > 0** (mirrors the local
+    _require_positive_diagonal, isfinite included: eps=inf passes
+    ">0", would silently build, and then NaN-pollute the whole
+    simulation); 3×3 tensor = every element finite + main diagonal > 0
+    + symmetric (_check_tensor_sym; off-diagonal may be negative).
+    Invalid values fail with an early 422 here instead of at driver
+    time."""
+    if isinstance(v, list):          # 3×3 tensor
         return _check_tensor_sym(v)
     for x in (v if isinstance(v, tuple) else (v,)):
         if not (math.isfinite(x) and x > 0):
@@ -219,10 +236,13 @@ def _check_finite_pos(v):
 
 
 def _check_hex_color(v):
-    """材料显示色（可选）：``#RRGGBB`` / ``RRGGBB``，归一为带 # 的大写形。
+    """Material display color (optional): ``#RRGGBB`` / ``RRGGBB``,
+    normalized to the uppercase form prefixed with #.
 
-    纯表现层字段（3D 视图按材料上色），求解器不消费；非法值早点报错，
-    避免"颜色写错 → 静默回退调色板"的无声偏差（与 _StrictModel 同精神）。"""
+    A purely presentational field (the 3D view colors by material), not
+    consumed by the solver; invalid values fail early, avoiding the
+    silent drift of "color typo → silent fallback to palette" (same
+    spirit as _StrictModel)."""
     if v is None:
         return v
     s = str(v).strip()
@@ -234,10 +254,13 @@ def _check_hex_color(v):
 
 
 def _check_pos(v):
-    """omega_0/omega_p > 0（标量；pole 参数已收窄为纯标量）。不查有限：
-    本地 pole 路径 VectorPole 构造期已 isfinite 早失败（2026-09-07 批 α）；
-    增益=omega_p_sq<0（负振子强度）接受语义（2026-09-07 M2 定案），
-    gamma<0 非增益通道、L1 ade_coeffs 硬拒——schema 镜像现值，不发明守卫。"""
+    """omega_0/omega_p > 0 (pole parameters are pure scalars).
+    Finiteness is not checked here: the local pole path already fails
+    early on isfinite at VectorPole construction. gain = omega_p_sq < 0
+    (negative oscillator strength) is accepted semantics, while
+    gamma < 0 (negative damping) is not a gain channel and is
+    hard-rejected by the kernel's ade_coeffs — the schema mirrors
+    current values and invents no guard."""
     if v is None:
         return v
     if not v > 0:
@@ -246,17 +269,19 @@ def _check_pos(v):
 
 
 def _check_dir(v):
-    """alpha/beta 方向向量守卫（镜像内核 `_pole._unit`）：逐元有限、
-    norm>0（≈0 → 422「零向量」）、自动归一（|norm−1|>1e-12 时归一；
-    归一后内核对单位向量不再告警）。"""
+    """alpha/beta direction vector guard (mirrors kernel `_pole._unit`):
+    every element finite, norm > 0 (≈0 → 422 "zero vector"), automatic
+    normalization (normalized when |norm−1| > 1e-12; once normalized the
+    kernel no longer warns about the unit vector)."""
     if v is None:
         return v
     for x in v:
         if not math.isfinite(x):
             raise ValueError(
                 f"direction vector elements must be finite, got {x!r}")
-    norm = math.hypot(v[0], v[1], v[2])   # G121：hypot 防溢出——手写
-    # 平方和在 1e200 量级溢出 inf，归一出 (0,0,0) 静默零向量
+    norm = math.hypot(v[0], v[1], v[2])   # hypot prevents overflow —
+    # a hand-written sum of squares overflows to inf at 1e200 scale, and
+    # normalization then yields a silent (0,0,0) zero vector
     if norm < 1e-15:
         raise ValueError(
             f"direction vector must be non-zero (norm≈0 is a zero vector), "
@@ -275,10 +300,11 @@ class _RangeModel(_StrictModel):
 
 
 def _norm_polarization(v):
-    """[1,0,0] 或 [[1,0],[0,0],[0,0]] → 统一存 [[re,im]×3]。
+    """[1,0,0] or [[1,0],[0,0],[0,0]] → stored uniformly as [[re,im]×3].
 
-    零向量拒收（G124②：全零极化不携带任何场，是笔误的温床）；
-    非有限分量由 _StrictModel 的 isfinite 全量游走拦（G118）。"""
+    Zero vectors are rejected (an all-zero polarization carries no
+    field and is a breeding ground for typos); non-finite components
+    are caught by _StrictModel's full isfinite walk."""
     if v is None:
         v = [[1.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
     elif len(v) != 3:
@@ -360,11 +386,13 @@ class MeshSpec(_StrictModel):
     dy: Optional[float] = Field(default=None, gt=0)
     dz: Optional[float] = Field(default=None, gt=0)
     refine: list[RefineSpec] = Field(default_factory=list)
-    # 细化上限/每轴最少格数（2026-09 Phase2 ①，原 dialect.md:87 挂账）：
-    # 守卫镜像本地 Mesh setter（isinstance(int) and >=1），默认同本地
-    # 128/10。无量纲，不进资源估算（estimate_cells 只吃 dx/dy/dz/refine）。
-    # 注意 max_refinement 查的是实际细化（渐变过渡带可比名义 factor 更细，
-    # 见本地 Mesh.refine docstring），守卫在内核 build 期触发。
+    # Refinement cap / minimum cells per axis: the guard mirrors
+    # the local Mesh setter (isinstance(int) and >=1), with the same
+    # defaults as local, 128/10. Dimensionless, not part of resource
+    # estimation (estimate_cells consumes only dx/dy/dz/refine). Note
+    # that max_refinement checks actual refinement (the graded transition
+    # band can be finer than the nominal factor, see the local
+    # Mesh.refine docstring); the guard fires at kernel build time.
     max_refinement: int = Field(default=128, ge=1)
     min_cells: int = Field(default=10, ge=1)
 
@@ -375,36 +403,41 @@ class MeshSpec(_StrictModel):
 
 
 class _Identified:
-    """v2 item 身份（Q1.2 / Q7.3，2026-11-03）：系统发的全局编号——
-    不可改、删除不复用；四类 item 集合（geometry / materials / source /
-    monitor）共用一套发号器。**内核不消费**（不进 translate），仅 SDK
-    记账；保存 / 打开 / 提交都带着它。"""
+    """v2 item identity: a globally unique number issued by the system —
+    immutable, never reused after deletion; the four item collections
+    (geometry / materials / source / monitor) share one id allocator.
+    **Not consumed by the kernel** (not in translate); SDK-only
+    bookkeeping; save / open / submit all carry it."""
 
     id: Optional[int] = None
 
 
 class PoleSpec(_StrictModel):
-    """色散极点。两形态（2026-09 pole-direction 提案，站长裁决「三轴
-    速记非 pole 形态」只留两档，选项 A 移除 3元 速记）：
+    """Dispersion pole. Two forms:
 
-    - **iso**：参数全标量、无 alpha/beta → 本地 `_iso_expand` 三轴展开
-      （存量语义不变）；
-    - **rank-1**：参数全标量 + `alpha`（必）± `beta`（缺省=alpha）→
-      单根 VectorPole（lorentz ωp²=Δε·ω₀²；drude ωp²=ω_p²）。
+    - **iso**: all parameters scalar, no alpha/beta → expanded to all
+      three axes by local `_iso_expand` (existing semantics unchanged);
+    - **rank-1**: all parameters scalar + `alpha` (required) ± `beta`
+      (default = alpha) → a single VectorPole (lorentz ωp²=Δε·ω₀²;
+      drude ωp²=ω_p²).
 
-    独立参数的多个 pole 由用户自行叠加。增益=omega_p_sq<0（负振子
-    强度/负 Δε，有界稳定，接受语义）；gamma<0（负阻尼）**不是**增益
-    通道，L1 ade_coeffs 硬拒——schema 镜像现值不发明守卫
-    （2026-09-07 M2 定案，口径同 _check_pos docstring/genie-fdtd docs/GUIDE 陷阱节）。"""
+    Multiple poles with independent parameters are superposed by the
+    user. Gain = omega_p_sq < 0 (negative oscillator strength / negative
+    Δε, bounded and stable, accepted semantics); gamma < 0 (negative
+    damping) is **not** a gain channel and is hard-rejected by the
+    kernel's ade_coeffs — the schema mirrors current values and invents no guard
+    (same criteria as the _check_pos docstring)."""
 
     kind: Literal["lorentz", "drude"]
-    omega_0: Optional[float] = None   # rad/s（lorentz；>0）
-    omega_p: Optional[float] = None   # rad/s（drude；>0）
-    gamma: Optional[float] = None     # rad/s（负阻尼非增益通道——L1 ade_coeffs
-                                      #   硬拒, M2 定案；增益走 ωp²<0=负 Δε）
+    omega_0: Optional[float] = None   # rad/s (lorentz; >0)
+    omega_p: Optional[float] = None   # rad/s (drude; >0)
+    gamma: Optional[float] = None     # rad/s (negative damping is not a gain
+                                      #   channel — hard-rejected by
+                                      #   ade_coeffs; gain goes via
+                                      #   ωp²<0 = negative Δε)
     delta_eps: float = 1.0
-    alpha: Optional[Vec3] = None      # rank-1 驱动方向（单位向量，自动归一）
-    beta: Optional[Vec3] = None       # rank-1 耦合方向（缺省=alpha）
+    alpha: Optional[Vec3] = None      # rank-1 drive direction (unit vector, auto-normalized)
+    beta: Optional[Vec3] = None       # rank-1 coupling direction (default = alpha)
 
     _v = field_validator("omega_0", "omega_p", mode="after")(_check_pos)
     _d = field_validator("alpha", "beta", mode="after")(_check_dir)
@@ -419,7 +452,7 @@ class PoleSpec(_StrictModel):
                 "omega_0=0)")
         if self.kind == "drude" and self.omega_p is None:
             raise ValueError("drude pole requires omega_p > 0")
-        # rank-1 守卫：只有 beta 无 alpha → 422（alpha 必填）
+        # rank-1 guard: beta without alpha → 422 (alpha is required)
         if self.beta is not None and self.alpha is None:
             raise ValueError(
                 "rank-1 pole requires alpha (beta without alpha is invalid)")
@@ -427,16 +460,23 @@ class PoleSpec(_StrictModel):
 
 
 class ConstMatSpec(_Identified, _StrictModel):
-    """常数材料。eps/mu：标量（iso，三轴同值——语义不变，存量 payload
-    零扰动）| 3 元 ``[xx, yy, zz]``（对角各轴独立）| 3×3 嵌套数组
-    （完整张量，非对角对称=互易介质）。守卫镜像本地 _require_positive_
-    diagonal：标量/对角逐元有限且 > 0（负 ε/μ 无色散是数值发散源，金属
-    走 pole/nk 拟合）；张量逐元有限 + 主对角>0 + 对称（非对角允许负）。
+    """Constant material. eps/mu: scalar (iso, same value on all three
+    axes) |
+    3-element ``[xx, yy, zz]`` (diagonal, independent per axis) | 3×3
+    nested array (full tensor; symmetric off-diagonal = reciprocal
+    medium). The guard mirrors the local _require_positive_diagonal:
+    scalar/diagonal entries finite and > 0 element-wise (dispersionless
+    negative ε/μ is a source of numerical divergence; metals go through
+    pole/nk fitting); tensor entries finite + main diagonal > 0 +
+    symmetric (off-diagonal may be negative).
 
-    color：**仅显示用**的可选色值（"#RRGGBB"）。GUI 的 3D 视图按材料上色
-    ——同一材料的实体共享一色；缺省由前端按材料名稳定散列取调色板。求解
-    器忽略此字段（不进 translate），故它是纯表现层的、可选的、向后兼容的
-    扩展。材料名是 geometry.material 引用的**外键**（改名不级联，Q1.2.2）。"""
+    color: an optional color value **for display only** ("#RRGGBB").
+    The GUI's 3D view colors by material — solids of the same material
+    share one color; by default the frontend picks from a palette via a
+    stable hash of the material name. The solver ignores this field (not
+    in translate), so it is a purely presentational, optional,
+    backward-compatible extension. The material name is the **foreign
+    key** referenced by geometry.material (renames do not cascade)."""
 
     type: Literal["const"] = "const"
     name: str = Field(min_length=1)
@@ -449,10 +489,11 @@ class ConstMatSpec(_Identified, _StrictModel):
 
 
 class LorentzMatSpec(_Identified, _StrictModel):
-    """Lorentz/Drude 色散材料。eps_inf/mu_inf 形状语义同 ConstMatSpec
-    的 eps/mu（标量 iso | 3 元对角 | 3×3 张量）；poles/mu_poles 逐 pole
-    形态见 PoleSpec（iso | rank-1，参数纯标量 ± α/β 方向）。
-    color：同 ConstMatSpec.color（仅显示用）。"""
+    """Lorentz/Drude dispersive material. eps_inf/mu_inf follow the same
+    shape semantics as ConstMatSpec's eps/mu (scalar iso | 3-element
+    diagonal | 3×3 tensor); per-pole forms of poles/mu_poles are
+    described in PoleSpec (iso | rank-1, purely scalar parameters ± α/β
+    direction). color: same as ConstMatSpec.color (display only)."""
 
     type: Literal["lorentz"] = "lorentz"
     name: str = Field(min_length=1)
@@ -467,33 +508,35 @@ class LorentzMatSpec(_Identified, _StrictModel):
 
 
 class LibraryMatSpec(_StrictModel):
-    """裸 from_library 线格式节点 —— **明确拒收**（2026-09 fit 归属迁移
-    F2 用户裁决：内核对色散材料只接受 pole 输入，nk 拟合归服务仓）。
+    """Bare from_library wire-format node — **explicitly rejected**
+    (the kernel accepts pole input only for dispersive materials; nk
+    fitting belongs to the service repo).
 
-    类保留在 union 中（而非删除）是为了让 type="from_library" 的节点
-    能被 discriminator 命中并吃到本类的明确指路错误，而不是
-    pydantic 的泛化 "no match for discriminator" —— 指路质量是本次
-    迁移的用户裁决三定案之一。校验期（model_validate/validate_config
-    工具）与作业期（translate）同一双手拒收。
+    The class stays in the union (rather than being deleted) so that a
+    type="from_library" node is still matched by the discriminator and
+    gets this class's explicit, pointing-the-way error instead of
+    pydantic's generic "no match for discriminator". Validation time
+    (model_validate / the validate_config tool) and job time
+    (translate) reject via the same single implementation.
     """
 
     _REJECT_MSG = (
-        "from_library wire-format materials are no longer accepted by the "
-        "kernel (2026-09 fit-ownership migration F2): the kernel takes "
-        "pole input only for dispersive materials. Use one of: "
+        "from_library wire-format materials are not accepted by the "
+        "kernel: it takes pole input only for dispersive materials. "
+        "Use one of: "
         "(1) local fitting via genie.material.fit_nk (the SDK ships the "
-        "same n-k library; the former gateway tools face was retired "
-        "2026-10-27) and submit the result as a type='lorentz' pole "
-        "payload; "
+        "same n-k library) and submit the result as a type='lorentz' "
+        "pole payload; "
         "(2) the SDK add_from_library sugar (same flow, automated); "
         "(3) submit type='lorentz' pole parameters directly."
     )
 
     type: Literal["from_library"] = "from_library"
-    name: str = Field(min_length=1)                 # 模型注册名
-    library: str = Field(min_length=1)              # nk 库文件名，如 "Au"
-    # G124⑧：本类全拒收、字段零消费，但"禁手抄"的宣言不豁免自己——
-    # 默认值改引正典（与渲染器省略判据同一份 LIBRARY_FIT_DEFAULTS）。
+    name: str = Field(min_length=1)                 # model registry name
+    library: str = Field(min_length=1)              # nk library file name, e.g. "Au"
+    # This class rejects everything and consumes no fields, but its
+    # defaults still reference the canon (the same LIBRARY_FIT_DEFAULTS
+    # as the renderer's omit criterion).
     fit_range: Range2 = LIBRARY_FIT_DEFAULTS["fit_range"]
     n_drude: int = Field(default=LIBRARY_FIT_DEFAULTS["n_drude"], ge=0)
     n_lorentz: int = Field(default=LIBRARY_FIT_DEFAULTS["n_lorentz"], ge=0)
@@ -514,19 +557,20 @@ MaterialSpec = Annotated[
 
 
 # ---------------------------------------------------------------------------
-# Geometry（box/sphere/cylinder 为主力；2026-09 方言扩展两批把本地 8 形状
-# 全开：+ngon_z/polygon_z（正 n 边形孔阵与任意多边形超表面单元）、
-# +ellipse_z/ring_z/polygon_swept（椭圆孔/孔环/斜切扫掠——提案
-# kernel_patch_proposals/2026-09-geometry-expansion.md，2026-09 落地；
-# 方言与本地 fdtd/api/geometry.py 至此对齐（原 dialect.md 附录 A，已随其退役）
+# Geometry (box/sphere/cylinder as the workhorses; +ngon_z/polygon_z
+# (regular n-gon hole arrays and arbitrary-polygon metasurface cells),
+# +ellipse_z/ring_z/polygon_swept (elliptical holes / hole rings /
+# sheared sweeps); the dialect aligns with local fdtd/api/geometry.py)
 # ---------------------------------------------------------------------------
 
 
 class _NamedGeo(_Identified):
-    """几何对象的**必填名**（Q1.2.4 / Q7.3 收紧：可选 → 必填）。
+    """The **required name** of geometry objects.
 
-    名字是人读的地址（表单按 id 定位，id 不随改名漂移）；求解器不
-    消费（不进 translate）。同一集合内唯一（SimConfig._check 查重）。"""
+    The name is a human-readable address (forms locate by id, and the id
+    does not drift on rename); the solver does not consume it (not in
+    translate). Unique within a collection (SimConfig._check checks
+    duplicates)."""
 
     name: str = Field(min_length=1)
 
@@ -555,8 +599,9 @@ class CylinderSpec(_StrictModel, _NamedGeo):
 
 
 class NgonZSpec(_StrictModel, _NamedGeo):
-    """正 n 边形（z 轴挤出）。镜像本地 ``add_ngon_z`` 守卫：
-    n_sides >= 3（n=2 使 cos(π/2)=0 结构消失）、circumradius/height > 0。"""
+    """Regular n-gon (extruded along z). Mirrors the local ``add_ngon_z``
+    guard: n_sides >= 3 (with n=2, cos(π/2)=0 makes the structure
+    vanish), circumradius/height > 0."""
 
     type: Literal["ngon_z"] = "ngon_z"
     material: str = Field(min_length=1)
@@ -568,13 +613,15 @@ class NgonZSpec(_StrictModel, _NamedGeo):
 
 
 def norm_vertices_pairs(vertices):
-    """vertices 哨兵归一（polygon_z / polygon_swept 共用）：
-    JSON [null, null] 对 → (nan, nan)；坐标须有限。2026-09 几何扩展
-    提案落地时自 PolygonZSpec 提出——两形状哨兵语义同一，共享一双手
-    禁漂移。子多边形 >=3 顶点等更深校验仍在内核 build 期（同一手）。"""
+    """vertices sentinel normalization (shared by polygon_z /
+    polygon_swept): a JSON [null, null] pair → (nan, nan); coordinates
+    must be finite. The two shapes share one sentinel semantics and one
+    implementation, forbidding drift. Deeper checks
+    such as sub-polygon >= 3 vertices stay at kernel build time (the
+    same single implementation)."""
     out = []
     for x, y in vertices:
-        if x is None and y is None:          # JSON 哨兵 → 内核哨兵
+        if x is None and y is None:          # JSON sentinel → kernel sentinel
             out.append((float("nan"), float("nan")))
         elif x is None or y is None:
             raise ValueError(
@@ -590,9 +637,10 @@ def norm_vertices_pairs(vertices):
 
 
 def _ser_vertices_json(verts):
-    """(nan, nan) 内核哨兵 → JSON [null, null]（哨兵 JSON 往返闭合）。
-    model_dump(json) 输出 NaN 字面量则 runner 二次 SimConfig 校验必拒
-    （2026-10-15 moiré 版图实测）。非哨兵坐标原样。"""
+    """(nan, nan) kernel sentinel → JSON [null, null] (closing the
+    sentinel's JSON round trip). If model_dump(json) emitted NaN
+    literals, the runner's second SimConfig validation would reject
+    them. Non-sentinel coordinates pass through unchanged."""
     return [
         [None, None]
         if isinstance(x, float) and math.isnan(x)
@@ -603,13 +651,16 @@ def _ser_vertices_json(verts):
 
 
 class PolygonZSpec(_StrictModel, _NamedGeo):
-    """任意多边形（z 轴挤出）。``vertices`` 为 (x, y) 列表。
+    """Arbitrary polygon (extruded along z). ``vertices`` is a list of
+    (x, y).
 
-    子多边形分隔哨兵：**JSON 提交用 ``[null, null]`` 对**（JSON 严格
-    语法无 NaN 字面量）；validator 归一为 ``(nan, nan)``——与本地 API
-    同款语义。Python 侧（SDK/内核）两种写法都接受。schema 层锁形状
-    （成对、至少 3 点）；子多边形 >=3 顶点的语义校验在内核 build 期
-    （与本地 API 同一手）。"""
+    Sub-polygon separator sentinel: **JSON submissions use ``[null,
+    null]`` pairs** (strict JSON has no NaN literal); the validator
+    normalizes to ``(nan, nan)`` — the same semantics as the local API.
+    The Python side (SDK/kernel) accepts both spellings. The schema
+    layer locks the shape (paired, at least 3 points); semantic
+    validation of sub-polygon >= 3 vertices happens at kernel build time
+    (the same single implementation as the local API)."""
 
     type: Literal["polygon_z"] = "polygon_z"
     material: str = Field(min_length=1)
@@ -619,8 +670,9 @@ class PolygonZSpec(_StrictModel, _NamedGeo):
 
     @field_serializer("vertices")
     def _ser_vertices_json_(self, verts):
-        # (nan, nan) 内核哨兵 → JSON [null, null]（哨兵 JSON 往返闭合，
-        # 2026-10-15 moiré 版图实测 NaN 字面量会被 runner 二次校验拒绝）
+        # (nan, nan) kernel sentinel → JSON [null, null] (closing the
+        # sentinel's JSON round trip; NaN literals would be rejected by
+        # the runner's second validation)
         return _ser_vertices_json(verts)
 
     _v = field_validator("z_range", mode="after")(_check_range)
@@ -633,8 +685,8 @@ class PolygonZSpec(_StrictModel, _NamedGeo):
 
 
 class EllipseZSpec(_StrictModel, _NamedGeo):
-    """椭圆（z 轴挤出）。镜像本地 ``add_ellipse_z`` 守卫
-    （_validate_structure 的 _pos 三连）：rx/ry/height > 0。"""
+    """Ellipse (extruded along z). Mirrors the local ``add_ellipse_z``
+    guard (the _pos triple in _validate_structure): rx/ry/height > 0."""
 
     type: Literal["ellipse_z"] = "ellipse_z"
     material: str = Field(min_length=1)
@@ -646,9 +698,11 @@ class EllipseZSpec(_StrictModel, _NamedGeo):
 
 
 class RingZSpec(_StrictModel, _NamedGeo):
-    """圆环（z 轴挤出）。inner_radius=0 合法（实心盘）；
-    inner < outer（本地 _build_structures 同款语义——反环静默光栅化成
-    空掩膜、结构消失零告警，schema 先挡形状错）。"""
+    """Ring (extruded along z). inner_radius=0 is legal (a solid disk);
+    inner < outer (same semantics as local _build_structures — an
+    inverted ring silently rasterizes into an empty mask and the
+    structure vanishes without a warning; the schema blocks the shape
+    error first)."""
 
     type: Literal["ring_z"] = "ring_z"
     material: str = Field(min_length=1)
@@ -667,18 +721,20 @@ class RingZSpec(_StrictModel, _NamedGeo):
 
 
 class PolygonSweptSpec(_StrictModel, _NamedGeo):
-    """带斜切（shear）的 z 轴挤出多边形。vertices 哨兵语义同 polygon_z
-    （共享 norm_vertices_pairs）。tilt=(dx_dz, dy_dz)：截面随
-    (z - z_center) 平移的斜率；每分量 |v| <= 1000（本地
-    _TILT_SLOPE_MAX 同款——浮点 tan(90°)=1.6e16 是有限值，有限性防线
-    拦不住，结构曾静默消失在域外）。tilt_deg 为本地便捷换算
-    （含 89.9° 守卫），不进线格式。"""
+    """Sheared z-extruded polygon. vertices sentinel semantics are the
+    same as polygon_z (shared norm_vertices_pairs). tilt=(dx_dz, dy_dz):
+    the slope at which the cross-section translates with (z - z_center);
+    each component |v| <= 1000 (same as the local _TILT_SLOPE_MAX — the
+    floating-point tan(90°)=1.6e16 is finite, so the finiteness defense
+    cannot stop it, and a huge tilt makes the structure silently vanish
+    outside the domain). tilt_deg is a local convenience conversion
+    (with the 89.9° guard) and is not part of the wire format."""
 
     type: Literal["polygon_swept"] = "polygon_swept"
     material: str = Field(min_length=1)
     vertices: list[tuple[Optional[float], Optional[float]]] = Field(min_length=3)
     z_range: Range2
-    tilt: Optional[tuple[float, float]] = None        # None → 不斜切
+    tilt: Optional[tuple[float, float]] = None        # None → no shear
     priority: int = 0
 
     @field_serializer("vertices")
@@ -724,16 +780,18 @@ class _TemporalMixin(_Identified, _StrictModel):
     bandwidth: float = Field(gt=0)
     delay: float = 0.0
     phase: float = 0.0
-    # Q1.2.4 / Q7.3 收紧（2026-11-03）：可选 → 必填——四类 item 名字
-    # 必填、同类唯一；断代：无 name 的旧配置 / v1 提交一律拒收（站长知情）。
+    # The four item classes require names, unique within their class;
+    # this is a generational break: configs without a name are rejected
+    # across the board.
     name: str = Field(min_length=1)
 
 
 class SoftSourceSpec(_TemporalMixin):
     type: Literal["soft_source"] = "soft_source"
     center: Vec3 = (0.0, 0.0, 0.0)
-    size: Vec3 = (0.0, 0.0, 0.0)          # 各槽 ≤0 = 单格
-    # 默认 [[1,0],[0,0],[0,0]]（x̂ 线偏振）；JSON 显式 null 也归一到此
+    size: Vec3 = (0.0, 0.0, 0.0)          # per-slot <= 0 = single cell
+    # Default [[1,0],[0,0],[0,0]] (x̂ linear polarization); an explicit
+    # JSON null is also normalized to this
     polarization: Optional[Union[list[float], list[list[float]]]] = [
         [1.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
     amplitude: float = 1.0
@@ -747,10 +805,12 @@ class PlaneWaveSpec(_TemporalMixin):
     direction: Literal["+", "-"] = "+"
     amplitude: float = 1.0
     center: Optional[Vec3] = None
-    theta: float = Field(default=0.0, ge=0, le=180)   # 度
-    phi: float = Field(default=0.0, ge=0, lt=360)     # 度
-    psi: float = Field(default=0.0, ge=0, lt=360)     # 度
-    # 三槽为全局 (x,y,z) 横向窗；null/≤0 = 非横向窗槽；传播轴 = 恰一非正槽（默认 z）
+    theta: float = Field(default=0.0, ge=0, le=180)   # degrees
+    phi: float = Field(default=0.0, ge=0, lt=360)     # degrees
+    psi: float = Field(default=0.0, ge=0, lt=360)     # degrees
+    # The three slots are the global (x,y,z) transverse window; null/<=0
+    # = a non-transverse-window slot; propagation axis = the exactly one
+    # non-positive slot (default z)
     size: Optional[tuple[Optional[float], Optional[float], Optional[float]]] = None
     propagation_axis: Optional[Literal["x", "y", "z"]] = None
     from_face: Optional[Literal["x_min", "x_max", "y_min", "y_max",
@@ -758,8 +818,10 @@ class PlaneWaveSpec(_TemporalMixin):
 
 
 class GaussianBeamSpec(PlaneWaveSpec):
-    """高斯束 = 平面波全参数 + 横向高斯包络。radius 为源平面孔径半径（m），
-    对应 1/e² 强度束宽 w ≈ 0.47·radius（想要束宽 w 就给 radius ≈ 2.12·w）。"""
+    """Gaussian beam = full plane-wave parameters + a transverse Gaussian
+    envelope. radius is the source-plane aperture radius (m),
+    corresponding to a 1/e² intensity beam width w ≈ 0.47·radius (to get
+    beam width w, give radius ≈ 2.12·w)."""
 
     type: Literal["gaussian_beam"] = "gaussian_beam"
     radius: float = Field(gt=0)
@@ -793,8 +855,9 @@ class ApodizeSpec(_StrictModel):
     time_window: Optional[Range2] = None
     width: Optional[float] = Field(default=None, gt=0)
 
-    # G120（R16）：同名字段与 DownSampleSpec.time_window 同一双守卫
-    # （此前 apodize 反序窗 [hi,lo] 静默放行、down_sample 同输入被拒）。
+    # The same-named field shares one guard with
+    # DownSampleSpec.time_window (an inverted apodize window [hi,lo]
+    # must be rejected just like the same down_sample input).
     @field_validator("time_window", mode="after")
     @classmethod
     def _win(cls, v):
@@ -804,10 +867,11 @@ class ApodizeSpec(_StrictModel):
 
 
 class _MonitorMixin(_Identified, _StrictModel):
-    # G141 定案①（站长裁决 2026-10-27）：监视器名白名单 [\w\-]{1,64}
-    # （re.ASCII——与文件名字白名单同款）。名字会成为 h5 组名
-    # 与 t@<名>.<字段> 结果键的地址段——含点/空格会让键解析歧义
-    # （"a.b" 的场被监视器 "a" 的前缀吞噬，修前实测）。
+    # Monitor name whitelist [\w\-]{1,64} (re.ASCII — same as the
+    # filename whitelist). The name becomes an h5 group name and the
+    # address segment of t@<name>.<field> result keys — dots or spaces
+    # would make key parsing ambiguous (the field of "a.b" would be
+    # swallowed by monitor "a"'s prefix).
     name: str = Field(min_length=1)
 
     @field_validator("name", mode="after")
@@ -822,21 +886,26 @@ class _MonitorMixin(_Identified, _StrictModel):
         return v
 
     center: Vec3 = (0.0, 0.0, 0.0)
-    # time/freq 默认 [0,0,0] 点监视器（null 槽 = 全域 span——体积守卫会先拦住滥用）
+    # time/freq default to the [0,0,0] point monitor (null slot =
+    # full-domain span — the volume guard stops abuse first)
     size: tuple[Optional[float], Optional[float], Optional[float]] = (0.0, 0.0, 0.0)
     field: str
 
 
 class TimeMonSpec(_MonitorMixin):
     type: Literal["time"] = "time"
-    # field 缺省 'all'（2026-11-05 站长拍：对齐 fdtd 本地 API 缺省）——
-    # 六分量全录，Poynting/flux/transmission 才取得到；显式单分量
-    # （省 6 倍数据/显存）仍是合法通道。
+    # field defaults to 'all' (aligned with the fdtd local API default)
+    # — all six components are recorded, so Poynting/flux/transmission
+    # can be derived; an explicit single component (saving 6x
+    # data/VRAM) remains a legal path.
     field: str = "all"
-    # down_sample 只属于 time（2026-11-05 SDK↔fdtd 对账修复）：freq 的
-    # 时域门控是 apodize 的活、index 无时间轴——修前 freq 带 down_sample
-    # 过校验后在内核 build 期 AttributeError（translate 调 builder 没有
-    # 的方法）、index 带则被 translate 静默丢弃；现均改为校验期 422。
+    # down_sample belongs to time only: time-domain gating for freq is
+    # apodize's job, and index has no time axis. A freq monitor
+    # carrying down_sample would pass validation then hit
+    # AttributeError at kernel build time (translate calling a method
+    # the builder does not have), and an index monitor carrying it
+    # would be silently dropped by translate; both are validation-time
+    # 422 here.
     down_sample: Optional[DownSampleSpec] = None
 
     @field_validator("field", mode="after")
@@ -849,9 +918,9 @@ class TimeMonSpec(_MonitorMixin):
 
 class FreqMonSpec(_MonitorMixin):
     type: Literal["freq"] = "freq"
-    freq: dict[str, float]  # {"center": Hz, "bw": Hz, "n": 点数}
+    freq: dict[str, float]  # {"center": Hz, "bw": Hz, "n": point count}
     apodize: Optional[ApodizeSpec] = None
-    # 同 TimeMonSpec：缺省 'all'（2026-11-05 站长拍）。
+    # Same as TimeMonSpec: defaults to 'all'.
     field: str = "all"
 
     @field_validator("field", mode="after")
@@ -864,9 +933,10 @@ class FreqMonSpec(_MonitorMixin):
     @field_validator("freq", mode="before")
     @classmethod
     def _fr_shape(cls, v):
-        # 常见 type-mismatch 策展（2026-10 站长裁决：错误消息必须可操作）：
-        # freq 监视器传列表/位置序列时，pydantic 泛化的
-        # "Input should be a valid dictionary" 不指路——这里明说三个命名参数。
+        # Curation of a common type-mismatch: when a list / positional
+        # sequence is passed to a freq monitor, pydantic's generic
+        # "Input should be a valid dictionary" does not point the way —
+        # spell out the three named parameters here.
         if not isinstance(v, dict):
             raise ValueError(
                 "freq: freq monitors require three named params "
@@ -878,8 +948,10 @@ class FreqMonSpec(_MonitorMixin):
     @field_validator("freq", mode="after")
     @classmethod
     def _fr(cls, v):
-        # G119（R16）：拼错键（n_points 之类）此前被重建 dict 静默丢弃、
-        # n 落默认 100——正是 _StrictModel extra=forbid 要消灭的静默面。
+        # A misspelled key (like n_points) would be silently dropped on
+        # dict rebuild and n would fall back to the default 100 —
+        # exactly the silent surface _StrictModel extra=forbid exists
+        # to eliminate.
         unknown = set(v) - {"center", "bw", "n"}
         if unknown:
             raise ValueError(
@@ -889,7 +961,8 @@ class FreqMonSpec(_MonitorMixin):
         bw = v.get("bw", 0.0)
         n_raw = v.get("n", 100)
         n = int(n_raw)
-        if n != n_raw:   # G124④：200.7 静默截断成 200 是笔误温床，拒收
+        if n != n_raw:   # silent truncation of 200.7 to 200 is a
+                         # breeding ground for typos — reject
             raise ValueError(
                 f"freq.n must be an integer, got {n_raw!r}")
         if center is None or center <= 0:
@@ -905,11 +978,12 @@ class FreqMonSpec(_MonitorMixin):
 
 class IndexMonSpec(_MonitorMixin):
     type: Literal["index"] = "index"
-    # index 默认全域（null 槽 = 全域 span）
+    # index defaults to the full domain (null slot = full-domain span)
     size: tuple[Optional[float], Optional[float], Optional[float]] = (None, None, None)
-    # field 缺省 'both'（2026-11-05 站长终拍：index 词表就是 eps/mu/both，
-    # 不引入 'all' 别名——time/freq 的 'all' 是六分量语义，index 的「全
-    # 存」本来就叫 'both'，硬统一反而多一套拼写）。
+    # field defaults to 'both': the index vocabulary is exactly
+    # eps/mu/both, with no 'all' alias — time/freq's 'all' means all
+    # six components, while index's "store everything" has always been
+    # called 'both'; forcing unification would add one more spelling.
     field: str = "both"
 
     @field_validator("field", mode="after")
@@ -927,26 +1001,21 @@ MonitorSpec = Annotated[
 
 
 # ---------------------------------------------------------------------------
-# Run 与总配置
+# Run and the top-level config
 # ---------------------------------------------------------------------------
 
 
-# run 节（G18 2026-10-16 站长裁决，方案 A 单旋钮）：**唯一时间定义 =
-# domain.total_time**（SI 秒，gt=0 必填，见 DomainSpec）——作业推进到
-# 网格时间容量为止，步数是 build 后的派生量（summary/results 只读面）。
-# run 节本身只剩服务字段：n_gpu = 可选上限（ge=1
-# le=MAX_GPU_PER_RUN（当前 8），跨仓契约
-# 2026-10-25：给几张卡由网关裁定；装不下 422、无空闲卡排队——
-# G84 清账 2026-10-27 前误写"卡数/显存不足 FAILED"）。
-# timeout_s 已删（Q7.2，2026-11-03）：查证该墙钟在生产链路
-# （shim sbatch→driver）从未执行过、slurm 分区无限时——机制整体退役，
-# 内核同轮删墙钟与守卫。旧 run.n_steps 更早退役（容量/步数双旋钮
-# 语义混乱且 n_steps>容量 必撞 apodization 截断）。
+# run node: **the only time definition = domain.total_time** (SI
+# seconds, gt=0 required, see DomainSpec) — the job advances until the
+# mesh's time capacity; the step count is a post-build derived quantity
+# (a read-only surface in summary/results). The run node itself keeps
+# only service fields: n_gpu = optional cap (ge=1, le=MAX_GPU_PER_RUN
+# (currently 8); cross-repo contract: how many cards to grant is
+# decided by the gateway; does not fit → 422, no free cards → queue).
 
 
 class RunSpec(_StrictModel):
-    # n_gpu（Q7.4，2026-11-04 改名；计数命名接旧例 n_steps）
-    n_gpu: Optional[Annotated[int, Field(ge=1, le=MAX_GPU_PER_RUN)]] = None  # 可选上限
+    n_gpu: Optional[Annotated[int, Field(ge=1, le=MAX_GPU_PER_RUN)]] = None  # optional cap
 
 
 class SimConfig(_StrictModel):
@@ -957,12 +1026,15 @@ class SimConfig(_StrictModel):
     source: list[SourceSpec] = Field(min_length=1)
     monitor: list[MonitorSpec] = Field(default_factory=list)
     run: RunSpec
-    # 全局参数节（参数系统批 1，2026-10 用户裁决全量开放）：键=标识符
-    # （^[A-Za-z_][A-Za-z0-9_]*$，≤64 字符），值=数值或引用其余参数的
-    # 表达式字符串（环境=其余参数，顶层拓扑求值）。表达式求值与数值槽
-    # 替换不在模型期做——见 resolve_parameters（两段校验的唯一解析点
-    # parse_config）；扫参轴按名引用这里的键（展开器在 genie.core.sweep，
-    # Q7.1 迁出——本包不再含 sweep 模型）。
+    # Global parameters node: keys = identifiers
+    # (^[A-Za-z_][A-Za-z0-9_]*$, <=64 chars), values = numbers or
+    # expression strings referencing the other parameters (environment =
+    # the other parameters, topologically evaluated at the top level).
+    # Expression evaluation and numeric-slot substitution do not happen
+    # at model time — see resolve_parameters (the single parse point of
+    # the two-stage validation, parse_config); parameter-sweep axes
+    # reference these keys by name (the sweep expander lives in
+    # genie.core.sweep).
     parameters: Optional[dict[str, Union[float, int, str]]] = None
 
     @field_validator("parameters", mode="after")
@@ -972,30 +1044,32 @@ class SimConfig(_StrictModel):
             return v
         for k in v:
             if not valid_param_name(k):
-                # G151：报错文案复用 expr.param_name_error 同一实现
-                # （构造性单源，不靠手抄巧合）。历史：此守卫曾是 sweep
-                # 展开路径对**未引用**坏名的唯一拦截者——sweep 展开已迁
-                # genie.core.sweep（Q7.1），其逐点校验仍经 validate_resolved
-                # 走到此守卫，不可删。
+                # The error wording reuses the same implementation as
+                # expr.param_name_error (constructive single source, not
+                # coincidental hand-copying). The sweep expander's
+                # per-point validation still reaches this guard via
+                # validate_resolved; do not delete.
                 raise ValueError(param_name_error(k))
         return v
 
     @model_validator(mode="after")
     def _check(self):
-        # 监视器名全列表唯一（Q1.2.3 落地，2026-11-03；此前按 type 各自
-        # 查重——跨 type 重名会让 f.mon['tr'] 有两个答案）。名字字符
-        # 白名单在 _MonitorMixin（G141）。
+        # Monitor names unique across the whole list (a cross-type
+        # duplicate would give f.mon['tr'] two answers). The character
+        # whitelist for names lives in _MonitorMixin.
         names = [m.name for m in self.monitor]
         if len(names) != len(set(names)):
             dups = sorted({n for n in names if names.count(n) > 1})
             raise ValueError(
                 f"duplicate monitor names: {dups} (monitor names must be "
                 f"globally unique across all monitor types)")
-        # 材料重名守卫（G40 L0 半，R39 站长裁）：材料名是 geometry.material
-        # 引用的身份——重名 = "后者覆盖先写"，第一个材料求解时静默失效
-        # （GUI 曾系统性制造 fitted/fitted 碰撞，R38 改库名入名；本守卫
-        # 把残余手改重名也拦在校验边界）。材料名必填非空（min_length=1），
-        # 全员参与查重。
+        # Duplicate-material-name guard: the material name is the
+        # identity referenced by geometry.material — a duplicate means
+        # "the later shadows the earlier", and the first material
+        # silently fails at solve time; this guard stops duplicates at
+        # the validation boundary. Material names are required and
+        # non-empty (min_length=1); all of them participate in the
+        # duplicate check.
         mnames = [m.name for m in self.materials]
         if len(mnames) != len(set(mnames)):
             dups = sorted({n for n in mnames if mnames.count(n) > 1})
@@ -1003,9 +1077,12 @@ class SimConfig(_StrictModel):
                 f"duplicate material names: {dups} — material names are "
                 f"what geometry references; a duplicate silently shadows "
                 f"the earlier definition (rename one of them)")
-        # geometry 显示名唯一（2026-10-21 用户定案）：名字是树/3D 里的身份，
-        # 允许重名就等于允许两行同名对象——找不到、删错一个都是实际代价。
-        # 未命名（None）不参与查重：多个匿名对象是合法工作流。
+        # Geometry display names unique: the name is the identity in
+        # the tree/3D view; allowing duplicates
+        # equals allowing two rows of same-named objects — not finding
+        # them or deleting the wrong one is a real cost. Unnamed (None)
+        # entries do not participate in the duplicate check: multiple
+        # anonymous objects are a legal workflow.
         seen = {}
         for i, g in enumerate(self.geometry):
             n = getattr(g, "name", None)
@@ -1017,7 +1094,8 @@ class SimConfig(_StrictModel):
                     f"and {i}) — names identify objects in the tree/3D "
                     f"view and must be unique")
             seen[n] = i
-        # geometry 引用的材料必须存在（build 期同款守卫提前）
+        # Materials referenced by geometry must exist (the build-time
+        # guard, applied earlier)
         known = {m.name for m in self.materials}
         for g in self.geometry:
             if g.material not in known:
@@ -1025,10 +1103,10 @@ class SimConfig(_StrictModel):
                     f"geometry references undefined material "
                     f"{g.material!r} (expected a name from materials[]: "
                     f"{sorted(known) if known else 'none defined'})")
-        # periodic/bloch 必须同轴成对（显式设置冲突时提前报错）。
-        # 〔定案 R16：同轴 periodic+bloch 混搭是既有设计——golden 正典
-        # 语料 full_field 即用它；两 kind 都属"平移对称族"，配对合法。
-        # 猎手曾报可疑、一度收紧同 kind，golden 当场红，回退并锁死。〕
+        # periodic/bloch must be paired on the same axis (report early on
+        # explicitly set conflicts).
+        # [Mixing periodic+bloch on the same axis is legal — both kinds
+        # belong to the "translation-symmetry" family.]
         b = self.domain.boundary
         pairs = (("x_min", "x_max"), ("y_min", "y_max"), ("z_min", "z_max"))
         for f_lo, f_hi in pairs:

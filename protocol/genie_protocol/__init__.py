@@ -1,29 +1,24 @@
-"""genie_protocol — SimConfig 线格式的唯一真源（独立分发包，懒加载壳）。
+"""genie_protocol — the single source of truth for the SimConfig wire
+format (an independently distributed package, lazy-import shell).
 
-2026-10-27 拆分自 SDK 仓 ``genie/models/``（逐字节迁移）：pydantic v2、
-零内核依赖、零 SDK 依赖——SDK 客户端 / 网关 / 内核三方 import 同一份
-模型。三件套：
+pydantic v2, zero other runtime dependencies. The trio:
 
-- ``_wire.py``   全部 Spec 模型 + SimConfig + 线格式常量（pydantic）
-- ``expr.py``    安全线表达式求值器（纯 Python：ast + math + re，零 pydantic）
-- ``resolve.py`` 参数解析（dict 伴走 + 表达式槽求值 + 求值结果校验）
+- ``_wire.py``   all Spec models + SimConfig + wire-format constants (pydantic)
+- ``expr.py``    safe-line expression evaluator (pure Python: ast + math + re, zero pydantic)
+- ``resolve.py`` parameter resolution (dict walk-along + expression-slot evaluation + evaluation-result validation)
 
-2.0.0b1 断代（2026-11-03，DECISIONS Q7）：sweep 展开器与 errors 迁 genie-sdk
-（core/sweep、net/errors，Q7.1）；timeout 机制整体退役（Q7.2）；四类 item
-加可选 ``id``、source / geometry 的 name 收紧必填、monitor 名全列表唯一
-（Q7.3 / Q1.2.3）。
-
-懒加载纪律（2026-10 站长定案）——``import genie_protocol.expr`` **不得
-拉起 pydantic**：本 ``__init__`` 只做名字表 + ``__getattr__``（PEP 562），
-模型本体在属性首次触达时才从 ``_wire`` 加载；星号导入按 ``__all__``
-触发完整加载。
+Lazy-import discipline — ``import genie_protocol.expr`` **must not pull up
+pydantic**: this ``__init__`` is only a name table + ``__getattr__``
+(PEP 562); the model bodies are loaded from ``_wire`` only when an
+attribute is first touched; star imports trigger the full load per
+``__all__``.
 """
 from __future__ import annotations
 
-__version__ = "2.0.0b3"   # 与 protocol/pyproject.toml 双处对齐（RELEASE 纪律）
+__version__ = "2.0.0b3"
 
 __all__ = [
-    # 基础类型别名
+    # basic type aliases
     "Range2", "Vec3", "NumOrTensor",
     # Domain / Mesh
     "BoundarySpec", "DomainSpec", "RefineSpec", "MeshSpec",
@@ -38,15 +33,16 @@ __all__ = [
     # Monitor
     "DownSampleSpec", "ApodizeSpec", "TimeMonSpec", "FreqMonSpec",
     "IndexMonSpec", "MonitorSpec",
-    # Run 与总配置
+    # Run and the top-level config
     "RunSpec", "SimConfig",
-    # 线格式常量（资源守卫阈值 MAX_CELLS 等是部署策略，留内核 serve 层）
+    # wire-format constants (resource-guard thresholds such as MAX_CELLS are deployment policy and live outside this package)
     "FACES", "BC_KINDS", "LIBRARY_FIT_DEFAULTS", "MAX_GPU_PER_RUN",
     "norm_vertices_pairs",
 ]
 
-# __getattr__ 同样可服务的内部名：内核薄壳显式 import（字段台账测试用
-# dir() 枚举 _StrictModel 子类）与跨模块复用需要；不进 __all__。
+# Internal names that __getattr__ also serves: cross-module reuse needs
+# them and dir() must enumerate them (locked by tests); they stay out of
+# __all__.
 _INTERNAL = frozenset({
     "_StrictModel", "_RangeModel", "_TemporalMixin", "_MonitorMixin",
     "_env_int", "_check_range", "_norm_polarization",

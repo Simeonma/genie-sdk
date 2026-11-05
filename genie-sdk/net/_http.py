@@ -1,11 +1,12 @@
-"""genie.net._http — 一次 HTTP 调用 + 传输失败归一（唯一碰 socket 的地方）。
+"""genie.net._http — one HTTP call + transport-failure normalization (the
+only place that touches a socket).
 
-client 与 upstream 共用（net/MODMAP §1）；标准库 ``http.client``（零三方，
-站长拍定 2026-11-04）。**不是可换传输缝**：无工厂、无第二实现（Q3.1
-浏览器不是执行面）。
-传输级 read timeout = 死连接探测器——固定常量，不是参数、不是墙钟
-（Q2.2-4 / Q7.2）；连不上 / 断流一律 ``GenieHTTPError(status=None,
-code="upstream")``，句出自五码表。
+Shared by client and upstream; stdlib ``http.client`` (zero third-party
+dependencies). **Not a swappable-transport seam**: no factory, no second
+implementation. The transport-level read timeout = a dead-connection probe —
+a fixed constant, not a parameter and not a wall clock; unreachable / broken
+stream uniformly raises ``GenieHTTPError(status=None,
+code="upstream")``, with the message taken from the five-code table.
 """
 from __future__ import annotations
 
@@ -17,7 +18,7 @@ from .errors import GW_CODES, GenieHTTPError
 
 __all__ = ["call", "Response"]
 
-#: 死连接探测器（连接与读共用；Q2.2-4：不上升为参数或旋钮）
+#: Dead-connection probe (shared by connect and read; not promoted to a parameter or knob)
 _READ_TIMEOUT = 30.0
 
 
@@ -27,7 +28,8 @@ def _transport_error(op: str) -> GenieHTTPError:
 
 
 class Response:
-    """一次调用的响应：状态 / 头 / 逐块读 / 关闭（含底层连接）。"""
+    """The response of one call: status / headers / chunked reads / close
+    (including the underlying connection)."""
 
     def __init__(self, conn, resp):
         self._conn = conn
@@ -58,9 +60,10 @@ class Response:
 
 def call(method: str, url: str, *, headers: dict | None = None,
          body: bytes | None = None) -> Response:
-    """一次 HTTP 调用。成功 → ``Response``；传输失败 → upstream 码异常；
-    **HTTP 4xx/5xx 不在这里抛**——状态语义归两个门面（client 抛、
-    upstream 透传）。"""
+    """One HTTP call. Success → ``Response``; transport failure → an
+    upstream-code exception; **HTTP 4xx/5xx is not raised here** — status
+    semantics belong to the two facades (client raises, upstream passes
+    through)."""
     parts = urlsplit(url)
     host = parts.hostname or "127.0.0.1"
     port = parts.port or (443 if parts.scheme == "https" else 80)

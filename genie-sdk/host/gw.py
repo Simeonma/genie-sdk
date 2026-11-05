@@ -1,21 +1,29 @@
-"""genie.host.gw — ``/gw``：唯一网关出口（token 校验 + 白名单 + 五码归一）。
+"""genie.host.gw — ``/gw``: the sole gateway egress (token validation +
+whitelist + five-code normalization).
 
-纯代理（host/MODMAP §1 / 禁令 1）：经 ``net/upstream`` 拨网关，不问网关
-语义、不缓存、无轮询。三件事（Q2.2-5A）：
+Pure proxy: dials the gateway via ``net/upstream``; asks nothing about
+gateway semantics; no caching; no polling module. Three things:
 
-1. **worker token 校验**（头名 import ``net/client`` 常量，不手抄；
-   缺/错 = 401 auth 包络）；
-2. **路径白名单**（批 5 拍定）：作业面五路由（v2 批形提交 / 批量查态 /
-   单查态 / 取消 / 结果流）+ 账号面三样（随账号面落地核对）；
-   白名单外 404（detail = ``not whitelisted``，与上游 404 可区分）；
-3. **上游错误归一**：分类按状态码重导（401/403→auth、400/422→resource、
-   429→rate、**5xx 及未列其余→server 兜底**，2026-11-04 收编：归一函数
-   对任何状态码必须给桶）；句引 ``net/errors`` 五码表（单源不手抄）；
-   detail 原样保留；传输失败（``GenieHTTPError(status=None)`` 是 SDK 侧
-   形状）→ HTTP 502 + ``upstream`` 包络。
+1. **worker token validation** (the header name is imported from the
+   ``net/client`` constant, not hand-copied; missing/wrong = a 401 auth
+   envelope);
+2. **path whitelist**: the five job-plane routes (batch-shaped submit /
+   batch status query / single-job status query / cancel / result stream) +
+   the three account-plane items; outside the whitelist → 404 (detail =
+   ``not whitelisted``, distinguishable from an upstream 404);
+3. **upstream error normalization**: classification is re-derived from the
+   status code (401/403→auth, 400/422→resource, 429→rate, **5xx and all
+   unlisted rest→server fallback**: the normalize function must return a
+   bucket for any status code); messages come from the ``net/errors``
+   five-code table (single source, not hand-copied);
+   detail is preserved as-is; transport failure (``GenieHTTPError`` with
+   ``status=None`` is the SDK-side shape) → HTTP 502 + ``upstream``
+   envelope.
 
-session 的取消回调也经这里出（``f.cancel`` / kill 杀时 / 卡片停止键，
-同一扇门）。``path`` 入参已剥掉 ``/gw`` 前缀（app 路由剥）。
+The session's cancel callbacks also go out through here (``f.cancel`` /
+cancel-on-kill / the card stop button — the same door). The ``path``
+argument arrives with the ``/gw`` prefix already stripped (the app router
+strips it).
 """
 from __future__ import annotations
 
@@ -28,20 +36,19 @@ from genie.net.upstream import Upstream
 
 __all__ = ["handle", "upstream_headers", "status_to_code", "GwResponse"]
 
-#: 账号面上行头（云 token 只在 /gw 拼，Q2.1）。头形随 v2 SDK——
-#: 契约主人（站长 2026-11-05：service / fdtd 跟随适配）。
+#: Account-plane upstream header (the cloud token is assembled only in /gw).
 _UPSTREAM_AUTH_HEADER = "Authorization"
 
 _ID = r"[^/]+"
 
-#: 白名单：作业面五路由（方法钉死）+ 账号面三样（方法按常例，随账号面
-#: 落地核对）
+#: Whitelist: the five job-plane routes (methods pinned) + the three
+#: account-plane items (methods per common practice)
 WHITELIST = [
-    ("POST", re.compile(r"^/api/jobs$")),                 # v2 批形提交
-    ("POST", re.compile(r"^/api/jobs/statuses$")),        # 批量查态（批 3）
-    ("GET", re.compile(rf"^/api/jobs/{_ID}$")),           # 单查态
-    ("POST", re.compile(rf"^/api/jobs/{_ID}/cancel$")),   # 取消
-    ("GET", re.compile(rf"^/api/jobs/{_ID}/result$")),    # 结果流
+    ("POST", re.compile(r"^/api/jobs$")),                 # batch-shaped submit
+    ("POST", re.compile(r"^/api/jobs/statuses$")),        # batch status query
+    ("GET", re.compile(rf"^/api/jobs/{_ID}$")),           # single-job status query
+    ("POST", re.compile(rf"^/api/jobs/{_ID}/cancel$")),   # cancel
+    ("GET", re.compile(rf"^/api/jobs/{_ID}/result$")),    # result stream
     ("GET", re.compile(r"^/whoami$")),
     ("POST", re.compile(r"^/api/auth/.+$")),
     ("GET", re.compile(r"^/api/health$")),
@@ -49,7 +56,8 @@ WHITELIST = [
 
 
 class GwResponse:
-    """一次 /gw 应答：状态 + Content-Type + 字节块迭代（可流式）。"""
+    """One /gw response: status + Content-Type + chunked byte iteration
+    (streamable)."""
 
     def __init__(self, status, content_type, chunks):
         self.status = status
@@ -58,18 +66,20 @@ class GwResponse:
 
 
 def status_to_code(status: int) -> str:
-    """状态码 → 五码桶。对任何状态码必须给桶（2026-11-04 收编）。"""
+    """Status code → five-code bucket. Must return a bucket for any status
+    code."""
     if status in (401, 403):
         return "auth"
     if status in (400, 422):
         return "resource"
     if status == 429:
         return "rate"
-    return "server"                   # 5xx 及未列其余——兜底桶
+    return "server"                   # 5xx and all unlisted rest — fallback bucket
 
 
 def upstream_headers(cloud_token: str | None) -> dict:
-    """上行头（云 token 只在 /gw 注入，Q2.1）；无 token 不带。"""
+    """Upstream headers (the cloud token is injected only in /gw); omitted
+    when there is no token."""
     if not cloud_token:
         return {}
     return {_UPSTREAM_AUTH_HEADER: f"Bearer {cloud_token}"}
@@ -83,7 +93,8 @@ def _envelope(status: int, detail) -> GwResponse:
 
 
 def _upstream_detail(raw: bytes):
-    """上游错误体 → detail（原样保留：包络形取 detail，裸体整包进）。"""
+    """Upstream error body → detail (preserved as-is: envelope-shaped bodies
+    yield their detail; bare bodies go in whole)."""
     try:
         env = json.loads(raw.decode("utf-8"))
         if isinstance(env, dict) and "detail" in env:
@@ -99,7 +110,8 @@ def _whitelisted(method: str, path: str) -> bool:
 
 def handle(method, path, headers, body, *, worker_token,
            gateway_url, upstream_headers=None) -> GwResponse:
-    """/gw 一次转发。顺序：token → 白名单 → 拨号 → 归一/透传。"""
+    """One /gw forwarding pass. Order: token → whitelist → dialing →
+    normalization/passthrough."""
     if headers.get(WORKER_TOKEN_HEADER) != worker_token:
         return _envelope(401, "worker token required")
     if not _whitelisted(method, path):
@@ -115,7 +127,7 @@ def handle(method, path, headers, body, *, worker_token,
     try:
         resp = Upstream(gateway_url, headers=fwd).request(
             method, path, body=body)
-    except GenieHTTPError:            # status=None：SDK 侧传输异常形状
+    except GenieHTTPError:            # status=None: the SDK-side transport-exception shape
         return GwResponse(502, "application/json", [_transport_body()])
     if resp.status >= 400:
         raw = resp.read()
@@ -143,4 +155,4 @@ def _transport_body() -> bytes:
     return json.dumps(body).encode("utf-8")
 
 
-assert tuple(ENVELOPE_KEYS) == ("code", "message", "detail")   # 键集对齐
+assert tuple(ENVELOPE_KEYS) == ("code", "message", "detail")   # key set aligned

@@ -1,17 +1,19 @@
-"""genie.net.client — worker→host ``/gw`` 作业面（五方法）。
+"""genie.net.client — the worker→host ``/gw`` job plane (five methods).
 
-作业面五方法（net/MODMAP §1 / 禁令 6）：``submit / job_status /
-job_statuses / cancel / stream_result``；每个请求带 worker token 头
-（Q2.1；空 token 不发头）。**没有 wait**——等待循环、终态判定、
-``GenieJobError`` 抛点在 worker/run（Q6.10）。包络错误
-``{code, message, detail}`` → ``GenieHTTPError`` 携 ``.code/.status/.detail``
-（Q2.2-5A）。
+The five job-plane methods: ``submit / job_status / job_statuses / cancel /
+stream_result``; every request carries the worker token header (no header
+is sent when the token is empty). **There is no wait** — the wait loop,
+terminal-state determination, and the ``GenieJobError`` raise point live in
+worker/run. Envelope errors ``{code, message, detail}`` → ``GenieHTTPError``
+carrying ``.code/.status/.detail``.
 
-批 3 线格式（2026-11-04 拍定）：submit **整批一次交**——体始终
-``{"configs": [cfg, ...]}``（单 = 批 1，公开面 / client / 网关同形）、
-响应 ``{"job_ids": [...]}``；``job_statuses`` 批量查态——体
-``{"job_ids": [...]}``、响应 ``{"jobs": [...]}``（每项与单查态同形，
-``progress`` 可选、只喂显示不判终态）。
+Wire format: submit **submits the whole batch
+at once** — the payload is always batch-shaped ``{"configs": [cfg, ...]}`` (a
+single submission is a batch of one; same shape across the public surface /
+client / gateway), response ``{"job_ids": [...]}``; ``job_statuses`` is the
+batch status query — body ``{"job_ids": [...]}``, response ``{"jobs": [...]}``
+(each item has the same shape as the single-job status query; ``progress`` is
+optional and only feeds display, not terminal-state determination).
 """
 from __future__ import annotations
 
@@ -22,15 +24,15 @@ from .errors import GW_CODES, GenieHTTPError
 
 __all__ = ["Client", "WORKER_TOKEN_HEADER"]
 
-#: worker token 头名（host/gw 校验侧 import 这一个常量，不手抄）
+#: Worker token header name (the host/gw validation side imports this one constant — not hand-copied).
 WORKER_TOKEN_HEADER = "X-Genie-Worker-Token"
 
 _CHUNK = 65536
 
 
 class Client:
-    """worker 侧的作业面客户端。``base_url`` 显式传入（session 经 spawn
-    env 递送；递送对接表挂 net 图 §7 待落）。"""
+    """The job-plane client on the worker side. ``base_url`` is passed in
+    explicitly (the session delivers it via spawn env)."""
 
     def __init__(self, base_url: str, worker_token: str | None = None):
         self._base = base_url.rstrip("/")
@@ -68,13 +70,15 @@ class Client:
         return GenieHTTPError(f"{status} {message}".strip(),
                               status=status, detail=detail, code=code)
 
-    # -- 作业面五方法 -------------------------------------------------
+    # -- the five job-plane methods -------------------------------------------------
 
     def submit(self, cfg_or_cfgs) -> str | list[str]:
-        """提交一份或一批 SimConfig dict（**整批一次交**，批 3 形状：线
-        格式始终 ``{"configs": [...]}``，单 = 批 1；返回与参数同形——单
-        ``str`` / 批 ``list[str]``）。不校验——校验归 validate_for_ui，
-        调用方在提交前跑。"""
+        """Submit one or a batch of SimConfig dicts (**submit the whole
+        batch at once**; the wire format is always
+        ``{"configs": [...]}``, a single submission is a batch of one; the
+        return matches the argument shape — single ``str`` / batch
+        ``list[str]``). No validation here — validation belongs to
+        validate_for_ui, which the caller runs before submitting."""
         single = isinstance(cfg_or_cfgs, dict)
         cfgs = [cfg_or_cfgs] if single else list(cfg_or_cfgs)
         with self._request("POST", "/api/jobs", body={"configs": cfgs}) as resp:
@@ -82,29 +86,35 @@ class Client:
         return job_ids[0] if single else job_ids
 
     def job_status(self, job_id: str) -> dict:
-        """作业状态 dict（真相在网关，Q2.2-1A；终态判定不在这；
-        ``progress`` 可选——只喂显示，不参与判终态）。"""
+        """Job status dict (the source of truth lives at the gateway;
+        terminal-state determination is not here; ``progress`` is
+        optional — display feed only, not part of terminal-state
+        determination)."""
         with self._request("GET", f"/api/jobs/{job_id}") as resp:
             return json.loads(resp.read().decode("utf-8"))
 
     def job_statuses(self, job_ids) -> list[dict]:
-        """批量查态（批 3：worker 等待循环每秒的口粮）。体
-        ``{"job_ids": [...]}`` → ``{"jobs": [...]}``，每项与
-        :meth:`job_status` 同形；任一 id 未知 = 整请求 404 包络（与单
-        查态同语义——等待循环只查自己 submit 拿到的 id，错误路径）。"""
+        """Batch status query (the per-second feed for the worker wait
+        loop). Body ``{"job_ids": [...]}`` → ``{"jobs": [...]}``; each
+        item has the same shape as :meth:`job_status`; any unknown id = the
+        whole request gets a 404 envelope (same semantics as the single-job
+        status query — the wait loop only queries ids it got from submit, an
+        error path)."""
         with self._request("POST", "/api/jobs/statuses",
                            body={"job_ids": list(job_ids)}) as resp:
             return json.loads(resp.read().decode("utf-8"))["jobs"]
 
     def cancel(self, job_id: str) -> None:
-        """取消作业（Q2.2-3：取消 = 网关远端取消；公开入口带外直达
-        session/host，worker 零停止机制）。"""
+        """Cancel a job (cancellation = remote cancellation at the gateway;
+        the public entry reaches session/host out of band, and the
+        worker has no stop mechanism)."""
         with self._request("POST", f"/api/jobs/{job_id}/cancel"):
             pass
 
     def stream_result(self, job_id: str):
-        """结果字节块迭代器——链路全程不整包缓冲（Q2.2-1）；消费方
-        （worker/run）直接灌进 archive.Writer.stream_result。"""
+        """Chunked iterator over result bytes — no whole-payload buffering
+        anywhere along the chain; the consumer (worker/run) pours it
+        straight into archive.Writer.stream_result."""
         resp = self._request("GET", f"/api/jobs/{job_id}/result")
 
         def _iter():

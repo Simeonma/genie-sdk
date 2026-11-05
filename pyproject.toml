@@ -4,37 +4,41 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "genie-sdk"
-version = "1.0.0a1"
-description = "GENIE SDK v2 — Python 脚本构建光子 FDTD 仿真、提交云端 GPU、post_analyze 自定义后处理随档分享；本地 Studio 会话执行"
-# PEP 639 SPDX 写法要求 setuptools>=77；LICENSE 随仓 + 随 wheel 分发。
+version = "1.0.0a2"
+description = "GENIE SDK v2 — build photonic FDTD simulations in Python, submit them to cloud GPUs, and keep results plus custom post_analyze in one portable .gensim document; local Studio included"
+# PEP 639 SPDX form requires setuptools>=77; LICENSE ships with the repo and the wheel.
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = [
-    # 线格式模型（genie_protocol 构建时内嵌，见 tool.setuptools package-dir）
+    # Wire-format models (genie_protocol is embedded at build time; see tool.setuptools package-dir)
     "pydantic>=2,<3",
     "numpy>=1.24",
-    # 结果读取（genie-results-h5/1：f.results() / post_analyze 的 SimData）
+    # Result reading (genie-results-h5/1: the SimData behind f.results() / post_analyze)
     "h5py>=3.0",
-    # 材料拟合（fit_nk 的 curve_fit——懒 import，装上是硬前提）
+    # Material fitting (curve_fit for fit_nk — lazy import, but a hard prerequisite)
     "scipy>=1.10",
 ]
 
 [project.scripts]
 genie = "genie.host.cli:main"
 
-# 打包白名单（v2 包结构显式列表防误收）；package-dir：源码目录 genie-sdk
-# 映射为包名 genie（分发名 genie-sdk ≠ import 名 genie）；protocol 内嵌
-# ——SDK 轮子自带 genie_protocol，源码安装一条命令零外求（v1 先例沿用；
-# 服务器侧仍可用独立的 genie-protocol 轮子，真源 = protocol/ 子目录）。
+# Packaging whitelist (the explicit v2 package list guards against accidental
+# inclusion); package-dir: the source directory genie-sdk maps to the import
+# name genie (distribution name genie-sdk ≠ import name genie); protocol is
+# embedded — the SDK wheel carries genie_protocol so a source install needs
+# nothing else (v1 precedent; the server side can still use the standalone
+# genie-protocol wheel, whose source of truth is the protocol/ subdirectory).
 [tool.setuptools]
 packages = ["genie", "genie.core", "genie.core.model", "genie.core.archive",
             "genie.core.material", "genie.core.results",
+            "genie.core.orchestration",
             "genie.ipc", "genie.net", "genie.worker", "genie.session",
             "genie.host", "genie_protocol"]
 package-dir = { genie = "genie-sdk", genie_protocol = "protocol/genie_protocol" }
 
-# 随包数据：n-k 材料库 yml（fit_nk / mat_from_nk 的库真源）。
+# Package data: the n-k material library yml files (the source of truth for
+# fit_nk / mat_from_nk).
 [tool.setuptools.package-data]
 genie = ["resources/materials/*.yml"]
 

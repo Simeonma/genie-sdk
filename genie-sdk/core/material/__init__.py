@@ -1,34 +1,43 @@
-"""genie.core.material — 材料拟合（fit_nk）+ 通用组装（assemble_nk）
-+ 本地 n-k 库加载。
+"""genie.core.material — material fitting (fit_nk) + general assembly
+(assemble_nk) + local n-k library loading.
 
-契约 → ``MODMAP.md``（批 9c，2026-11-05 审毕 + 同日**二拍改案**）：
+Public surface:
 
-- 公开四口（挂 f 的名字 = Q1.5）：``fit_nk``（**纯标量纯数值**：单
-  分量 nk → Drude-Lorentz 拟合数值，六键）/ ``assemble_nk``（**唯一
-  节点工厂**：逐分量结果 → 单节点）/ ``load_nk``（库名 → 原始 n-k
-  数据）/ ``list_library_materials``（库名清单）。
-- **二拍 + 三拍（站长改案）**：fit_nk 一次一个分量——通用性靠**组合**
-  （各向同性 / 各向异性 / 全张量 = 逐张量元素分别拟合再 assemble），
-  3/7/dict 输入形态退役，返回类型永远稳定一种；材料节点**唯一工厂 =
-  assemble_nk**（fit 不产 material_node / 不收 name）；iso 亦统一经
-  assemble——三对角同 fit = 三根同参数轴向 rank-1（各向同性显式三向
-  表达；内核对 alpha-less iso 同样经 _iso_expand 三向展开，两路物理
-  等价，V100 genie-fdtd ``b84485d`` 查证，图 §0）；非对角上三角一名
-  **镜像 mount** 保对称。
-- material_node 校验 = 真 protocol（``LorentzMatSpec.model_validate``，
-  新拍 4）；不带 color（新拍 2）/ id（发号器的事）。
-- quality 五标量（新拍 3）；失败分类学 G86 全带（推论 C）：窗内非有限
-  = ValueError + 清洗处方，撞迭代上限 = converged=False + 迭代处方。
-- 报错文案一律英文（新拍 6 补拍）。
-- 数据文件 = ``genie-sdk/resources/materials/*.yml``（37 份，v1 逐字节
-  搬迁；refractiveindex.info 格式，CC0）——``__file__`` 相对定位（新拍
-  7：包内自带数据，非外部路径，core 三零不破）；解析语义逐条保留
-  v1（tabulated DATA 块 + formula 1/4 两路、坏行 warning 跳过不截断、
-  非有限行丢弃、≥5 行下限）。
-- scipy 懒加载（推论 A）：首次真正拟合才 import；缺了 ImportError
-  明报，不静默降级（v1 F1 裁决沿用）。
-- v1 只参考不照抄（core 图禁令 1）：砍掉的是 GUI 口粮（逐波长表 /
-  稠密曲线 / 显示色表），算法与数值语义逐条保留。
+- Public entry points: ``fit_nk`` (**scalar single-component,
+  numeric-only**: single-component nk → Drude-Lorentz fit numbers,
+  six-key dict) / ``assemble_nk`` (**the only node factory**:
+  per-component results → a single node) / ``load_nk`` (library
+  name → raw n-k data) / ``list_library_materials`` (list of
+  library names) / ``mat_from_nk`` (one-call convenience: library
+  name → a material node).
+- fit_nk fits one component at a time — generality comes from
+  **composition** (isotropic / anisotropic / full tensor = fit each
+  tensor element separately, then assemble); the return type is
+  always one stable shape; the **only material-node factory =
+  assemble_nk** (fit produces no material_node / takes no name); iso
+  likewise always goes through assemble — three diagonals sharing
+  one fit = three same-parameter axial rank-1 poles (an explicit
+  three-way expression of isotropy; the kernel likewise expands
+  alpha-less iso three ways via _iso_expand — the two paths are
+  physically equivalent); each off-diagonal takes one upper-triangle
+  name and a **mirrored mount** to preserve symmetry.
+- material_node validation = a real protocol
+  (``LorentzMatSpec.model_validate``); carries no color / no id
+  (that is the id issuer's business).
+- quality holds five scalars; failure taxonomy: non-finite inside
+  the fit window = ValueError + a data-cleaning prescription;
+  hitting the iteration cap = converged=False + an iteration
+  prescription.
+- Error messages are always English.
+- Data files = ``genie-sdk/resources/materials/*.yml`` (37 files;
+  refractiveindex.info format, CC0) — located relative to
+  ``__file__`` (the data ships inside the package, not at an
+  external path); parsing semantics: tabulated DATA blocks + both
+  formula 1/4 paths, bad rows skipped with a warning without
+  truncating, non-finite rows dropped, a lower bound of ≥5 rows.
+- scipy lazy import: imported only at the first real fit; if
+  missing, an ImportError is reported explicitly — no silent
+  degradation.
 """
 from __future__ import annotations
 
@@ -44,22 +53,23 @@ from genie_protocol import _wire
 __all__ = ["fit_nk", "assemble_nk", "mat_from_nk", "load_nk",
            "list_library_materials"]
 
-#: 光速 [m/s]（数值史承内核 C0_PHYS；内核侧拟合面已随 v2 手术删除，
-#: 本模块是拟合正典——core 图 §4）。
+#: Speed of light [m/s] (same value as the kernel's C0_PHYS).
 _C0_SI = 299792458.0
 
-#: 库数据目录（新拍 7：包内自带数据，``__file__`` 相对——core/material/
-#: 往上三级 = 包根 genie-sdk/；非外部路径，三零不破）。
+#: Library data directory: ships inside the package, resolved
+#: relative to ``__file__`` (core/material/ up three levels = the
+#: package root genie-sdk/).
 _DATA_DIR = Path(__file__).resolve().parents[2] / "resources" / "materials"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 库加载（load_nk / list_library_materials）
+# Library loading (load_nk / list_library_materials)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _check_material_name(name) -> None:
-    """名字守卫：库名与文件 1:1——路径分隔符 / `.` / `..` / 空 / 非字符串
-    在门口拒（v1 语义保留；报错英文）。"""
+    """Name guard: library names map 1:1 to files — path separators /
+    `.` / `..` / empty / non-strings are rejected at the gate
+    (errors in English)."""
     if (not isinstance(name, str) or not name
             or "/" in name or "\\" in name or name in (".", "..")):
         raise ValueError(
@@ -68,7 +78,7 @@ def _check_material_name(name) -> None:
 
 
 def list_library_materials() -> list[str]:
-    """本地打包 n-k 库全部库名（sorted；离线可用）。"""
+    """All library names in the locally bundled n-k library (sorted; works offline)."""
     try:
         files = list(_DATA_DIR.glob("*.yml"))
     except OSError:
@@ -77,12 +87,15 @@ def list_library_materials() -> list[str]:
 
 
 def _scan_entries(raw_text: str, src: str = "") -> list[dict]:
-    """RII yml → 数据条目清单（四拍② 多块化：v1 修前**静默丢第二块**）。
+    """RII yml → a list of data entries (multi-block support: every
+    ``- type:`` block is kept, not only the first).
 
-    每条 ``{type, direction, wavelength_range, coefficients, data_lines}``；
-    ``direction`` 是我们对 RII 页格式的扩展键（o / e / x / y / z），
-    无标注 = iso 单分量。坏行（数值形但缺列 / 杂 token）计数 + warning
-    跳过、不截断块（v1 语义保留）。
+    Each entry is
+    ``{type, direction, wavelength_range, coefficients, data_lines}``;
+    ``direction`` is our extension key on the RII page format
+    (o / e / x / y / z); an unlabeled block = a single iso component.
+    Bad rows (numeric-shaped but missing columns / stray tokens) are
+    counted and skipped with a warning, without truncating the block.
     """
     entries: list[dict] = []
     cur: dict | None = None
@@ -101,8 +114,9 @@ def _scan_entries(raw_text: str, src: str = "") -> list[dict]:
         if s.lower().startswith("data: |"):
             in_data = True
             if cur is None:
-                # 裸块式（v1 自产文件 Ag/Si/SiO2：顶层 ``DATA: |``、无
-                # ``- type:`` 条目结构）→ 隐式 iso 表格条目。
+                # Bare-block form (a top-level ``DATA: |`` with no
+                # ``- type:`` entry structure) → an implicit iso
+                # tabulated-data entry.
                 cur = {"type": "tabulated nk", "direction": None,
                        "wavelength_range": None, "coefficients": None,
                        "data_lines": [], "saw_data": True}
@@ -113,17 +127,17 @@ def _scan_entries(raw_text: str, src: str = "") -> list[dict]:
         if in_data:
             if not s or s.startswith("#"):
                 continue
-            # 1) 数值行：字符类含 '-'，"-0.5 2 0"（负首列无空格）是数据
+            # 1) Numeric row: the character class contains '-', so "-0.5 2 0" (negative first column, no space) is data
             if re.match(r"^[\d.eE+\-]+\s+[\d.eE+\-]+\s+[\d.eE+\-]+", s):
                 if cur is not None:
                     cur["data_lines"].append(s)
-            # 2) 下一条目（dash 开头）结束本块——先于坏行分支检查
+            # 2) The next entry (starts with a dash) ends this block — checked before the bad-row branch
             elif re.match(r"^-\s|^-$", s):
                 in_data = False
-            # 3) 数值形但畸形（缺列 / 杂 token）：跳过 + warning，不截断
+            # 3) Numeric-shaped but malformed (missing columns / stray tokens): skip + warning, without truncating
             elif re.match(r"^[\d.eE+\-]", s):
                 bad_rows.append((lineno, s))
-            # 4) 下一个 YAML 键 = DATA 块结束
+            # 4) The next YAML key = end of the DATA block
             elif re.match(r"^[A-Za-z_][\w\-]*\s*:", s):
                 in_data = False
             continue
@@ -141,7 +155,7 @@ def _scan_entries(raw_text: str, src: str = "") -> list[dict]:
                     cur["wavelength_range"] = (float(parts[0]),
                                                float(parts[1]))
                 except ValueError:
-                    pass            # 坏 range 留 None → formula 走缺省窗
+                    pass            # a bad range stays None → formula uses the default window
             continue
         m = re.match(r"^coefficients:\s*(.+)$", s)
         if m:
@@ -158,12 +172,13 @@ def _scan_entries(raw_text: str, src: str = "") -> list[dict]:
 
 
 def _parse_entry(entry: dict, src: str):
-    """单数据条目 → (wl_um, n, k)；解析不出 → ValueError 带条目上下文。
+    """One data entry → (wl_um, n, k); unparseable → ValueError with
+    entry context.
 
-    tabulated（``data_lines``）：≥5 有效行下限、非有限行丢弃 +
-    warning（``1e999`` 溢出 inf 会毒化拟合）。formula（formula 1
-    Sellmeier / formula 4 extended）：缺省窗 0.2–2.0µm、500 采样点
-    （v1 语义保留）。
+    tabulated (``data_lines``): a lower bound of ≥5 valid rows;
+    non-finite rows dropped + warning (``1e999`` overflowing to inf
+    would poison the fit). formula (formula 1 Sellmeier / formula 4
+    extended): default window 0.2–2.0µm, 500 sample points.
     """
     if entry["saw_data"]:
         if len(entry["data_lines"]) < 5:
@@ -173,7 +188,7 @@ def _parse_entry(entry: dict, src: str):
                 f"has <5 valid data rows)")
         wl, nv, kv, overflow = [], [], [], []
         for dl in entry["data_lines"]:
-            parts = dl.split()               # 行正则保证 ≥3 token
+            parts = dl.split()               # the line regex guarantees ≥3 tokens
             try:
                 vals = (float(parts[0]), float(parts[1]), float(parts[2]))
             except ValueError:
@@ -212,7 +227,7 @@ def _parse_entry(entry: dict, src: str):
     wl_um = np.linspace(wl_range[0], wl_range[1], 500)
     ftype = entry["type"] or ""
     if ftype.startswith("formula 1"):
-        # Sellmeier: n² = A + Σ Bᵢ·λ²/(λ² − Cᵢ²)；系数 "0 B₁ C₁ …" 时 A=1。
+        # Sellmeier: n² = A + Σ Bᵢ·λ²/(λ² − Cᵢ²); with coefficients "0 B₁ C₁ …", A=1.
         if len(coeffs) >= 3:
             a = 1.0 if coeffs[0] == 0 else coeffs[0]
             pairs = coeffs[1:]
@@ -223,8 +238,8 @@ def _parse_entry(entry: dict, src: str):
             n = np.sqrt(np.maximum(n2, 1.0))
             return (wl_um, n, np.zeros_like(n))
     elif ftype.startswith("formula 4"):
-        # Extended Sellmeier（ZnO 型）：n² = A + B₁·λ^p₁/(λ² − C₁^p₂)
-        # + Σ P·λ^p（coeffs[8]==1 标记多项式修正对）。
+        # Extended Sellmeier (ZnO type): n² = A + B₁·λ^p₁/(λ² − C₁^p₂)
+        # + Σ P·λ^p (coeffs[8]==1 marks the polynomial correction pairs).
         if len(coeffs) >= 5:
             a, b1, p1, c1, p2 = coeffs[:5]
             n2 = np.full_like(wl_um, a, dtype=float)
@@ -240,9 +255,10 @@ def _parse_entry(entry: dict, src: str):
 
 
 def _load_raw(name: str):
-    """库名 → ``{分量: (wl_um, n, k)}``；**缺文件 = None，文件坏 =
-    ValueError**（两种失败分开报——新拍 6）。iso 材料 = 单键 ``''``；
-    复合材料键 = direction（o/e/x/y/z，四拍②）。"""
+    """Library name → ``{component: (wl_um, n, k)}``; **missing file =
+    None, broken file = ValueError** (the two failures are reported
+    separately). An iso material = a single key ``''``; compound
+    material keys = direction (o/e/x/y/z)."""
     _check_material_name(name)
     path = _DATA_DIR / (name + ".yml")
     if not path.exists():
@@ -266,26 +282,30 @@ def _load_raw(name: str):
 
 
 def _to_m(arr):
-    """(wl_um, n, k) → (wl_m, n, k)（µm→m 换算在此，单一地址）。"""
+    """(wl_um, n, k) → (wl_m, n, k) (the µm→m conversion lives here, at a single address)."""
     wl_um, n, k = arr
     return (np.asarray(wl_um, dtype=float) * 1e-6,
             np.asarray(n, dtype=float), np.asarray(k, dtype=float))
 
 
 def load_nk(name, component=None):
-    """库名 → ``(wl_m, n, k)`` 原始 n-k 数据（**单直多报**，四拍③）。
+    """Library name → raw n-k data ``(wl_m, n, k)`` (**direct pick when
+    unambiguous, otherwise error listing options**).
 
-    iso 材料（单数据块）直取三元组、``component`` 必须为 None；复合材料
-    （多块）**必须点名分量** ``load_nk('ZnO', 'e')``——缺省报错列出
-    可选，不猜默认（Q4.5 同款精神）。
+    An iso material (single data block) returns the triplet directly
+    and ``component`` must be None; a compound material (multi-block)
+    **requires naming the component explicitly**, e.g.
+    ``load_nk('ZnO', 'e')`` — when omitted, the error lists the
+    options instead of guessing a default.
 
     Raises
     ------
     ValueError
-        名字不是裸材料名；本地未命中（指路
-        :func:`list_library_materials`）；文件在但解析不出（带路径）；
-        iso 材料点名分量 / 复合材料未点名或点错名（列出可选）。文案
-        一律英文。
+        The name is not a bare material name; no local hit (pointing
+        to :func:`list_library_materials`); the file exists but does
+        not parse (with the path); naming a component on an iso
+        material / not naming one on a compound material, or naming
+        a wrong one (options listed). Messages are always English.
     """
     comps = _load_raw(name)
     if comps is None:
@@ -310,20 +330,21 @@ def load_nk(name, component=None):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Drude-Lorentz 拟合（log10 参数空间；搜索盒 / 初值策略 v1 逐条保留）
+# Drude-Lorentz fitting (log10 parameter space)
 # ═══════════════════════════════════════════════════════════════════════════
 
 @dataclass
 class _DispersionResult:
-    """eps(ω) 求值结果：ω [rad/s]；n/k = sqrt(eps) 实/虚部。"""
+    """Result of evaluating eps(ω): ω [rad/s]; n/k = real/imaginary parts of sqrt(eps)."""
     omega: np.ndarray
     n: np.ndarray
     k: np.ndarray
 
 
 def _evaluate_dispersion(eps_inf, poles, omega):
-    """eps(ω) = eps_inf + Σ ωp²/(ω0² − ω² − j·γ·ω)（纯 numpy）。
-    ``poles`` = (ω0, γ, ωp²) SI 三元组清单（统一 pole 约定）。"""
+    """eps(ω) = eps_inf + Σ ωp²/(ω0² − ω² − j·γ·ω) (pure numpy).
+    ``poles`` = a list of (ω0, γ, ωp²) SI triplets (unified pole
+    convention)."""
     eps = np.full_like(omega, float(eps_inf), dtype=complex)
     w2 = omega * omega
     for w0, gm, omega_p_sq in poles:
@@ -334,17 +355,17 @@ def _evaluate_dispersion(eps_inf, poles, omega):
 
 @dataclass
 class _ComponentFit:
-    """单分量拟合：eps_inf、poles (ω0, γ, ωp²) SI 三元组、收敛旗。"""
+    """Single-component fit: eps_inf, poles as (ω0, γ, ωp²) SI triplets, and a convergence flag."""
     eps_inf: float
     poles: list
     converged: bool
 
 
 def _params_to_poles(params, n_drude, n_lorentz):
-    """log10 空间拟合参数 → (ω0, γ, ωp²) SI 三元组。
+    """log10-space fit parameters → (ω0, γ, ωp²) SI triplets.
 
-    参数布局的唯一来源（残差与结果组装共用）——历史上内核侧第二份
-    逐位拷贝的漂移就是 abs(ωp²) 符号 bug 的来源，保持单份。"""
+    The single source of the parameter layout, shared by the residual
+    and the result assembly — keep exactly one copy."""
     poles = []
     idx = 0
     for _ in range(n_drude):
@@ -360,7 +381,7 @@ def _params_to_poles(params, n_drude, n_lorentz):
 
 
 def _dl_residual(omega, eps_inf, n_drude, n_lorentz, *params):
-    """curve_fit 残差（n/k 实虚堆叠）。"""
+    """curve_fit residual (n/k real and imaginary parts stacked)."""
     r = _evaluate_dispersion(eps_inf, _params_to_poles(params, n_drude,
                                                        n_lorentz), omega)
     return np.concatenate([r.n, r.k])
@@ -368,19 +389,27 @@ def _dl_residual(omega, eps_inf, n_drude, n_lorentz, *params):
 
 def _fit_drude_lorentz(wavelengths, n, k, n_drude=0, n_lorentz=2,
                        maxfev=5000):
-    """单分量 n-k 数据（已限窗）→ Drude-Lorentz 拟合。
+    """Single-component n-k data (already windowed) → a Drude-Lorentz
+    fit.
 
-    策略 v1 逐条保留：log10 空间参数；频率搜索盒只有**下限**随数据
-    跨度自适应（亚 16 THz 共振可拟合）、上限钉历史常数（更高的阻尼
-    上限会让 Au 1-Drude 拟合塌缩成 ADE γ·dt 守卫拒收的退化极点）；
-    eps_inf 高频估计（argsort 最短波长前 1/8）、Drude 低频尾估计
-    （ω = 2πc/λ 对升序 λ **递减**——低频在最后一季）、Lorentz 峰扫描
-    压制（找到的峰置零找下一个）、p0 全量钳进盒（curve_fit 拒绝界外
-    初值）、失败回退 p0 不抛（converged=False）。scipy 懒加载：缺了
-    ImportError 明报（推论 A），不静默降级。
+    Strategy: log10-space parameters; of the frequency search box
+    only the **lower bound** adapts to the data span (sub-16-THz
+    resonances become fittable) while the upper bound stays pinned
+    (a higher damping cap would collapse the Au 1-Drude fit into a
+    degenerate pole that the ADE γ·dt guard rejects); eps_inf
+    high-frequency
+    estimate (the first 1/8 at the shortest wavelengths via argsort);
+    Drude low-frequency tail estimate (ω = 2πc/λ **decreases** for
+    ascending λ — the low frequencies sit in the last quarter);
+    Lorentz peak scan with suppression (zero out each found peak,
+    then look for the next); p0 fully clamped into the box (curve_fit
+    rejects out-of-bounds initial guesses); on failure, fall back to
+    p0 without raising (converged=False). scipy lazy import: if
+    missing, an ImportError is reported explicitly, no silent
+    degradation.
     """
     try:
-        from scipy.optimize import curve_fit    # lazy：import genie 无 scipy
+        from scipy.optimize import curve_fit    # lazy: importing genie needs no scipy
     except ImportError as exc:
         raise ImportError(
             "fitting requires scipy (curve_fit) — install it with: "
@@ -404,27 +433,32 @@ def _fit_drude_lorentz(wavelengths, n, k, n_drude=0, n_lorentz=2,
     gamma_hi = 1e16
 
     high_idx = max(len(omega) // 8, 1)
-    # eps_inf 是高频极限：取最短波长（argsort，输入序无关）前 1/8 估
-    # n²−k²——静态值 eps(0) >= eps_inf，低频估计会把 eps_inf 推高。
+    # eps_inf is the high-frequency limit: take the first 1/8 at the
+    # shortest wavelengths (argsort, independent of input order) and
+    # estimate n²−k² — the static value obeys eps(0) >= eps_inf, and a
+    # low-frequency estimate would push eps_inf up.
     order = np.argsort(wavelengths)
     hi_f_idx = order[:high_idx]
     eps_inf_0 = max(float(np.mean(n[hi_f_idx]**2 - k[hi_f_idx]**2)), 1.0)
 
     p0 = [eps_inf_0]
-    # eps_inf 盒下限 = 1.0（物理硬约束：因果介质 ε(∞) ≥ 1，真空极限
-    # 为 1——v1 的 0.1 下限允许非物理分解，是介质材料 eps_inf 撞下界
-    # 退化的根因，四拍补记修）。
+    # eps_inf box lower bound = 1.0 (a hard physical causality
+    # constraint: causal media obey ε(∞) ≥ 1, with the vacuum limit
+    # being 1 — a lower bound below 1 would admit unphysical
+    # decompositions, e.g. dielectric fits degenerating with
+    # eps_inf pinned at the bound).
     bounds_low = [1.0]
     bounds_high = [100.0]
-    # curve_fit/least_squares 拒绝任何界外初值：先把 eps_inf 盒扩到含
-    # 初值（下方通用钳制再统一兜底）。
+    # curve_fit/least_squares rejects any out-of-bounds initial guess:
+    # first widen the eps_inf box to include the initial guess (the
+    # general clamping below then covers it uniformly).
     if p0[0] > bounds_high[0]:
         bounds_high[0] = max(bounds_high[0], p0[0] * 1.1)
     elif p0[0] < bounds_low[0]:
         bounds_low[0] = min(bounds_low[0], p0[0] * 0.9)
 
     if n_drude > 0:
-        # 低频尾：升序 λ 下 ω 递减，最低频在 argmax(λ) 不在首季。
+        # Low-frequency tail: with ascending λ, ω decreases; the lowest frequency sits at argmax(λ), not in the first quarter.
         low_idx = int(np.argmax(wavelengths))
         w_low = omega[low_idx]
         eps_low = (n[low_idx] + 1j * k[low_idx]) ** 2
@@ -434,7 +468,7 @@ def _fit_drude_lorentz(wavelengths, n, k, n_drude=0, n_lorentz=2,
         bounds_high += [np.log10(freq_hi), np.log10(gamma_hi)]
 
     eps_complex = (n + 1j * k) ** 2
-    eps_imag = np.abs(eps_complex.imag)          # ufunc → 新数组，可静音
+    eps_imag = np.abs(eps_complex.imag)          # ufunc → a fresh array, safe to mute
     for _ in range(n_lorentz):
         peak_idx = np.argmax(eps_imag)
         w0_est = omega[peak_idx]
@@ -444,7 +478,7 @@ def _fit_drude_lorentz(wavelengths, n, k, n_drude=0, n_lorentz=2,
         bounds_low += [np.log10(1e-3), np.log10(freq_lo),
                        np.log10(min(1e10, freq_lo))]
         bounds_high += [np.log10(1e4), np.log10(freq_hi), np.log10(gamma_hi)]
-        # 压制本峰，下一轮找不同的峰。
+        # Suppress this peak so the next iteration finds a different one.
         half_width = max(int(len(omega) * 0.05), 3)
         lo = max(0, peak_idx - half_width)
         hi = min(len(eps_imag), peak_idx + half_width + 1)
@@ -452,8 +486,10 @@ def _fit_drude_lorentz(wavelengths, n, k, n_drude=0, n_lorentz=2,
 
     ydata = np.concatenate([n, k])
 
-    # 全量钳制：任何界外 p0 都会被 curve_fit 拒（数据共振落在默认光学
-    # 带外时，log10 空间初值同样踩坑，如 THz 数据）。
+    # Clamp everything: any out-of-bounds p0 gets rejected by
+    # curve_fit (when the data resonance lies outside the default
+    # optical band, log10-space initial guesses hit the same trap,
+    # e.g. THz data).
     p0 = [min(max(v, lo), hi)
           for v, lo, hi in zip(p0, bounds_low, bounds_high)]
 
@@ -474,14 +510,15 @@ def _fit_drude_lorentz(wavelengths, n, k, n_drude=0, n_lorentz=2,
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 结果组装（纯）
+# Result assembly (pure)
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _pole_to_node(w0, gamma, omega_p_sq):
-    """(ω0, γ, ωp²) SI 三元组 → wire PoleSpec 形 dict。
+    """An (ω0, γ, ωp²) SI triplet → a wire-shaped PoleSpec dict.
 
-    Lorentz：ωp² = Δε·ω0² → delta_eps = ωp²/ω0²；Drude：ω0 == 0
-    （统一约定，``_params_to_poles`` 产出恰为 0.0）→ omega_p = √ωp²。
+    Lorentz: ωp² = Δε·ω0² → delta_eps = ωp²/ω0²; Drude: ω0 == 0 (by
+    the unified convention, ``_params_to_poles`` produces exactly
+    0.0) → omega_p = √ωp².
     """
     if w0 == 0.0:
         return {"kind": "drude", "omega_p": float(omega_p_sq) ** 0.5,
@@ -491,8 +528,9 @@ def _pole_to_node(w0, gamma, omega_p_sq):
 
 
 def _fit_range_bounds(fit_range):
-    """拆包 + 校验 ``fit_range``（lo < hi）——反着的窗会在晚处报成误导
-    性的「Only 0 data points」，在因上拦并给出实际区间。"""
+    """Unpack + validate ``fit_range`` (lo < hi) — a reversed window
+    would later surface as the misleading 'Only 0 data points';
+    block it at the cause and report the actual range."""
     lo, hi = fit_range
     if not lo < hi:
         raise ValueError(
@@ -504,9 +542,10 @@ def _fit_range_bounds(fit_range):
 
 
 def _scalar_result(fit, w, n_data, k_data):
-    """单分量结果组装（三拍：**纯数值**——六键，无 material_node /
-    name；材料节点唯一工厂 = :func:`assemble_nk`）。quality 五标量在
-    **数据点**上算（新拍 3：无表、无曲线）。"""
+    """Single-component result assembly (**numeric only** — a six-key
+    dict, no material_node / name; the only material-node factory is
+    :func:`assemble_nk`). The five quality scalars are computed on
+    the **data points** (no tables, no curves)."""
     omega = 2.0 * np.pi * _C0_SI / w
     d = _evaluate_dispersion(fit.eps_inf, fit.poles, omega)
     n_fit = np.asarray(d.n)
@@ -536,17 +575,19 @@ def _scalar_result(fit, w, n_data, k_data):
         "converged": bool(fit.converged),
         "eps_inf": float(fit.eps_inf),
         "n_poles": len(poles),
-        "poles": poles,                      # SI 角频率 rad/s（Δε 无量纲）
+        "poles": poles,                      # SI angular frequencies rad/s (Δε dimensionless)
         "quality": quality,
         "warnings": warnings_out,
     }
 
 
-# 张量组装（二拍：通用组装）。rank-1 语义 = 内核 ADE VectorPole 原生
-# 形态（``D += β·P``、``P ∝ α·F``——V100 genie-fdtd ``b84485d`` 查证，
-# 图 §0）：对角 mount α=e_i（beta 不写 = 线格式缺省复制 α）；非对角
-# **镜像 mount**（α=e_i,β=e_j 与 α=e_j,β=e_i 成对）——单根 α≠β 并矢
-# 非对称，成对相加才是对称张量元，互易介质（对称 ε）由构造保证。
+# Tensor assembly (general assembly). rank-1 semantics = the native
+# form of the kernel ADE VectorPole (``D += β·P``, ``P ∝ α·F``): a
+# diagonal mount is α=e_i (beta omitted = the line-format default
+# duplicates α); an off-diagonal is a **mirrored mount** (α=e_i,β=e_j
+# paired with α=e_j,β=e_i) — a single α≠β dyad is asymmetric, and
+# only the pairwise sum is a symmetric tensor element, so reciprocal
+# media (symmetric ε) are guaranteed by construction.
 _ELEM_AXES = {"xx": (0, 0), "yy": (1, 1), "zz": (2, 2),
               "xy": (0, 1), "xz": (0, 2), "yz": (1, 2)}
 _EYE = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
@@ -555,33 +596,37 @@ _OFFDIAG = ("xy", "xz", "yz")
 
 
 def assemble_nk(fits, name=None):
-    """逐分量 ``fit_nk`` 结果 → **单个** lorentz 材料节点（**唯一节点
-    工厂**，三拍）。
+    """Per-component ``fit_nk`` results → **a single** lorentz material
+    node (the only node factory).
 
     Parameters
     ----------
     fits : dict
-        键 = 张量元素**上三角六名**（``xx`` / ``yy`` / ``zz`` / ``xy`` /
-        ``xz`` / ``yz``），值 = ``fit_nk`` 的返回 dict。三个对角必给
-        ——**iso 也走这里**：三对角给同一份 fit = 三根同参数轴向
-        rank-1 pole（各向同性的显式三向表达；内核对 alpha-less iso
-        同样三向展开，两路物理等价）；非对角给上三角一名即可，组装时
-        **镜像 mount**（α/β 成对）保证对称。
+        Keys = the **six upper-triangle tensor-element names**
+        (``xx`` / ``yy`` / ``zz`` / ``xy`` / ``xz`` / ``yz``); values =
+        ``fit_nk`` result dicts. All three diagonals are required —
+        isotropic media go through here too (pass the same fit on the
+        three diagonals). Each off-diagonal needs only one
+        upper-triangle name; the mirrored mount (α/β in symmetric
+        pairs) keeps the tensor symmetric by construction.
     name : str | None
-        节点名（缺省 ``"assembled"``）。
+        Node name (defaults to ``"assembled"``).
 
     Returns
     -------
     dict
-        lorentz 节点（对角-only → ``eps_inf`` 三元对角；含非对角 →
-        3×3 全张量）；已过 ``LorentzMatSpec`` 校验。
+        A lorentz node (diagonal-only → ``eps_inf`` as a diagonal
+        triplet; with off-diagonals → a full 3×3 tensor); already
+        validated by ``LorentzMatSpec``.
 
     Raises
     ------
     ValueError
-        ``fits`` 非法（非 dict / 空键 / 坏键名——下三角 yx/zx/zy 不收，
-        对称材料镜像自动做 / 缺对角 / 分量不可组装——未收敛或
-        eps_inf≤0，点名分量）。文案一律英文。
+        ``fits`` is not a non-empty dict; unknown key names (the
+        lower triangle yx/zx/zy is not accepted — mirroring for
+        symmetric materials is automatic); a missing diagonal; a
+        non-assemblable component (not converged or eps_inf ≤ 0,
+        named explicitly in the message).
     """
     if not isinstance(fits, dict) or not fits:
         raise ValueError(
@@ -612,13 +657,13 @@ def assemble_nk(fits, name=None):
 
     eps_inf = [fits[c]["eps_inf"] for c in _DIAG]
     poles = []
-    for c in _DIAG:                      # 对角 mount：α=e_i，beta 缺省=α
+    for c in _DIAG:                      # diagonal mount: α=e_i, beta defaults to α
         for p in fits[c]["poles"]:
             q = dict(p)
             q["alpha"] = list(_EYE[_ELEM_AXES[c][0]])
             poles.append(q)
     off = [c for c in _OFFDIAG if c in fits]
-    for c in off:                        # 非对角：镜像 mount 成对（对称）
+    for c in off:                        # off-diagonal: mirrored mount in pairs (symmetric)
         i, j = _ELEM_AXES[c]
         for p in fits[c]["poles"]:
             fwd = dict(p)
@@ -638,48 +683,56 @@ def assemble_nk(fits, name=None):
         eps_inf = m
     node = {"type": "lorentz", "name": name or "assembled",
             "eps_inf": eps_inf, "poles": poles}
-    _wire.LorentzMatSpec.model_validate(node)   # 显式动词：校验不过直接抛
+    _wire.LorentzMatSpec.model_validate(node)   # explicit verb: failed validation raises immediately
     return node
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 公开入口
+# Public entry points
 # ═══════════════════════════════════════════════════════════════════════════
 
 def fit_nk(wl, n, k, fit_range=(400e-9, 800e-9), n_drude=0, n_lorentz=2,
            maxfev=5000):
-    """**单分量** n-k 数据 → Drude-Lorentz pole 拟合（纯标量纯数值，
-    二拍 + 三拍）。
+    """Fit **one scalar n-k component** to a Drude-Lorentz pole model.
 
-    一次拟合一个分量，**只出数值**（六键，无 material_node / name）；
-    材料节点唯一工厂 = :func:`assemble_nk`——iso 也走组装（三对角
-    同 fit = 显式三向 mount）。
+    One component is fitted per call and **only numbers come out** —
+    a six-key dict, never a material node. Build nodes with
+    :func:`assemble_nk` (for an isotropic medium, pass the same fit
+    on the three diagonals).
 
     Parameters
     ----------
     wl, n, k : array_like
-        单分量数据，SI [m, 无量纲, 无量纲]。
+        Single-component data, SI [m, dimensionless, dimensionless].
     fit_range : tuple[float, float]
-        拟合窗 [m]（lo < hi）；数据先掩到窗内，窗内 <3 点报错。
+        Fit window [m] (lo < hi); the data is masked to the window
+        first, and fewer than 3 points inside raises.
     n_drude / n_lorentz : int
-        Drude / Lorentz 极点数（缺省 0 + 2）。
+        Number of Drude / Lorentz poles (defaults 0 + 2).
     maxfev : int
-        scipy ``curve_fit`` 最大函数评估数。
+        Maximum function evaluations for scipy ``curve_fit``.
 
     Returns
     -------
     dict
-        ``{converged, eps_inf, n_poles, poles, quality, warnings}``——
-        **形状永远这一种**（二拍：无多分量分支；三拍：无节点分支）。
-        ``poles`` 为 wire-shaped dict（``assemble_nk`` 直接吃）。
+        ``{converged, eps_inf, n_poles, poles, quality, warnings}`` —
+        always exactly this shape. ``poles`` are wire-shaped dicts
+        (``assemble_nk`` consumes them directly); ``quality`` holds
+        five scalars (``n_points`` / ``rmse_n`` / ``rmse_k`` /
+        ``max_abs_err_n`` / ``max_abs_err_k``). A non-converged fit
+        still returns — ``converged=False`` plus tuning advice in
+        ``warnings``.
 
     Raises
     ------
     ValueError
-        fit_range 反转；三列不等长；窗内 <3 点；窗内 n/k 非有限
-        （G86：脏数据给**清洗处方**，与撞迭代上限的调参处方分开）。
+        fit_range reversed; unequal column lengths; fewer than 3
+        points inside the window; non-finite n/k inside the window
+        (reported with a data-cleaning prescription, distinct from
+        the tuning advice for hitting the iteration cap).
     ImportError
-        scipy 未安装（懒加载，首次拟合才需要；明报不静默）。
+        scipy not installed (imported lazily at the first fit;
+        reported explicitly, not swallowed).
     """
     lo, hi = _fit_range_bounds(fit_range)
     wl = np.asarray(wl, dtype=float)
@@ -698,11 +751,12 @@ def fit_nk(wl, n, k, fit_range=(400e-9, 800e-9), n_drude=0, n_lorentz=2,
             f"Only {n_in} data points in fit range "
             f"{lo * 1e9:.0f}-{hi * 1e9:.0f} nm — widen fit_range or "
             f"supply more data inside the window")
-    # G86：窗内非有限 = 输入数据问题，拟合前给**数据清洗处方**报错
-    # ——curve_fit 对 NaN/inf 的 ValueError 与「撞迭代上限」的
-    # RuntimeError 历史上被压成同一句调参处方，三种完全不同的失败
-    # 拿到同一份无效建议（NaN p0 甚至静默出垃圾）。只查窗内：窗外
-    # 脏行不进拟合，拦它是家长式。
+    # Non-finite inside the window = an input-data problem: raise with
+    # a **data-cleaning prescription** before fitting, distinct from
+    # the tuning advice given when the iteration cap is hit (the two
+    # failure classes get different prescriptions). Only the window
+    # is checked: dirty rows outside the window never enter the fit —
+    # rejecting them would be paternalistic.
     for col_label, col in (("n", n), ("k", k)):
         bad = mask & ~np.isfinite(col)
         if bad.any():
@@ -722,23 +776,29 @@ def fit_nk(wl, n, k, fit_range=(400e-9, 800e-9), n_drude=0, n_lorentz=2,
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 便利层（四拍①：一条龙，零旋钮，不碰模型）
+# Convenience layer (one call, zero knobs, does not touch the model)
 # ═══════════════════════════════════════════════════════════════════════════
 
-#: 分量 → 轴 的物理映射（四拍④：**唯一地址**；单轴晶体光轴沿 z 惯例
-#: ——o 光垂直光轴（xx=yy）、e 光沿光轴（zz）；双轴将来 x/y/z。换
-#: 轴向 = 材料取向题，已挂账 material 图 §7）。
+#: Physical component → axis mapping. Uniaxial-crystal convention:
+#: the optic axis lies along z — the o wave is perpendicular to the
+#: optic axis (xx=yy), the e wave along it (zz); biaxial crystals
+#: use x/y/z.
 _COMPONENT_AXES = {"o": ("xx", "yy"), "e": ("zz",),
                    "x": ("xx",), "y": ("yy",), "z": ("zz",)}
 
 
 def _fit_convenience(wl, n, k):
-    """便利层窗规则（四拍补记）：先**缺省窗**（400–800nm ∩ 数据域
-    ——v1 语义、与 golden 同源，金属 / 常规介质在此窗内信息足够且
-    拟合最优）；curve_fit **不收敛**才用**数据全域重试一次**（浅色散
-    + 窗内点稀的介质，如 ZnO-e 表格窗内仅 10 点；全域色散信息全、
-    必收敛，且窗内精度不低于全域 rmse 上界）。判据 = curve_fit 的
-    收敛旗，无魔法阈值。"""
+    """Convenience-layer window rule: try the **default window** first
+    (400–800nm ∩ data domain — metals / ordinary dielectrics carry
+    enough information inside this window and fit best there); only
+    when curve_fit **does not converge** is a **single full-range
+    retry on
+    the whole data domain** used (for weakly dispersive media with
+    sparse in-window points, e.g. ZnO-e tabulated data with only 10
+    points in the window; the full range carries complete dispersion
+    information and always converges, while in-window accuracy stays
+    no worse than the full-range rmse bound). The criterion = the
+    curve_fit convergence flag; no magic thresholds."""
     lo = max(400e-9, float(np.min(wl)))
     hi = min(800e-9, float(np.max(wl)))
     if lo < hi:
@@ -750,29 +810,36 @@ def _fit_convenience(wl, n, k):
 
 
 def mat_from_nk(name):
-    """库名 → 材料节点**一条龙**（读库 → 按分量逐轴 ``fit_nk`` →
-    ``assemble_nk``；四拍①）。
+    """Library name → a material node in **one call** (read library →
+    per-component, per-axis ``fit_nk`` → ``assemble_nk``).
 
-    零旋钮便利层：默认拟合参数（400–800nm / 0+2 极点）不可调、质量
-    不可见——要控制走原语层（``load_nk`` / ``fit_nk`` /
-    ``assemble_nk``）。**不碰模型**（入模一行 =
-    ``f.mat.add_lorentz(node)``，Q1.4 窄例外）；节点名缺省 = 库名。
-    iso 材料拟合一次、三轴同装（三拍）；复合材料按 ``_COMPONENT_AXES``
-    分轴（o→xx,yy、e→zz），分量不全 → 报错列出库里有什么。
+    A zero-knob convenience layer: the default fit parameters
+    (400–800nm / 0+2 poles) are not adjustable and quality is not
+    visible — for control, use the primitive layer (``load_nk`` /
+    ``fit_nk`` / ``assemble_nk``). **Does not touch the model** (adding
+    to a model is one line, ``f.mat.add_lorentz(node)``); the node
+    name defaults to the library name. An iso material is fitted
+    once and mounted on all three axes; compound materials are
+    split per axis via
+    ``_COMPONENT_AXES`` (o→xx,yy, e→zz), and incomplete components →
+    an error listing what the library contains.
 
     Raises
     ------
     ValueError
-        库名未命中（指路 :func:`list_library_materials`）；分量方向
-        不认识；分量不全（缺轴）；任一分量拟合不可组装（未收敛 /
-        eps_inf≤0——assemble 点名）。文案一律英文。
+        Library name not found (pointing to
+        :func:`list_library_materials`); an unknown component
+        direction; incomplete components (missing axes); any
+        component's fit not assemblable (not converged /
+        eps_inf≤0 — assemble names it explicitly). Messages are
+        always English.
     """
     comps = _load_raw(name)
     if comps is None:
         raise ValueError(
             f"library {name!r} not found in the local n-k library — "
             f"f.list_library_materials() lists all local library names")
-    if set(comps) == {""}:                       # iso：拟合一次，三轴同装
+    if set(comps) == {""}:                       # iso: fit once, mount on all three axes
         wl, n, k = _to_m(comps[""])
         fit = _fit_convenience(wl, n, k)
         return assemble_nk({"xx": fit, "yy": fit, "zz": fit}, name=name)

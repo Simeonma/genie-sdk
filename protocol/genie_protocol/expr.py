@@ -1,37 +1,38 @@
-# [serve][参数系统批 1 2026-10] 安全线表达式求值器
-# [迁移阶段 1a 2026-10] 自内核 fdtd/serve/expr.py 逐字迁入（唯一改动：
-# __all__ 补 valid_param_name——SDK _script.py 与内核 schema 共用同一双
-# 手，正文逐字不变）。内核 expr.py 变重导出薄壳。
-"""COMSOL 式全局参数的安全求值——AST 白名单游走，零 eval/exec。
+"""Safe evaluation of COMSOL-style global parameters — AST whitelist walk,
+zero eval/exec.
 
-职责（调度者设计 §2）：
+Responsibilities:
 
-- ``eval_expr(expr, env) -> float``：算术表达式字符串 → float。
-  白名单节点 = Constant(数值 int/float) / Name(仅 env 查表) /
-  BinOp(+ - * / % **) / UnaryOp(+-) / Call(仅 abs/min/max/sqrt；
-  abs/sqrt 单数值参，min/max 一或两参) / 单位后缀 ``primary[unit]``
-  （单位语法批 A 2026-10：语法 ``primary '[' IDENT ']'`` 绑定最紧，
-  ``2*50[nm]`` == 2*(50[nm])；语义 = 纯数值换算
-  ``a[unit] = a × unit_size``，unit_size = 该单位 SI 尺度
-  （nm=1e-9、THz=1e12…，注册表 ``_UNITS`` 长度/时间/频率三族 20 单位，
-  含 µm/µs Unicode 微米/微秒别名；概念节点 ``_Unit(value, name)`` 供
-  服务仓批 2 前端双实现对齐）。**无维度检查**——docstring 声明边界。
-  **其余任何节点**（Attribute/Lambda/Compare/BoolOp/IfExp/字符串常量/
-  非单位形态的 Subscript/…）→ ``ExprError`` 带节点类型名——属性/下标
-  访问是注入的主通道，比较与布尔引入三值逻辑，一律拒绝。
-- 数值纪律：除零/模零、sqrt 负数、溢出、结果非有限 → ``ExprError``
-  ("math")；空表达式/纯空白 → "syntax"。
-- 错误分级（422 策展用）：``ExprError.kind`` ∈
+- ``eval_expr(expr, env) -> float``: arithmetic expression string → float.
+  Whitelist nodes = Constant (numeric int/float) / Name (env lookup only) /
+  BinOp(+ - * / % **) / UnaryOp(+-) / Call (abs/min/max/sqrt only; abs/sqrt
+  take a single numeric argument, min/max one or two) / unit suffix
+  ``primary[unit]`` (the grammar ``primary '[' IDENT ']'`` binds tightest,
+  ``2*50[nm]`` == 2*(50[nm]); semantics = pure numeric conversion
+  ``a[unit] = a × unit_size``, where unit_size is the SI scale of that
+  unit (nm=1e-9, THz=1e12, ...; the registry ``_UNITS`` holds 20 units
+  across the length/time/frequency families, including the µm/µs Unicode
+  micrometer/microsecond aliases). **No dimension checking**. **Any other
+  node** (Attribute/Lambda/Compare/BoolOp/IfExp/string constants/
+  non-unit-shaped Subscript/...) → ``ExprError`` carrying the node type
+  name — attribute and subscript access are the main injection channels,
+  and comparisons and booleans introduce three-valued logic; all are
+  rejected.
+- Numeric discipline: division/modulo by zero, sqrt of a negative,
+  overflow, non-finite results → ``ExprError`` ("math"); empty or
+  whitespace-only expressions → "syntax".
+- Error tiers (for HTTP 422 curation): ``ExprError.kind`` ∈
   syntax / unknown_name / unknown_unit / illegal_node / math / nonatomic /
-  cycle / guard——前六档由 eval_expr 产生；cycle = 参数节拓扑求值遇环
-  （消息带完整链 a→b→a）；guard = 求值结果被 SimConfig 值守卫拦下
-  （由 schema.parse_config 产生，异常类型共用，见两段校验）。
-- ``resolve_parameter_table(params) -> dict[str, float]``：参数节
-  顶层拓扑求值（值=数值或引用其余参数的表达式串，环境=其余参数，
-  声明序无关）。golden 语料错误例只覆盖前五档。
-
-双实现互锁：``expr_golden.json`` 是本求值器的正典语料（内核 pytest
-全量吃它）；服务仓批 2 的前端表达式预览若另立实现，同一份语料互锁。
+  cycle / guard — the first six kinds are produced by eval_expr; cycle = a
+  cycle hit while topologically evaluating the parameters section (the
+  message carries the full chain a→b→a); guard = an evaluation result
+  intercepted by the SimConfig value guard (produced by
+  resolve.validate_resolved; the exception type is shared — see the
+  two-stage validation in resolve).
+- ``resolve_parameter_table(params) -> dict[str, float]``: top-level
+  topological evaluation of the parameters section (values are numbers or
+  expression strings referencing the other parameters; environment = the
+  other parameters, declaration order irrelevant).
 """
 from __future__ import annotations
 
@@ -44,25 +45,25 @@ from collections.abc import Mapping
 __all__ = ["ExprError", "eval_expr", "resolve_parameter_table",
            "valid_param_name", "param_name_error"]
 
-# 参数名规则文案（单一来源——G124⑦：此前 resolve.check_raw_param_keys
-# 与 _wire.SimConfig._check_param_names 双手复制同段文案，2026-10-18
-# 正因此类漂移收口过 validate_for_ui）。
+# Parameter-name rule wording (single source — resolve and
+# _wire.SimConfig._check_param_names both reuse this constant).
 PARAM_NAME_RULE = (
     "must be an identifier (starting with a letter or underscore, "
     "letters/digits/underscores only, <= 64 chars)")
 
 
 def param_name_error(k: str) -> str:
-    """非法参数名的完整指路报错（G151 收口：**整段文案**的单一来源——
-    规则常量 G124⑦ 已单源，指路后半段此前仍在 resolve 与 _wire 手抄
-    两份）。消费方 = resolve.check_raw_param_keys（求值前检查）与
-    _wire.SimConfig._check_param_names（线格式契约守卫——sweep 展开
-    路径对**未引用**坏名的唯一拦截者，不可删）。"""
+    """The full way-pointing error for an illegal parameter name (the
+    single source of **the entire wording**). Consumers =
+    resolve.check_raw_param_keys (pre-evaluation check) and
+    _wire.SimConfig._check_param_names (a wire-format contract guard — the
+    sole interceptor of **unreferenced** bad names on the sweep expansion
+    path; do not remove)."""
     return (f"parameter name {k!r} is invalid: {PARAM_NAME_RULE} — "
             f"it is referenced by expression slots in numeric fields "
             f"and by sweep axes (parameters[name])")
 
-# Call 白名单：名 → (最少参数个数, 最多参数个数)
+# Call whitelist: name → (min argument count, max argument count)
 _FUNCTIONS = {
     "abs": (1, 1),
     "min": (1, 2),
@@ -86,11 +87,12 @@ _UNARY_OPS = {
 
 _PARAM_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-# 单位注册表（单位语法批 A 2026-10）：单一常量，名 → SI 尺度。
-# 语义 = 纯数值换算 ``a[unit] = a × _UNITS[unit]``，无维度检查；
-# µm/µs 为 Unicode 微米/微秒别名（与 um/us 同值，1e-6）。
+# Unit registry: a single constant, name → SI scale.
+# Semantics = pure numeric conversion ``a[unit] = a × _UNITS[unit]``, no
+# dimension checking; µm/µs are Unicode micrometer/microsecond aliases
+# (same values as um/us, 1e-6).
 _UNITS = {
-    # 长度
+    # length
     "pm": 1e-12,
     "nm": 1e-9,
     "um": 1e-6,
@@ -98,7 +100,7 @@ _UNITS = {
     "mm": 1e-3,
     "cm": 1e-2,
     "m": 1.0,
-    # 时间
+    # time
     "fs": 1e-15,
     "ps": 1e-12,
     "ns": 1e-9,
@@ -106,7 +108,7 @@ _UNITS = {
     "µs": 1e-6,
     "ms": 1e-3,
     "s": 1.0,
-    # 频率
+    # frequency
     "Hz": 1.0,
     "kHz": 1e3,
     "MHz": 1e6,
@@ -114,13 +116,14 @@ _UNITS = {
     "THz": 1e12,
     "PHz": 1e15,
 }
-# Python 标识符按 NFKC 归一（µ U+00B5 → μ U+03BC）——键统一到归一形态，
-# 使 `1[µm]`（源码里无论键入 MICRO SIGN 还是 GREEK MU 都归一）命中别名。
+# Python identifiers are NFKC-normalized (µ U+00B5 → μ U+03BC) — keys are
+# unified into the normalized form, so `1[µm]` hits the alias whether the
+# source typed MICRO SIGN or GREEK MU.
 _UNITS = {unicodedata.normalize("NFKC", k): v for k, v in _UNITS.items()}
 
 
 class ExprError(ValueError):
-    """表达式/参数节错误（HTTP 422 策展）。kind 见模块 docstring。"""
+    """Expression / parameters-section error (curated for HTTP 422). See the module docstring for kind."""
 
     def __init__(self, kind: str, msg: str):
         super().__init__(msg)
@@ -135,12 +138,14 @@ def _check_finite(v: float, ctx: str) -> float:
 
 
 def _unit_name(slice_node: ast.AST) -> str | None:
-    """单位后缀切片名识别：``primary[IDENT]``（ast.Name，语法正典形态）
-    或 ``primary['str']``（字符串常量防御形态）→ 单位名；其余形态
-    （数值/切片/表达式）→ None（维持既有 illegal_node 拒绝分支）。
+    """Recognize the unit-suffix slice name: ``primary[IDENT]`` (ast.Name,
+    the canonical grammar form) or ``primary['str']`` (string-constant
+    defensive form) → the unit name; any other shape (numeric / slice /
+    expression) → None (keeps the existing illegal_node rejection branch).
 
-    返回值经 NFKC 归一——与 Python 标识符归一规则一致（µ → μ），
-    使字符串常量形态 ``1['µm']`` 也能命中 Unicode 别名键。"""
+    The return value is NFKC-normalized — consistent with Python's
+    identifier normalization rule (µ → μ), so the string-constant form
+    ``1['µm']`` also hits the Unicode alias key."""
     if isinstance(slice_node, ast.Name):
         return unicodedata.normalize("NFKC", slice_node.id)
     if isinstance(slice_node, ast.Constant) and isinstance(slice_node.value, str):
@@ -157,12 +162,12 @@ def _apply_bin(op, a: float, b: float, ctx: str) -> float:
     except OverflowError:
         raise ExprError(
             "math", f"{ctx} overflow ({a!r} and {b!r})") from None
-    except TypeError as e:   # G117：如 Mod/Pow 在病态输入下的实现层 TypeError
+    except TypeError as e:   # e.g. implementation-level TypeError from Mod/Pow on pathological inputs
         raise ExprError("math", f"{ctx} numeric type error: {e}") from None
     if isinstance(v, complex):
-        # G117：负底分数幂 Python 返回 complex（(-8)**(1/3)）——本求值器
-        # 只产实数，complex 结果即 math 档（此前 math.isfinite(complex)
-        # 抛裸 TypeError 逃出 ExprError 契约，422 策展变 500）。
+        # Python returns complex for a negative base with a fractional
+        # exponent ((-8)**(1/3)) — this evaluator produces real numbers
+        # only, so a complex result is the math kind.
         raise ExprError(
             "math", f"{ctx} produced a complex result ({v!r}) — negative "
             "base with fractional exponent is not supported")
@@ -170,13 +175,13 @@ def _apply_bin(op, a: float, b: float, ctx: str) -> float:
 
 
 def eval_expr(expr: str, env: dict[str, float] | None = None) -> float:
-    """白名单求值：expr → float。env = 可引用的参数名表（缺省空）。"""
+    """Whitelist evaluation: expr → float. env = the table of referencable parameter names (empty by default)."""
     env = env or {}
     if not isinstance(expr, str) or not expr.strip():
         raise ExprError("syntax", "expression is empty or whitespace-only")
     try:
         tree = ast.parse(expr, mode="eval")
-    except (SyntaxError, ValueError) as e:  # ValueError: NUL 字节等
+    except (SyntaxError, ValueError) as e:  # ValueError: NUL bytes and the like
         raise ExprError(
             "syntax", f"expression syntax error: {expr!r} ({e})") from e
 
@@ -216,12 +221,11 @@ def eval_expr(expr: str, env: dict[str, float] | None = None) -> float:
                     f"({type(v).__name__})")
             try:
                 fv = float(v)
-            except OverflowError:   # G118：千位级整数字面量超 float 域
+            except OverflowError:   # thousand-digit integer literals beyond the float domain
                 raise ExprError(
                     "math", f"constant {v!r} out of float range") from None
-            # G118：1e400 在 AST 里已是 inf 常量——Constant 出口同样
-            # 过 _check_finite（此前静默返回 inf，违反本 docstring 的
-            # "结果非有限 → ExprError" 自宣契约）。
+            # 1e400 is already an inf constant in the AST — the Constant
+            # exit likewise goes through _check_finite.
             return _check_finite(fv, "constant")
         if isinstance(node, ast.Name):
             if node.id in env:
@@ -283,8 +287,9 @@ def eval_expr(expr: str, env: dict[str, float] | None = None) -> float:
             "Constant/Name/BinOp(+-*/%**)/UnaryOp(+-)/"
             "Call(abs,min,max,sqrt)/primary[unit] unit suffix)")
 
-    # G117：深嵌套表达式在 ev 递归里炸 RecursionError——ExprError 是唯一
-    # 错误面（调用方按 except ExprError 生存），统一收进 syntax 档。
+    # Deeply nested expressions blow up with RecursionError inside the ev
+    # recursion — ExprError is the only error surface (callers survive via
+    # `except ExprError`), so it is uniformly folded into the syntax kind.
     try:
         return ev(tree)
     except RecursionError:
@@ -293,13 +298,15 @@ def eval_expr(expr: str, env: dict[str, float] | None = None) -> float:
 
 
 def resolve_parameter_table(params: dict) -> dict[str, float]:
-    """参数节顶层拓扑求值：{名: 数值|表达式串} → {名: float}。
+    """Top-level topological evaluation of the parameters section:
+    {name: number | expression string} → {name: float}.
 
-    环境 = 其余全部参数（先声明后用不要求——拓扑序自动解析）。
-    环 → ExprError("cycle", "参数环: a→b→a")；表达式内未知名 →
-    unknown_name 列可用名；数值值原样 float 化。
-    键名前置检查（G124⑩：独立分发包的公开面自守卫，此前靠
-    SimConfig/check_raw_param_keys 三重把关兜着）。
+    Environment = all the other parameters (declare-before-use is not
+    required — topological order resolves it automatically). Cycles →
+    ExprError("cycle", "parameter cycle: a→b→a"); unknown names inside an
+    expression → unknown_name listing the available names; numeric values
+    are floated as-is. Upfront key-name check — a self-guard on the public
+    surface of an independently distributed package.
     """
     for k in params:
         if not valid_param_name(k):
@@ -339,12 +346,16 @@ def resolve_parameter_table(params: dict) -> dict[str, float]:
         return v
 
     class _LazyEnv(Mapping):
-        """env 查表时按需递归求值（拓扑解析的懒惰形态）。
+        """Recursive on-demand evaluation when env is looked up (the lazy
+        form of topological resolution).
 
-        eval_expr 只做 ``env[name]`` / ``name in env`` / ``sorted(env)``
-        三个操作——标准 Mapping 协议三者全部走 __getitem__/__contains__/
-        __iter__，必然经过这里的按需解析（子类化 dict 则 C 层槽位会
-        绕开 Python 覆写，勿改回 dict 子类）。
+        eval_expr performs only three operations — ``env[name]`` /
+        ``name in env`` / ``sorted(env)`` — and the standard Mapping
+        protocol routes all three through
+        __getitem__/__contains__/__iter__, so they must pass through the
+        on-demand resolution here (subclassing dict instead would let
+        C-level slots bypass the Python overrides; do not change it back
+        to a dict subclass).
         """
 
         def __getitem__(self, key):
@@ -365,7 +376,7 @@ def resolve_parameter_table(params: dict) -> dict[str, float]:
     try:
         for name in params:
             get(name)
-    except RecursionError:   # G117：千级参数引用链同理收进错误面
+    except RecursionError:   # thousand-deep parameter reference chains likewise fold into the error surface
         raise ExprError(
             "cycle", "parameter reference chain too deep (possible very "
             "long reference chain)") from None
@@ -373,6 +384,6 @@ def resolve_parameter_table(params: dict) -> dict[str, float]:
 
 
 def valid_param_name(name: str) -> bool:
-    """参数名合法性（供 schema 复用同一双手：标识符 + ≤64 字符）。"""
+    """Parameter-name validity (for schema to reuse the same hands: identifier + ≤64 chars)."""
     return (isinstance(name, str) and len(name) <= 64
             and _PARAM_NAME_RE.fullmatch(name) is not None)
