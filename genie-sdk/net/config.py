@@ -18,8 +18,9 @@ import json
 import os
 from pathlib import Path
 
-#: 缺省网关。None = 未定案：无参 connect 会得到"下一步动作"式报错而非猜测。
-DEFAULT_GATEWAY: str | None = None
+#: 缺省网关（2026-11-05 对外门开通：genie-optics.com，备案/防火墙/DNS 齐；
+#: 注意拼写带 s——genie-optic.com 无 s 从未注册。v1 G72 至此销账）。
+DEFAULT_GATEWAY: str | None = "https://genie-optics.com"
 
 _NAME = "credentials.json"
 
