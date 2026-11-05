@@ -1,13 +1,16 @@
+﻿# 构建与缓存
 __pycache__/
-*.pyc
-*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 build/
 dist/
-.pytest_cache/
+*.egg-info/
+.eggs/
 
-# �����ڲ���/��ʱ��־��������֣�
-*.log
-genie_results/
+# 本地产物
+real-ws/
 
-# internal planning docs - never publish (2026-11-05)
+# MODMAP.md = 内部规划文档，永不进公开仓（导出器同款过滤；本行双保险
+# ——沿用 v1 公开仓防呆先例）。私有仓已跟踪文件不受影响。
 MODMAP.md

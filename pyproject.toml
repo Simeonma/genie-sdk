@@ -4,86 +4,39 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "genie-sdk"
-version = "2.1.1"
-description = "GENIE SDK v2 — 脚本构建仿真、f.run() 提交云端 GPU；Studio 会话执行（单一执行引擎）"
-# 许可面（2026-10-25）：Apache-2.0，LICENSE 随仓 + 随 wheel 分发。
-# PEP 639 的 SPDX 写法要求 setuptools>=77（build-system 已同步抬到这个下限）。
+version = "1.0.0a1"
+description = "GENIE SDK v2 — Python 脚本构建光子 FDTD 仿真、提交云端 GPU、post_analyze 自定义后处理随档分享；本地 Studio 会话执行"
+# PEP 639 SPDX 写法要求 setuptools>=77；LICENSE 随仓 + 随 wheel 分发。
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = [
-    "requests>=2.28",
-    "numpy>=1.24",
-    # 协议层（2026-10-27 拆分）：**构建时内嵌**（package-dir 映射，见下）
-    # ——SDK 轮子自带 genie_protocol，源码安装一条命令零外求；服务器侧
-    # 继续用独立的 genie-protocol 轮子（34KB）。真源仍是 protocol/ 子目录。
-    # pydantic 是 import genie 的硬运行依赖（线格式模型本体）
-    # _cfg 即 SimConfig 实例——pydantic 仍是 import genie 的硬运行依赖
+    # 线格式模型（genie_protocol 构建时内嵌，见 tool.setuptools package-dir）
     "pydantic>=2,<3",
-    # 结果读取（genie-results-h5/1：f.results(job_id) 的 SimData 结构体）
+    "numpy>=1.24",
+    # 结果读取（genie-results-h5/1：f.results() / post_analyze 的 SimData）
     "h5py>=3.0",
-    # R40 装法合一（2026-10-29 站长定案）：原 [server]/[fit] extras 并入
-    # 基础依赖——pip install genie-sdk 唯一装法装齐一切（Studio/拟合/
-    # 上传面）。懒 import 纪律不变：import genie 仍不拉 fastapi
-    # （锁 = tests/sdk/test_connect_tracks.py::test_import_genie_pulls_no_web_stack，
-    # 护住 G80 Pyodide 网页版）。
-    "fastapi>=0.104",
-    "uvicorn>=0.24",
-    "python-multipart>=0.0.32",
-    # scipy：材料拟合（fit_nk/add_from_library 的 curve_fit）+ Studio
-    # 本地拟合端点（G19b 后 /api/tools/material_fit 纯本地）
+    # 材料拟合（fit_nk 的 curve_fit——懒 import，装上是硬前提）
     "scipy>=1.10",
 ]
 
-[project.optional-dependencies]
-# R40 装法合一：server/fit 留空壳别名（老命令不炸，装了等于已并入基础）。
-# agent/dev 维持原样（MCP 工具面/pytest 是真实的可选面）。
-server = []
-fit = []
-# MCP 工具面（genie-mcp 命令）：让任意 LLM agent 写脚本推 GUI
-agent = ["mcp>=2.0,<3"]
-dev = ["pytest>=7"]
-
 [project.scripts]
-genie = "genie.__main__:main"
-genie-mcp = "genie.integrations.mcp:main"
+genie = "genie.host.cli:main"
 
-# 打包白名单（framework §四 目录树的全部子包；显式列表防误收）
-# package-dir：源码目录叫 genie-sdk（分发名/import 名三方视觉统一），import 名仍是 genie。
-# 目录名带连字符不能作包名，靠这条映射把 genie.* 解析到 genie-sdk/*；
-# wheel 内路径依然是 genie/，所以 install 地址与发布门断言都不用动。
+# 打包白名单（v2 包结构显式列表防误收）；package-dir：源码目录 genie-sdk
+# 映射为包名 genie（分发名 genie-sdk ≠ import 名 genie）；protocol 内嵌
+# ——SDK 轮子自带 genie_protocol，源码安装一条命令零外求（v1 先例沿用；
+# 服务器侧仍可用独立的 genie-protocol 轮子，真源 = protocol/ 子目录）。
 [tool.setuptools]
-packages = ["genie", "genie.models", "genie.core", "genie.core.archive",
-            "genie.core.model", "genie.core.material", "genie.core.results",
-            "genie.core.nkdata",
-            "genie.core.run", "genie.core.sweep",
-            "genie.core.script", "genie.lib", "genie.net",
-            "genie.integrations", "genie.studio", "genie.studio.session",
-            "genie.studio.views",
-            "genie_protocol"]
+packages = ["genie", "genie.core", "genie.core.model", "genie.core.archive",
+            "genie.core.material", "genie.core.results",
+            "genie.ipc", "genie.net", "genie.worker", "genie.session",
+            "genie.host", "genie_protocol"]
 package-dir = { genie = "genie-sdk", genie_protocol = "protocol/genie_protocol" }
 
-# 随包数据：n-k 材料库 yml + 内容面（手册 / 示例）+ Studio 前端壳。
-# 2026-10-18 修复：原规则全是**单层 glob**（static/*），漏掉
-# static/modules/ 与 static/views/ ⇒ 发出的 wheel 里 Studio 前端模块
-# 全缺，GUI 起来但白屏、19 个 404。新增静态子目录必须在此登记；
-# publish.py 会读 index.html 的引用逐条校验产物作为发布门。
-# 2026-10-21 拆分：手册（manual/）与示例（examples/）移出 studio/static，
-# 它们是随包分发的内容、不是 GUI 实现；URL 仍是 /manual/…、/examples/…
-# （server 各挂一个 mount），所以 index.html 与手册内部链接一行未改。
-# 内部设计文档（原 static/manual/proposals/）不随包分发——用户手册面与
-# 内部提案面分离；提案档已于 2026-10-18 删除。
+# 随包数据：n-k 材料库 yml（fit_nk / mat_from_nk 的库真源）。
 [tool.setuptools.package-data]
-genie = [
-    "docs/*.md",
-    "manual/commands/*", "manual/commands/figs/*",
-    "examples/*",
-]
-"genie.core.nkdata" = ["*.yml"]
-"genie.studio" = [
-    "static/*", "static/vendor/*",
-    "static/modules/*", "static/views/*",
-]
+genie = ["resources/materials/*.yml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

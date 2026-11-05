@@ -1,3 +1,5 @@
-"""genie.core.model — 建模旅程：builder DSL（六命名空间 + _Chain）。
+"""genie.core.model — f 的语义（core 侧本体）。地图：``model/MODMAP.md``。"""
+from .draft import DRAFT_OF, to_wire
+from .handle import Model
 
-线格式约束住在 protocol/genie_protocol；这里只做用户侧构建手感。"""
+__all__ = ["Model", "to_wire", "DRAFT_OF"]

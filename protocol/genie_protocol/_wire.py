@@ -6,14 +6,15 @@
 > 是**同一份类对象**——不存在同步问题，锁测试退役。
 >
 > 拆分说明：原 schema.py 92-115 常量块中，**线格式常量**（FACES /
-> DEFAULT_TIMEOUT_S / MAX_SWEEP_* / 字段名集合）随模型住这里；
-> **部署策略阈值**（MAX_CELLS / MAX_STEPS / MAX_TIMEOUT_S /
-> MAX_MONITORS / MAX_MONITOR_SAMPLES）是服务端资源守卫的配置，
-> 留在内核 serve 层，不进 SDK。
+> MAX_GPU_PER_RUN / 字段名集合）随模型住这里；**部署策略阈值**
+> （MAX_CELLS / MAX_STEPS / MAX_MONITORS / MAX_MONITOR_SAMPLES）是
+> 服务端资源守卫的配置，留在内核 serve 层，不进 SDK。
+> DEFAULT_TIMEOUT_S / MAX_SWEEP_* 已随 2.0.0b1 退役，MAX_TIMEOUT_S
+> 守卫同轮删（Q7.1 / Q7.2）。
 >
-> 懒加载纪律（2026-10 站长定案：浏览器镜像零新增依赖）：本模块由
-> ``genie/models/__init__.py`` 的 ``__getattr__`` 按需加载——
-> ``import genie.models.expr`` 不得拉起 pydantic。
+> 懒加载纪律（2026-10 站长定案：浏览器镜像零新增依赖）：本模块由本包
+> ``__init__.py`` 的 ``__getattr__`` 按需加载——``import genie_protocol.expr``
+> 不得拉起 pydantic。
 
 线格式 JSON 形状示例（内核 schema.py 原文档头逐字保留）::
 
@@ -35,7 +36,7 @@
                     {"type": "freq", "name": "sp", "center": [0, 0, 0.2e-6],
                      "size": [0, 0, 0], "field": "Ey",
                      "freq": {"center": 300e12, "bw": 120e12, "n": 200}}],
-      "run":      {"gpu": 1}
+      "run":      {"n_gpu": 1}
     }
 
 **禁止**任何形式的可执行内容：模型只接受数/串/列表/字典，
@@ -116,23 +117,25 @@ class _StrictModel(BaseModel):
 
 
 def _env_int(name: str, default: int) -> int:
+    """环境变量取正整数（内核 serve 的 MAX_CELLS / MAX_STEPS 正典出处）。
+
+    G124⑥ 下界防呆：FDTD_MAX_SWEEP_POINTS=-1 之类误配此前透传，一切
+    sweep 请求 422——非正数回退缺省。（MAX_SWEEP_POINTS 已随 2.0.0b1
+    迁 genie.core.sweep，Q7.1；本函数因内核仍在消费而保留。）"""
     try:
         v = int(os.environ.get(name, default))
     except (TypeError, ValueError):
         return default
-    # G124⑥：下界防呆——FDTD_MAX_SWEEP_POINTS=-1 之类误配此前透传，
-    # 一切 sweep 请求 422。非正数回退缺省。
     return v if v >= 1 else default
 
 
-DEFAULT_TIMEOUT_S = 3_600
 # 单作业卡数上限（R22 G154 站长裁：提为协议常量，fdtd serve
 # demand.MAX_RANKS import 同一值——上限只有一个出处，改一处双方生效。
 # 2026-10-31 站长令 4→8：默认算力 BSCC 单节点 8×V100-SXM2-32GB，
 # 单作业可整节点调度；跨节点不在本常量射程）。
 MAX_GPU_PER_RUN = 8
-MAX_SWEEP_POINTS = _env_int("FDTD_MAX_SWEEP_POINTS", 512)  # sweep 展开点数上限
-MAX_SWEEP_AXES = 32               # sweep 参数轴数上限
+# DEFAULT_TIMEOUT_S / MAX_SWEEP_POINTS / MAX_SWEEP_AXES 已随 2.0.0b1
+# 退役（Q7.2 删 timeout；Q7.1 sweep 迁 genie.core.sweep）。
 
 FACES = ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max")
 BC_KINDS = ("pec", "pmc", "periodic", "pml", "bloch")
@@ -371,6 +374,15 @@ class MeshSpec(_StrictModel):
 # ---------------------------------------------------------------------------
 
 
+class _Identified:
+    """v2 item 身份（Q1.2 / Q7.3，2026-11-03）：系统发的全局编号——
+    不可改、删除不复用；四类 item 集合（geometry / materials / source /
+    monitor）共用一套发号器。**内核不消费**（不进 translate），仅 SDK
+    记账；保存 / 打开 / 提交都带着它。"""
+
+    id: Optional[int] = None
+
+
 class PoleSpec(_StrictModel):
     """色散极点。两形态（2026-09 pole-direction 提案，站长裁决「三轴
     速记非 pole 形态」只留两档，选项 A 移除 3元 速记）：
@@ -414,7 +426,7 @@ class PoleSpec(_StrictModel):
         return self
 
 
-class ConstMatSpec(_StrictModel):
+class ConstMatSpec(_Identified, _StrictModel):
     """常数材料。eps/mu：标量（iso，三轴同值——语义不变，存量 payload
     零扰动）| 3 元 ``[xx, yy, zz]``（对角各轴独立）| 3×3 嵌套数组
     （完整张量，非对角对称=互易介质）。守卫镜像本地 _require_positive_
@@ -424,7 +436,7 @@ class ConstMatSpec(_StrictModel):
     color：**仅显示用**的可选色值（"#RRGGBB"）。GUI 的 3D 视图按材料上色
     ——同一材料的实体共享一色；缺省由前端按材料名稳定散列取调色板。求解
     器忽略此字段（不进 translate），故它是纯表现层的、可选的、向后兼容的
-    扩展。"""
+    扩展。材料名是 geometry.material 引用的**外键**（改名不级联，Q1.2.2）。"""
 
     type: Literal["const"] = "const"
     name: str = Field(min_length=1)
@@ -436,7 +448,7 @@ class ConstMatSpec(_StrictModel):
     _vc = field_validator("color", mode="after")(_check_hex_color)
 
 
-class LorentzMatSpec(_StrictModel):
+class LorentzMatSpec(_Identified, _StrictModel):
     """Lorentz/Drude 色散材料。eps_inf/mu_inf 形状语义同 ConstMatSpec
     的 eps/mu（标量 iso | 3 元对角 | 3×3 张量）；poles/mu_poles 逐 pole
     形态见 PoleSpec（iso | rank-1，参数纯标量 ± α/β 方向）。
@@ -510,14 +522,13 @@ MaterialSpec = Annotated[
 # ---------------------------------------------------------------------------
 
 
-class _NamedGeo:
-    """几何对象的**可选显示名**（2026-10-21 用户定案：树/3D 标签只显示名字）。
+class _NamedGeo(_Identified):
+    """几何对象的**必填名**（Q1.2.4 / Q7.3 收紧：可选 → 必填）。
 
-    纯表现层字段，求解器不消费（不进 translate）；缺省 None = 由前端回退到
-    类型名（"Box" / "N-gon"）。与材料 color 同一性质：可选的、向后兼容的、
-    只影响 GUI 读法的扩展，不是物理参数。"""
+    名字是人读的地址（表单按 id 定位，id 不随改名漂移）；求解器不
+    消费（不进 translate）。同一集合内唯一（SimConfig._check 查重）。"""
 
-    name: Optional[str] = None
+    name: str = Field(min_length=1)
 
 
 class BoxSpec(_RangeModel, _NamedGeo):
@@ -708,12 +719,14 @@ GeometrySpec = Annotated[
 # ---------------------------------------------------------------------------
 
 
-class _TemporalMixin(_StrictModel):
+class _TemporalMixin(_Identified, _StrictModel):
     freq: float = Field(gt=0)
     bandwidth: float = Field(gt=0)
     delay: float = 0.0
     phase: float = 0.0
-    name: Optional[str] = None
+    # Q1.2.4 / Q7.3 收紧（2026-11-03）：可选 → 必填——四类 item 名字
+    # 必填、同类唯一；断代：无 name 的旧配置 / v1 提交一律拒收（站长知情）。
+    name: str = Field(min_length=1)
 
 
 class SoftSourceSpec(_TemporalMixin):
@@ -790,7 +803,7 @@ class ApodizeSpec(_StrictModel):
         return v
 
 
-class _MonitorMixin(_StrictModel):
+class _MonitorMixin(_Identified, _StrictModel):
     # G141 定案①（站长裁决 2026-10-27）：监视器名白名单 [\w\-]{1,64}
     # （re.ASCII——与文件名字白名单同款）。名字会成为 h5 组名
     # 与 t@<名>.<字段> 结果键的地址段——含点/空格会让键解析歧义
@@ -812,11 +825,19 @@ class _MonitorMixin(_StrictModel):
     # time/freq 默认 [0,0,0] 点监视器（null 槽 = 全域 span——体积守卫会先拦住滥用）
     size: tuple[Optional[float], Optional[float], Optional[float]] = (0.0, 0.0, 0.0)
     field: str
-    down_sample: Optional[DownSampleSpec] = None
 
 
 class TimeMonSpec(_MonitorMixin):
     type: Literal["time"] = "time"
+    # field 缺省 'all'（2026-11-05 站长拍：对齐 fdtd 本地 API 缺省）——
+    # 六分量全录，Poynting/flux/transmission 才取得到；显式单分量
+    # （省 6 倍数据/显存）仍是合法通道。
+    field: str = "all"
+    # down_sample 只属于 time（2026-11-05 SDK↔fdtd 对账修复）：freq 的
+    # 时域门控是 apodize 的活、index 无时间轴——修前 freq 带 down_sample
+    # 过校验后在内核 build 期 AttributeError（translate 调 builder 没有
+    # 的方法）、index 带则被 translate 静默丢弃；现均改为校验期 422。
+    down_sample: Optional[DownSampleSpec] = None
 
     @field_validator("field", mode="after")
     @classmethod
@@ -830,6 +851,8 @@ class FreqMonSpec(_MonitorMixin):
     type: Literal["freq"] = "freq"
     freq: dict[str, float]  # {"center": Hz, "bw": Hz, "n": 点数}
     apodize: Optional[ApodizeSpec] = None
+    # 同 TimeMonSpec：缺省 'all'（2026-11-05 站长拍）。
+    field: str = "all"
 
     @field_validator("field", mode="after")
     @classmethod
@@ -884,6 +907,10 @@ class IndexMonSpec(_MonitorMixin):
     type: Literal["index"] = "index"
     # index 默认全域（null 槽 = 全域 span）
     size: tuple[Optional[float], Optional[float], Optional[float]] = (None, None, None)
+    # field 缺省 'both'（2026-11-05 站长终拍：index 词表就是 eps/mu/both，
+    # 不引入 'all' 别名——time/freq 的 'all' 是六分量语义，index 的「全
+    # 存」本来就叫 'both'，硬统一反而多一套拼写）。
+    field: str = "both"
 
     @field_validator("field", mode="after")
     @classmethod
@@ -907,17 +934,19 @@ MonitorSpec = Annotated[
 # run 节（G18 2026-10-16 站长裁决，方案 A 单旋钮）：**唯一时间定义 =
 # domain.total_time**（SI 秒，gt=0 必填，见 DomainSpec）——作业推进到
 # 网格时间容量为止，步数是 build 后的派生量（summary/results 只读面）。
-# run 节本身只剩服务字段：gpu = 可选上限（ge=1
+# run 节本身只剩服务字段：n_gpu = 可选上限（ge=1
 # le=MAX_GPU_PER_RUN（当前 8），跨仓契约
 # 2026-10-25：给几张卡由网关裁定；装不下 422、无空闲卡排队——
-# G84 清账 2026-10-27 前误写"卡数/显存不足 FAILED"）、timeout_s = 作业
-# 超时。旧 run.n_steps（实际推进步数第二旋钮）退役——容量/步数双旋钮
-# 语义混乱且 n_steps>容量 必撞 apodization 截断，v2 未发布无兼容包袱。
+# G84 清账 2026-10-27 前误写"卡数/显存不足 FAILED"）。
+# timeout_s 已删（Q7.2，2026-11-03）：查证该墙钟在生产链路
+# （shim sbatch→driver）从未执行过、slurm 分区无限时——机制整体退役，
+# 内核同轮删墙钟与守卫。旧 run.n_steps 更早退役（容量/步数双旋钮
+# 语义混乱且 n_steps>容量 必撞 apodization 截断）。
 
 
 class RunSpec(_StrictModel):
-    gpu: Optional[Annotated[int, Field(ge=1, le=MAX_GPU_PER_RUN)]] = None  # 可选上限
-    timeout_s: int = Field(default=DEFAULT_TIMEOUT_S, gt=0)
+    # n_gpu（Q7.4，2026-11-04 改名；计数命名接旧例 n_steps）
+    n_gpu: Optional[Annotated[int, Field(ge=1, le=MAX_GPU_PER_RUN)]] = None  # 可选上限
 
 
 class SimConfig(_StrictModel):
@@ -932,7 +961,8 @@ class SimConfig(_StrictModel):
     # （^[A-Za-z_][A-Za-z0-9_]*$，≤64 字符），值=数值或引用其余参数的
     # 表达式字符串（环境=其余参数，顶层拓扑求值）。表达式求值与数值槽
     # 替换不在模型期做——见 resolve_parameters（两段校验的唯一解析点
-    # parse_config）；sweep 轴（SweepAxisSpec.name）按名引用这里的键。
+    # parse_config）；扫参轴按名引用这里的键（展开器在 genie.core.sweep，
+    # Q7.1 迁出——本包不再含 sweep 模型）。
     parameters: Optional[dict[str, Union[float, int, str]]] = None
 
     @field_validator("parameters", mode="after")
@@ -943,22 +973,24 @@ class SimConfig(_StrictModel):
         for k in v:
             if not valid_param_name(k):
                 # G151：报错文案复用 expr.param_name_error 同一实现
-                # （构造性单源，不靠手抄巧合）。此守卫是 sweep 展开路径
-                # （sweep_expand 无前置检查）对**未引用**坏名的唯一
-                # 拦截者，不可删。
+                # （构造性单源，不靠手抄巧合）。历史：此守卫曾是 sweep
+                # 展开路径对**未引用**坏名的唯一拦截者——sweep 展开已迁
+                # genie.core.sweep（Q7.1），其逐点校验仍经 validate_resolved
+                # 走到此守卫，不可删。
                 raise ValueError(param_name_error(k))
         return v
 
     @model_validator(mode="after")
     def _check(self):
-        # 同类 monitor 重名（L4 同款守卫在 build 期，这里提前给友好错误）
-        for mtype in ("time", "freq", "index"):
-            names = [m.name for m in self.monitor if m.type == mtype]
-            if len(names) != len(set(names)):
-                dups = sorted({n for n in names if names.count(n) > 1})
-                raise ValueError(
-                    f"duplicate {mtype} monitor names: {dups} (monitor "
-                    f"names must be unique within each type)")
+        # 监视器名全列表唯一（Q1.2.3 落地，2026-11-03；此前按 type 各自
+        # 查重——跨 type 重名会让 f.mon['tr'] 有两个答案）。名字字符
+        # 白名单在 _MonitorMixin（G141）。
+        names = [m.name for m in self.monitor]
+        if len(names) != len(set(names)):
+            dups = sorted({n for n in names if names.count(n) > 1})
+            raise ValueError(
+                f"duplicate monitor names: {dups} (monitor names must be "
+                f"globally unique across all monitor types)")
         # 材料重名守卫（G40 L0 半，R39 站长裁）：材料名是 geometry.material
         # 引用的身份——重名 = "后者覆盖先写"，第一个材料求解时静默失效
         # （GUI 曾系统性制造 fitted/fitted 碰撞，R38 改库名入名；本守卫
@@ -1009,142 +1041,4 @@ class SimConfig(_StrictModel):
                             f"the opposite face {other} set to periodic/"
                             f"bloch (same-axis pairs only)"
                         )
-        return self
-
-
-# ---------------------------------------------------------------------------
-# Sweep（参数扫描线格式 + 展开入口，P2-α 2026-09；调度归 P2-β）
-# ---------------------------------------------------------------------------
-
-class SweepAxisSpec(_StrictModel):
-    """单参数扫描轴（参数系统批 1 2026-10 破坏性改版：``path`` 寻址
-    退役，改为 **参数名寻址**——功能上线一天无存量用户，用户裁决）。
-
-    - ``name``：**参数名**——必须是基底配置 ``parameters`` 键集内的
-      名（不在 → 422 列可用名）；展开语义 = 逐点 ``parameters[name]=v``
-      后重解析（引用该参数的全部表达式槽逐点联动重求值）；
-    - 取值三选一互斥：``values``（显式列表；str 成员按**表达式串**
-      逐点求值——非枚举型，未定义名会在逐点解析报 unknown_name）|
-      ``linspace`` = [start, stop, n]（数值，含端点，n>=2）|
-      ``logspace`` = [start, stop, n]（10^x，同规则）；
-      多给/全缺 → 422 策展错误指路；``linspace/logspace`` 的
-      start==stop 拒收（单值轴请直接 values=[x]——退化区间是笔误的
-      温床，宁拒不放行）。
-    展开与逐点校验入口见 ``sweep_expand.py``（客户端展开器，
-    G29b 起为 SDK 侧活）。
-    """
-
-    name: str = Field(min_length=1, max_length=64)
-    values: Optional[list[Union[float, int, str, list[float]]]] = None
-    linspace: Optional[tuple[float, float, int]] = None
-    logspace: Optional[tuple[float, float, int]] = None
-
-    @field_validator("name", mode="after")
-    @classmethod
-    def _check_name(cls, v):
-        if not valid_param_name(v):
-            raise ValueError(
-                f"axis name {v!r} is invalid: must be a parameter name "
-                f"(identifier, <= 64 chars) that exists in the base "
-                f"config's parameters keys")
-        return v
-
-    @model_validator(mode="after")
-    def _check(self):
-        given = [x for x in (self.values, self.linspace, self.logspace)
-                 if x is not None]
-        if len(given) != 1:
-            raise ValueError(
-                "exactly one of values / linspace / logspace must be "
-                f"given (got {len(given)})")
-        for name in ("linspace", "logspace"):
-            sp = getattr(self, name)
-            if sp is None:
-                continue
-            start, stop, n = sp
-            if not (math.isfinite(start) and math.isfinite(stop)):
-                raise ValueError(
-                    f"{name} start/stop must be finite, got {sp[:2]!r}")
-            if n < 2:
-                raise ValueError(f"{name}.n must be an integer >= 2, got {n}")
-            if start == stop:
-                raise ValueError(
-                    f"{name} start==stop=={start} is rejected "
-                    f"(use values=[x] for a single-value axis)")
-        if self.values is not None and len(self.values) == 0:
-            raise ValueError(
-                "values must be non-empty (a single-element list [x] is "
-                "valid)")
-        return self
-
-    def value_list(self) -> list:
-        """该轴的取值序列（values 原样；linspace/logspace 按公式展开）。
-
-        logspace 展开值查有限（G124⑤：start=400 → 10**400=inf，此前
-        不查即穿）。linspace 不查数值合理性——DISCIPLINE §5：输入数值
-        的正确性由用户负责（R21 曾加对称检查，站长 2026-10-27 裁回退）。"""
-        if self.values is not None:
-            return list(self.values)
-        start, stop, n = self.linspace if self.linspace else self.logspace
-        if self.linspace is not None:
-            return [start + i * (stop - start) / (n - 1)
-                    for i in range(n)]
-        vals = []
-        for i in range(n):
-            try:
-                vals.append(10 ** (start + i * (stop - start) / (n - 1)))
-            except OverflowError:   # G124⑤：10**400 直接 OverflowError
-                raise ValueError(
-                    f"logspace [{start}, {stop}] produces values out of "
-                    f"float range (10^x overflow) — narrow the range"
-                ) from None
-        if not all(math.isfinite(x) for x in vals):
-            raise ValueError(
-                f"logspace [{start}, {stop}] produces non-finite values "
-                f"(10^x overflow) — narrow the range")
-        return vals
-
-
-class SweepSpec(_StrictModel):
-    """顶层参数扫描**定义**（纯线格式：哪些点；P2-α 起源 + R39 C+ 纯化）。
-
-    - ``parameters``：1..32 轴（SweepAxisSpec）；
-    - ``mode``：``product``（默认，笛卡尔积）| ``zip``（各轴等长逐点
-      配对，长度不等 → 422）；
-    - 展开点数上限 ``FDTD_MAX_SWEEP_POINTS``（默认 512，超限 422
-      带点数/上限）。
-
-    R39（G169 站长裁 C+）：执行旋钮 ``gpus_per_sim`` / ``max_parallel`` /
-    ``on_failure`` 自本类退役——它们是"服务端跑扫描"年代搭 wire 车的
-    本地执行参数，R24c 客户端展开后 SweepSpec 根本不上线（唯一消费方
-    是 SDK 本地校验+展开），却自带一份手抄上限（历史：SweepSpec 写
-    le=8，而当时 RunSpec.gpu 是 le=4——G169 矛盾的病根；现两处统一为
-    MAX_GPU_PER_RUN=8）。旋钮唯一住所 = ``f.sweep()`` 的 Python
-    签名（转发每点 ``run(gpu=…)``），上限单一来源 MAX_GPU_PER_RUN，
-    sweep 调用点早校验（core/simulate._sweep_points）。
-    """
-
-    parameters: list[SweepAxisSpec] = Field(min_length=1,
-                                            max_length=MAX_SWEEP_AXES)
-    mode: Literal["product", "zip"] = "product"
-
-    @model_validator(mode="after")
-    def _check(self):
-        lens = [len(a.value_list()) for a in self.parameters]
-        if self.mode == "zip":
-            if len(set(lens)) != 1:
-                raise ValueError(
-                    f"zip mode requires all axes to have equal lengths, "
-                    f"got {lens}")
-            n_points = lens[0] if lens else 0
-        else:
-            n_points = 1
-            for L in lens:
-                n_points *= L
-        if n_points > MAX_SWEEP_POINTS:
-            raise ValueError(
-                f"expanded point count {n_points} exceeds the limit "
-                f"{MAX_SWEEP_POINTS} (axis lengths {lens}; reduce the "
-                f"number of points, or ask the admin to raise "
-                f"FDTD_MAX_SWEEP_POINTS via the environment variable)")
         return self

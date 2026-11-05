@@ -1,286 +1,120 @@
-"""HTTP 客户端 — SDK 唯一碰网络的地方（genie-service：草稿镜像面已裁）。
+"""genie.net.client — worker→host ``/gw`` 作业面（五方法）。
 
-职责（其余一切都在 _config.py 的本地 builder 里）::
+作业面五方法（net/MODMAP §1 / 禁令 6）：``submit / job_status /
+job_statuses / cancel / stream_result``；每个请求带 worker token 头
+（Q2.1；空 token 不发头）。**没有 wait**——等待循环、终态判定、
+``GenieJobError`` 抛点在 worker/run（Q6.10）。包络错误
+``{code, message, detail}`` → ``GenieHTTPError`` 携 ``.code/.status/.detail``
+（Q2.2-5A）。
 
-    submit(cfg)      POST /api/jobs          → job_id（202）
-    job_status(id)   GET  /api/jobs/{id}     → 状态 dict
-    wait(id)         轮询 job_status 直到终态（同步语义的胶水）
-    fetch_result(id) GET  /api/jobs/{id}/result → 结果文件字节（h5）
-    summary(id)      GET  /api/jobs/{id}/summary
-    log(id)          GET  /api/jobs/{id}/log
-    health()         GET  /api/health        （connect 排障用）
-
-错误翻译：FastAPI 的 422 体是 ``{"detail": [{loc, msg, type}, …]}``、
-400 守卫是 ``{"detail": "…"}`` —— 统一拼成可读消息并保留原始体
-（``GenieHTTPError.detail``），不吞服务器信息。
+批 3 线格式（2026-11-04 拍定）：submit **整批一次交**——体始终
+``{"configs": [cfg, ...]}``（单 = 批 1，公开面 / client / 网关同形）、
+响应 ``{"job_ids": [...]}``；``job_statuses`` 批量查态——体
+``{"job_ids": [...]}``、响应 ``{"jobs": [...]}``（每项与单查态同形，
+``progress`` 可选、只喂显示不判终态）。
 """
 from __future__ import annotations
 
 import json
-import os
-import time as _time
-from typing import Any, Callable
 
-from ..core.job_state import TERMINAL_BAD, TERMINAL_OK
-from ..models.errors import GenieHTTPError, GenieJobError
-from ._transport import TransportError, make_transport
+from ._http import call
+from .errors import GW_CODES, GenieHTTPError
 
-# 终态词表正典 = core.job_state（G24 裁决口径；G91 清账 2026-10-27 起
-# 与 core/sweep 共用同一对常量——本行只是透传，别在这里再写字面量）。
+__all__ = ["Client", "WORKER_TOKEN_HEADER"]
 
+#: worker token 头名（host/gw 校验侧 import 这一个常量，不手抄）
+WORKER_TOKEN_HEADER = "X-Genie-Worker-Token"
 
-def format_detail(d: Any) -> str:
-    """服务端错误体 → 可读单行/多行字符串（原样信息不丢）。"""
-    if isinstance(d, str):
-        return d
-    if isinstance(d, list):  # pydantic 422: [{"loc": ["body","domain",...], "msg": …}]
-        parts = []
-        for it in d:
-            if isinstance(it, dict):
-                loc = ".".join(str(x) for x in it.get("loc", [])
-                               if x not in ("body",))
-                msg = str(it.get("msg", it))
-                parts.append(f"{loc}: {msg}" if loc else msg)
-            else:
-                parts.append(str(it))
-        return "; ".join(parts)
-    try:
-        return json.dumps(d, ensure_ascii=False)
-    except (TypeError, ValueError):
-        return repr(d)
+_CHUNK = 65536
 
 
 class Client:
-    """极薄 HTTP 客户端封装（传输实现可换：本机 requests / 网页 fetch）。所有方法可被测试替身覆盖（SDK 测试与
-    前端代码生成器的 round-trip 测试都靠这一点注入假传输层）。"""
+    """worker 侧的作业面客户端。``base_url`` 显式传入（session 经 spawn
+    env 递送；递送对接表挂 net 图 §7 待落）。"""
 
-    def __init__(self, base_url: str, api_key: str | None = None,
-                 username: str | None = None, timeout: float = 30.0,
-                 timeout_download: float | None = None,
-                 extra_headers: dict | None = None):
-        if not base_url:
-            raise ValueError(
-                "connect() 需要 base_url（或设置环境变量 GENIE_URL）")
-        self.base_url = base_url.rstrip("/")
-        self.timeout = timeout
-        # 结果下载独立超时（audit 批 α；G178 修复 2026-10-29：None = 真不限时）：
-        # fetch_result 拉大结果文件不该被常规超时掐断。_req 用哨兵区分
-        # "未传"（回落常规超时）与"不限"（None 直达 requests）——注释与
-        # 实现此前不一致（注释说不限、实现回落 30s），双审独立发现后裁
-        # 定改代码兑现承诺；锁 = tests/sdk/test_client_timeouts.py。
-        self._timeout_download = timeout_download
-        self._s = make_transport()
-        # audit 批 β 账 3：key 缺省（None/空）时**不发** X-API-Key 头。
-        # 服务端 require_api_key 对「缺头」与「空头」等价（均 401
-        # "缺少 X-API-Key 请求头"，fdtd.serve.auth `if not x_api_key`），
-        # 故此前 `api_key or ""` 的空头是纯噪音——现在不发更诚实。
-        if api_key:
-            self._s.headers["X-API-Key"] = api_key
-        if username:
-            # P1 用户名+key 双输入：服务器校验与 key 条目 name 配对
-            self._s.headers["X-Username"] = username
-        if extra_headers:
-            # 经本地端口转发（G72）：经 /gw 代理时带 X-Session-Token 等本机口令。
-            self._s.headers.update(extra_headers)
+    def __init__(self, base_url: str, worker_token: str | None = None):
+        self._base = base_url.rstrip("/")
+        self._token = worker_token
 
-    # ---- 基石 ----
+    def _headers(self) -> dict:
+        h = {}
+        if self._token:
+            h[WORKER_TOKEN_HEADER] = self._token
+        return h
 
-    def _req(self, method: str, path: str, *, ok: tuple[int, ...] = (200,),
-             json_body: Any = None,
-             timeout: float | None = None,
-             _unlimited: bool = False) -> Any:
-        # _unlimited（G178）：下载面传 timeout=None 意为"不限"——与缺省
-        # "未传"（回落常规超时）用显式哨兵区分，requests 收到 None 即不限。
-        eff = self.timeout if (timeout is None and not _unlimited) else timeout
-        # 代理轨按 X-Upstream-Timeout 控制上游超时（直连时网关
-        # 忽略未知头，无害）——否则 /gw 的 120s 缺省会盖掉本地设置。
-        # G178 的下载面是"客户端不限时"（eff=None）：头本身必须是**数字**
-        # ——修前 str(None)="None"，代理按畸形请求 422（真机实证：每个点
-        # 的结果下载都失败，点文档只剩 cfg+state，立方读不出结果）。
-        self._s.headers["X-Upstream-Timeout"] = (
-            "86400" if eff is None else str(eff))
+    def _request(self, method: str, path: str, body: dict | None = None):
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        h = self._headers()
+        if data is not None:
+            h["Content-Type"] = "application/json"
+        resp = call(method, self._base + path, headers=h, body=data)
+        if resp.status >= 400:
+            raw = resp.read()
+            resp.close()
+            raise self._envelope_error(resp.status, raw)
+        return resp
+
+    @staticmethod
+    def _envelope_error(status: int, raw: bytes) -> GenieHTTPError:
         try:
-            r = self._s.request(method, self.base_url + path,
-                                json=json_body,
-                                timeout=eff)
-        except TransportError as e:
-            # S3（audit 批 α）：不加自动重试（YAGNI），只提示可重入——
-            # 网络瞬断对该 API 是安全操作（幂等读 / 提交前重试）。
-            raise GenieHTTPError(
-                f"网络错误 {method} {path}: {e}（网络瞬断可重试该操作）") from e
-        if r.status_code not in ok:
-            try:
-                detail = r.json().get("detail")
-            except Exception:  # noqa: BLE001 —— 非 JSON 错误体退回文本
-                detail = r.text[:500]
-            raise GenieHTTPError(
-                f"HTTP {r.status_code} {method} {path}: {format_detail(detail)}",
-                status=r.status_code, detail=detail)
-        return r
+            env = json.loads(raw.decode("utf-8"))
+            code = env.get("code")
+            message = env.get("message") or GW_CODES.get(code) or ""
+            detail = env.get("detail")
+        except ValueError:
+            code = None
+            message = raw[:200].decode("utf-8", "replace")
+            detail = None
+        return GenieHTTPError(f"{status} {message}".strip(),
+                              status=status, detail=detail, code=code)
 
-    # ---- API 面（与 v100/backend/app/main.py 路由一一对应）----
+    # -- 作业面五方法 -------------------------------------------------
 
-    def login(self, username: str, password: str) -> str:
-        """账号密码登录：POST /api/auth/login {username,password} →
-        {token}；token 即后续请求的 X-API-Key（绑定本 client 期间）。
-        返回 token，便于调用方持久化。凭据错误（401）照常抛
-        GenieHTTPError，不吞服务器信息。"""
-        tok = self._req(
-            "POST", "/api/auth/login", ok=(200,),
-            json_body={"username": username, "password": password},
-        ).json().get("token")
-        if not tok:
-            raise GenieHTTPError(
-                "登录响应缺少 token 字段", status=200, detail=None)
-        self._s.headers["X-API-Key"] = tok
-        if username:
-            self._s.headers["X-Username"] = username
-        return tok
-
-    def set_key(self, api_key: str | None, username: str | None = None) -> None:
-        """换发凭据（**不丢模型**）。
-
-        授权的寿命与模型的寿命正交（M2/O2）：token 轮换、改密码、过期后
-        重新登录，都只更新这一层头，实例与配置原样保留。空 key = 摘掉头
-        （未登录/已退出的诚实形态，而不是发一个空头）。
-        """
-        if api_key:
-            self._s.headers["X-API-Key"] = api_key
-        else:
-            self._s.headers.pop("X-API-Key", None)
-        if username:
-            self._s.headers["X-Username"] = username
-
-    def health(self) -> dict:
-        return self._req("GET", "/api/health").json()
-
-    def usage(self) -> dict:
-        """GET /api/usage → 本人本月账本（GPU 卡时/笔数/成本/配额）。"""
-        return self._req("GET", "/api/usage").json()
-
-    def submit(self, config: dict) -> str:
-        """SimConfig JSON → job_id。400=守卫拒、422=形状错、401=key 无效。"""
-        r = self._req("POST", "/api/jobs", ok=(200, 202), json_body=config)
-        return r.json()["job_id"]
-
-    def preflight(self, config: dict) -> dict:
-        """需求预检（只读，**不提交作业**）→ 这个模型要多少资源。
-
-        返回 ``{available, cap, caliber, demand{"1"..cap}, grid{n_tot, axes}}``：
-
-        - ``demand[n]`` = n 张卡时**每 rank** 需要多少 MiB（含峰值因子与
-          CUDA context；口径字符串在 ``caliber`` 里，数字自带口径才可对账）；
-        - ``grid`` = 含 PML 的格数 + 三条 1D 格心（单位 µm，内核工作单位）。
-
-        **给几张卡不在这里决定**：内核只报需求，卡数由网关按"等级上限 +
-        需求 ≤ 机型容量"定（G78，见内核 `docs/LEDGER.md`「GPU 归属」）。
-        所以 ``run.gpu`` 只是可选上限，不是卡数。
-
-        老内核没有该端点（404）→ ``{"available": False}``：调用方按"未知"
-        处理，别把它当"装不下"。
-        """
-        r = self._req("POST", "/api/config/preflight", ok=(200, 404),
-                      json_body={"cfg": config})
-        if r.status_code == 404:
-            return {"available": False}
-        body = r.json()
-        body["available"] = True
-        return body
+    def submit(self, cfg_or_cfgs) -> str | list[str]:
+        """提交一份或一批 SimConfig dict（**整批一次交**，批 3 形状：线
+        格式始终 ``{"configs": [...]}``，单 = 批 1；返回与参数同形——单
+        ``str`` / 批 ``list[str]``）。不校验——校验归 validate_for_ui，
+        调用方在提交前跑。"""
+        single = isinstance(cfg_or_cfgs, dict)
+        cfgs = [cfg_or_cfgs] if single else list(cfg_or_cfgs)
+        with self._request("POST", "/api/jobs", body={"configs": cfgs}) as resp:
+            job_ids = json.loads(resp.read().decode("utf-8"))["job_ids"]
+        return job_ids[0] if single else job_ids
 
     def job_status(self, job_id: str) -> dict:
-        return self._req("GET", f"/api/jobs/{job_id}").json()
+        """作业状态 dict（真相在网关，Q2.2-1A；终态判定不在这；
+        ``progress`` 可选——只喂显示，不参与判终态）。"""
+        with self._request("GET", f"/api/jobs/{job_id}") as resp:
+            return json.loads(resp.read().decode("utf-8"))
 
-    def jobs(self) -> list:
-        """本人作业列表（按 key 归属过滤；admin 见全量）：每项含
-        job_id/state/created_at。脚本重启丢 job_id 后找回作业的入口。"""
-        return self._req("GET", "/api/jobs").json()
+    def job_statuses(self, job_ids) -> list[dict]:
+        """批量查态（批 3：worker 等待循环每秒的口粮）。体
+        ``{"job_ids": [...]}`` → ``{"jobs": [...]}``，每项与
+        :meth:`job_status` 同形；任一 id 未知 = 整请求 404 包络（与单
+        查态同语义——等待循环只查自己 submit 拿到的 id，错误路径）。"""
+        with self._request("POST", "/api/jobs/statuses",
+                           body={"job_ids": list(job_ids)}) as resp:
+            return json.loads(resp.read().decode("utf-8"))["jobs"]
 
-    def summary(self, job_id: str) -> dict:
-        return self._req("GET", f"/api/jobs/{job_id}/summary").json()
+    def cancel(self, job_id: str) -> None:
+        """取消作业（Q2.2-3：取消 = 网关远端取消；公开入口带外直达
+        session/host，worker 零停止机制）。"""
+        with self._request("POST", f"/api/jobs/{job_id}/cancel"):
+            pass
 
-    def log(self, job_id: str) -> str:
-        return self._req("GET", f"/api/jobs/{job_id}/log").text
+    def stream_result(self, job_id: str):
+        """结果字节块迭代器——链路全程不整包缓冲（Q2.2-1）；消费方
+        （worker/run）直接灌进 archive.Writer.stream_result。"""
+        resp = self._request("GET", f"/api/jobs/{job_id}/result")
 
-    def fetch_result(self, job_id: str) -> bytes:
-        """GET /api/jobs/{id}/result → 结果文件字节（genie-results-h5/1，
-        h5py.File(io.BytesIO(...)) 直接可开。timeout_download 缺省 None =
-        **不限时**（G178 裁定 2026-10-29：兑现 audit 批 α 初衷——大结果
-        不被常规超时掐断；显式传数值才设上限）。npz 时代的旧别名 fetch_npz
-        已随 G106 硬摘轮删除——2026-10-28 前零调用实证在案。"""
-        return self._req("GET", f"/api/jobs/{job_id}/result",
-                         timeout=self._timeout_download,
-                         _unlimited=self._timeout_download is None).content
+        def _iter():
+            try:
+                while True:
+                    chunk = resp.read(_CHUNK)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                resp.close()
 
-    # ---- agent 车道端点（P1/P2：MCP 服务器与 agent 运行时消费；
-    #      有意不进 Simulation 人类表面——极简定案由
-    #      test_ui_domain_endpoints_are_consciously_excluded 守卫）----
-    # （G17/G3 2026-10-16：v1 车道孤儿方法 get_config/validate_config/
-    #   mesh_preview 摘除——零消费者；SimConfig 直操作与网格估算不属
-    #   公开 SDK 面，估算真源 = genie.models.estimate，内核守卫同尺）
-
-    # （2026-10-27 G19b 翻转：material_fit / nk_library 两方法随网关
-    #   tools 面撤除而摘除——材质库/拟合回归 SDK 本地 genie.core.material；
-    #   UI 下拉与拟合走 Studio 本地 /api/tools/*。）
-
-    # （G3 2026-10-16 站长裁决：client.examples() 摘除——GUI 示例面板走
-    #   static/examples 静态文件，SDK 用户看手册，端点无真实价值）
-
-    def cancel(self, job_id: str) -> dict:
-        """取消作业（queued 落 killed / running killpg）。"""
-        return self._req("POST", f"/api/jobs/{job_id}/cancel",
-                         ok=(200,)).json()
-
-    def digest(self, job_id: str) -> dict:
-        """结果数值摘要（峰频/幅值/透过率，读取零 GPU）。"""
-        return self._req("GET", f"/api/jobs/{job_id}/digest").json()
-
-    # ---- Sweep 父作业（P2-δ；子作业结果复用上面 /api/jobs 面）----
-
-    def whoami(self) -> dict:
-        """GET /whoami：key → Principal（name/admin/quota——G29b 滑动
-        窗口查 max_concurrent_runs 用；网关侧已合并缺省）。"""
-        return self._req("GET", "/whoami").json()
-
-    def wait(self, job_id: str, poll_interval: float = 2.0,
-             progress: Callable[[dict], None] | None = None,
-             local_timeout_s: float | None = None) -> dict:
-        """轮询到终态。succeeded → 返回状态 dict；failed/killed →
-        GenieJobError（带 error 与日志尾）。``progress(status)`` 每轮回调。
-
-        ``local_timeout_s``：本地兜底等待上限（audit 批 α，默认
-        None=不限，跟随服务端作业超时）。超时抛 GenieError——作业
-        **仍在服务端跑**，可 ``f.run()`` 无参重入续查（已提交实例
-        不带 gpu/timeout_s 再 run() 即纯续查；时长 = domain.total_time。
-        """
-        if poll_interval < 0:
-            raise ValueError("poll_interval 须 ≥ 0")
-        if local_timeout_s is not None and local_timeout_s < 0:
-            raise ValueError("local_timeout_s 须 ≥ 0")
-        t0 = _time.monotonic()
-        if progress is True:   # 打进度条约定（同 SweepHandle.wait：True=打印一行态）
-            progress = lambda st: print(  # noqa: E731
-                f"[job {job_id}] {st.get('state')} "
-                + " ".join(f"{k}={v}" for k, v in
-                           (st.get("progress") or {}).items()))
-        while True:
-            st = self.job_status(job_id)
-            if progress is not None:
-                progress(st)
-            state = st.get("state")
-            if state == TERMINAL_OK:
-                return st
-            if state in TERMINAL_BAD:
-                err = st.get("error")
-                if state == "archived" and not err:
-                    # 归档作业取不到 410 明细时，至少把产物位置指出来（G24）
-                    where = st.get("archive_path") or st.get("archive_url")
-                    err = ("作业已被归档（终态）：结果不再在服务端热存储"
-                           + (f"，产物见 {where}" if where else ""))
-                raise GenieJobError(job_id, state, err, st.get("log_tail"))
-            if (local_timeout_s is not None
-                    and _time.monotonic() - t0 > local_timeout_s):
-                raise GenieHTTPError(
-                    f"本地等待超时（>{local_timeout_s}s）：作业 {job_id} "
-                    f"可能仍在服务端（当前 {state}）——可 f.run() 无参"
-                    "重入续查，或 get_job_status/summary 查看")
-            _time.sleep(poll_interval)
+        return _iter()

@@ -4,11 +4,17 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "genie-protocol"
-version = "2.0.0a5"
+version = "2.0.0b3"
 description = "GENIE wire-format protocol layer - SimConfig models, expression evaluator, resolver, estimator (single source shared by SDK client, gateway and compute kernel)"
 requires-python = ">=3.10"
 dependencies = [
-    # _wire/resolve/sweep_expand 是 pydantic v2 模型；expr 纯标准库（懒加载不触发 pydantic）
+    # _wire/resolve 是 pydantic v2 模型；expr 纯标准库（懒加载不触发 pydantic）
+    # 2.0.0b1 断代：sweep_expand/errors 迁 genie-sdk（Q7.1）；timeout 退役（Q7.2）。
+    # 2.0.0b2 攒批（2026-11-05 发版）：run.gpu 改名 n_gpu（Q7.4）+
+    # 注释清账；网关侧批形两端点不进 protocol（HTTP 体形状，住 genie-service）。
+    # 2.0.0b3（2026-11-05 发版）：Q7.5——monitor field 缺省（time/freq
+    # = 'all'、index = 'both'）+ down_sample 自 _MonitorMixin 下移
+    # TimeMonSpec（freq/index 带 = 校验期 422）。
     "pydantic>=2,<3",
 ]
 license = "Apache-2.0"

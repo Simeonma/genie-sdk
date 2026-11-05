@@ -2,11 +2,16 @@
 
 2026-10-27 拆分自 SDK 仓 ``genie/models/``（逐字节迁移）：pydantic v2、
 零内核依赖、零 SDK 依赖——SDK 客户端 / 网关 / 内核三方 import 同一份
-模型。SDK 侧 ``genie.models`` 是本包的兼容薄壳。三件套：
+模型。三件套：
 
 - ``_wire.py``   全部 Spec 模型 + SimConfig + 线格式常量（pydantic）
 - ``expr.py``    安全线表达式求值器（纯 Python：ast + math + re，零 pydantic）
 - ``resolve.py`` 参数解析（dict 伴走 + 表达式槽求值 + 求值结果校验）
+
+2.0.0b1 断代（2026-11-03，DECISIONS Q7）：sweep 展开器与 errors 迁 genie-sdk
+（core/sweep、net/errors，Q7.1）；timeout 机制整体退役（Q7.2）；四类 item
+加可选 ``id``、source / geometry 的 name 收紧必填、monitor 名全列表唯一
+（Q7.3 / Q1.2.3）。
 
 懒加载纪律（2026-10 站长定案）——``import genie_protocol.expr`` **不得
 拉起 pydantic**：本 ``__init__`` 只做名字表 + ``__getattr__``（PEP 562），
@@ -15,7 +20,7 @@
 """
 from __future__ import annotations
 
-__version__ = "2.0.0a5"   # 与 protocol/pyproject.toml 双处对齐（RELEASE 纪律）
+__version__ = "2.0.0b3"   # 与 protocol/pyproject.toml 双处对齐（RELEASE 纪律）
 
 __all__ = [
     # 基础类型别名
@@ -35,11 +40,8 @@ __all__ = [
     "IndexMonSpec", "MonitorSpec",
     # Run 与总配置
     "RunSpec", "SimConfig",
-    # Sweep
-    "SweepAxisSpec", "SweepSpec",
     # 线格式常量（资源守卫阈值 MAX_CELLS 等是部署策略，留内核 serve 层）
-    "FACES", "BC_KINDS", "LIBRARY_FIT_DEFAULTS", "DEFAULT_TIMEOUT_S",
-    "MAX_GPU_PER_RUN", "MAX_SWEEP_POINTS", "MAX_SWEEP_AXES",
+    "FACES", "BC_KINDS", "LIBRARY_FIT_DEFAULTS", "MAX_GPU_PER_RUN",
     "norm_vertices_pairs",
 ]
 

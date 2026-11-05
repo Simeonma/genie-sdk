@@ -1,6 +1,10 @@
-"""genie.net — 唯一碰网络的层（framework §四）。
+"""genie.net — 传输层（client / upstream / errors / states）。地图：``net/MODMAP.md``。"""
+from .client import WORKER_TOKEN_HEADER, Client
+from .errors import (ENVELOPE_KEYS, GW_CODES, GenieConfigError, GenieError,
+                     GenieHTTPError, GenieJobError)
+from .states import TERMINAL_BAD, TERMINAL_OK
+from .upstream import Upstream
 
-client：GPU 云客户端（作业提交/状态/结果/取消）。（expert 专家面
-客户端已随 R36 存在权清理退役——问/托不是产品主链的一环。）包内其余
-模块（core/integrations）不得自行发请求——网络出口收敛于此。
-"""
+__all__ = ["Client", "Upstream", "WORKER_TOKEN_HEADER",
+           "GenieError", "GenieConfigError", "GenieHTTPError", "GenieJobError",
+           "GW_CODES", "ENVELOPE_KEYS", "TERMINAL_OK", "TERMINAL_BAD"]
