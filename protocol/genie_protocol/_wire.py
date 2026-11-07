@@ -291,6 +291,56 @@ def _check_dir(v):
     return (float(v[0]), float(v[1]), float(v[2]))
 
 
+def _check_num(v):
+    """Rational-pole numerator (a0, a1, a2) — coefficients of 1, s, s².
+
+    Finiteness is covered by _StrictModel's isfinite walk. An identically
+    zero numerator is a pole with no dispersion at all (it would ship a
+    silent no-op), so it fails early and points at the forms: a0 alone =
+    the lorentz strength Δε·ω₀², a0+a1s = a pole with one zero."""
+    if v is None:
+        return v
+    if len(v) != 3:
+        raise ValueError(
+            f"num must be (a0, a1, a2) — the coefficients of 1, s, s²; "
+            f"got {v!r}")
+    if v[0] == 0.0 and v[1] == 0.0 and v[2] == 0.0:
+        raise ValueError(
+            "num is identically zero — a pole with no numerator has no "
+            "dispersion at all (a0 alone is the lorentz strength, a1 adds "
+            "one zero, a2 is the instantaneous term)")
+    return (float(v[0]), float(v[1]), float(v[2]))
+
+
+def _check_den(v):
+    """Rational-pole denominator (b0, b1) of s² + b1·s + b0 — b0 = ω₀²,
+    b1 = γ. Mirrors the kernel's hard rejects exactly: γ < 0 is not a
+    gain channel (ade_coeffs raises), and b0 = 0 is the legal Drude
+    limit. (0, 0) is a bare double integrator — no restoring force, no
+    damping, infinite DC gain."""
+    if v is None:
+        return v
+    if len(v) != 2:
+        raise ValueError(
+            f"den must be (b0, b1) — the denominator s² + b1·s + b0; "
+            f"got {v!r}")
+    b0, b1 = float(v[0]), float(v[1])
+    if b0 < 0.0:
+        raise ValueError(
+            f"den b0 = ω₀² must be >= 0 (b0 = 0 is the Drude limit), "
+            f"got {b0!r}")
+    if b1 < 0.0:
+        raise ValueError(
+            f"den b1 = γ must be >= 0, got {b1!r} — negative damping is "
+            f"not a gain channel and is hard-rejected by the kernel's "
+            f"ade_coeffs; gain is a negative numerator strength (a0 < 0)")
+    if b0 == 0.0 and b1 == 0.0:
+        raise ValueError(
+            "den (0, 0) is a bare s² — no restoring force and no damping "
+            "(infinite DC gain, unstable)")
+    return (b0, b1)
+
+
 class _RangeModel(_StrictModel):
     x_range: Range2
     y_range: Range2
@@ -413,45 +463,101 @@ class _Identified:
 
 
 class PoleSpec(_StrictModel):
-    """Dispersion pole. Two forms:
+    """Dispersion pole = one rational scalar function times a rank-1
+    tensor weight::
+
+        χ(s) = num(s) / (s² + b1·s + b0)     D += χ(s)·β⊗α·F
+
+    Three forms, **one physics** — ``lorentz`` / ``drude`` are special
+    cases of ``rational``, and the kernel realises all three through the
+    same state space (Q14: no second recurrence):
 
     - **iso**: all parameters scalar, no alpha/beta → expanded to all
       three axes by local `_iso_expand` (existing semantics unchanged);
     - **rank-1**: all parameters scalar + `alpha` (required) ± `beta`
-      (default = alpha) → a single VectorPole (lorentz ωp²=Δε·ω₀²;
-      drude ωp²=ω_p²).
+      (default = alpha) → one pole mounted on α⊗β (lorentz
+      ωp²=Δε·ω₀²; drude ωp²=ω_p²);
+    - **rational**: `num=(a0,a1,a2)` (coefficients of 1, s, s²) +
+      `den=(b0,b1)` (denominator s²+b1·s+b0, i.e. b0=ω₀², b1=γ) — and
+      nothing else; `omega_0`/`omega_p`/`gamma`/`delta_eps` belong to the
+      shorthand forms and are rejected here rather than silently ignored.
 
-    Multiple poles with independent parameters are superposed by the
-    user. Gain = omega_p_sq < 0 (negative oscillator strength / negative
-    Δε, bounded and stable, accepted semantics); gamma < 0 (negative
-    damping) is **not** a gain channel and is hard-rejected by the
-    kernel's ade_coeffs — the schema mirrors current values and invents no guard
-    (same criteria as the _check_pos docstring)."""
+    **Completeness** (why this is the general form and not a feature
+    list): any tensor-valued rational dispersion is a sum of rank-1
+    weights (SVD of each residue matrix), and any higher-order
+    denominator factorises into real second-order factors — so
+    "scalar rational × rank-1 weight, second-order denominator" is
+    closed. `a2` is the **feedthrough** (instantaneous) term: it needs no
+    state, and it is applied through the raster-time effective
+    permittivity (Q14 ③), *not* folded into the wire `eps_inf` — so it
+    neither requires α=β nor breaks reciprocity rules of `eps_inf`, and
+    instantaneous non-reciprocal media become expressible.
 
-    kind: Literal["lorentz", "drude"]
+    Gains / guards mirror the kernel exactly: gain = negative oscillator
+    strength (a0 < 0 / ωp² < 0, bounded); b1 < 0 (= γ < 0) is not a gain
+    channel and is hard-rejected by the kernel's ade_coeffs. The schema
+    mirrors current values and invents no guard.
+    """
+
+    kind: Literal["lorentz", "drude", "rational"]
     omega_0: Optional[float] = None   # rad/s (lorentz; >0)
     omega_p: Optional[float] = None   # rad/s (drude; >0)
-    gamma: Optional[float] = None     # rad/s (negative damping is not a gain
-                                      #   channel — hard-rejected by
-                                      #   ade_coeffs; gain goes via
-                                      #   ωp²<0 = negative Δε)
+    gamma: Optional[float] = None     # rad/s (lorentz/drude; negative damping is
+                                      #   not a gain channel — hard-rejected by
+                                      #   ade_coeffs; gain goes via a0/ωp² < 0 =
+                                      #   negative strength)
     delta_eps: float = 1.0
+    num: Optional[Vec3] = None        # rational only: (a0, a1, a2) — 1, s, s²
+    den: Optional[Range2] = None      # rational only: (b0, b1) — s² + b1·s + b0
     alpha: Optional[Vec3] = None      # rank-1 drive direction (unit vector, auto-normalized)
     beta: Optional[Vec3] = None       # rank-1 coupling direction (default = alpha)
 
     _v = field_validator("omega_0", "omega_p", mode="after")(_check_pos)
     _d = field_validator("alpha", "beta", mode="after")(_check_dir)
+    _n = field_validator("num", mode="after")(_check_num)
+    _q = field_validator("den", mode="after")(_check_den)
 
     @model_validator(mode="after")
     def _check(self):
-        if self.gamma is None:
-            raise ValueError("pole requires gamma")
-        if self.kind == "lorentz" and self.omega_0 is None:
-            raise ValueError(
-                "lorentz pole requires omega_0 > 0 (use drude for "
-                "omega_0=0)")
-        if self.kind == "drude" and self.omega_p is None:
-            raise ValueError("drude pole requires omega_p > 0")
+        if self.kind == "rational":
+            if self.num is None or self.den is None:
+                raise ValueError(
+                    "rational pole requires num=(a0, a1, a2) and "
+                    "den=(b0, b1)")
+            for name in ("omega_0", "omega_p", "gamma"):
+                if getattr(self, name) is not None:
+                    raise ValueError(
+                        f"rational pole takes num/den only — {name} belongs "
+                        f"to the lorentz/drude forms (b0=ω₀², b1=γ are the "
+                        f"denominator coefficients)")
+            if self.delta_eps != 1.0:
+                raise ValueError(
+                    "rational pole takes num/den only — delta_eps belongs "
+                    "to the lorentz form (write the numerator num instead)")
+        else:
+            if self.num is not None or self.den is not None:
+                raise ValueError(
+                    f"{self.kind} pole is the rational special case — use "
+                    f"kind='rational' with num/den instead of mixing the "
+                    f"two forms")
+            if self.gamma is None:
+                raise ValueError("pole requires gamma")
+            if self.kind == "lorentz":
+                if self.omega_0 is None:
+                    raise ValueError(
+                        "lorentz pole requires omega_0 > 0 (use drude for "
+                        "omega_0=0)")
+                if self.omega_p is not None:
+                    raise ValueError(
+                        "lorentz pole takes omega_0 (+delta_eps), not "
+                        "omega_p — the strength is ωp²=Δε·ω₀²")
+            else:  # drude
+                if self.omega_p is None:
+                    raise ValueError("drude pole requires omega_p > 0")
+                if self.omega_0 is not None:
+                    raise ValueError(
+                        "drude pole takes omega_p, not omega_0 (kind="
+                        "'lorentz' is the ω₀>0 form)")
         # rank-1 guard: beta without alpha → 422 (alpha is required)
         if self.beta is not None and self.alpha is None:
             raise ValueError(

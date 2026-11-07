@@ -23,14 +23,18 @@ here because this file is the wording surface.
 """
 from __future__ import annotations
 
+import dataclasses
 import os
 import shutil
 import tempfile
+
+import numpy as np
 
 from genie import ipc
 from genie.core import archive
 from genie.core import material as core_material
 from genie.core import results as core_results
+from genie.core.material import C0_SI as C0
 from genie.core.model import Model
 from genie.core.model.draft import digest
 from genie.net import TERMINAL_OK, GenieJobError
@@ -290,16 +294,79 @@ class F:
 
     # -- material verbs (implementation lives in core/material, zero terminal lines)------------
 
-    def fit_nk(self, wl, n, k, fit_range=(400e-9, 800e-9), tolerance=0.05,
-               max_poles=8, n_drude=0):
-        """**Single-component** nk → fitted numeric values (pure scalars,
-        pure numbers; a six-key dict without node — the sole
-        material-node factory is ``f.assemble_nk``; iso also goes through
-        assembly). Fitting is tolerance-driven: the pole count is chosen
-        to meet ``tolerance`` within ``max_poles`` (no manual pole count)."""
-        return core_material.fit_nk(wl, n, k, fit_range=fit_range,
-                                    tolerance=tolerance, max_poles=max_poles,
-                                    n_drude=n_drude)
+    def _source_band(self):
+        """The configured **source band** as a wavelength window [m], or None.
+
+        Lumerical's rule: the material fit range follows the simulation
+        band, not the raw data range. Sources are stored as
+        ``{freq, bandwidth}`` in Hz; the window is the union of
+        ``freq ± bandwidth/2`` converted to wavelength (min f → max λ).
+        """
+        try:
+            cfg = self._model.to_config()
+        except Exception:                                   # noqa: BLE001
+            return None
+        lo_hz = hi_hz = None
+        for src in cfg.get("source") or []:
+            if not isinstance(src, dict):
+                continue
+            try:
+                f0 = float(src.get("freq", 0.0))
+                bw = float(src.get("bandwidth", 0.0))
+            except (TypeError, ValueError):
+                continue
+            if not (f0 > 0.0):
+                continue
+            lo, hi = f0 - 0.5 * abs(bw), f0 + 0.5 * abs(bw)
+            if not (lo > 0.0):
+                lo = 0.5 * f0                    # guard a band crossing DC
+            lo_hz = lo if lo_hz is None else min(lo_hz, lo)
+            hi_hz = hi if hi_hz is None else max(hi_hz, hi)
+        if lo_hz is None:
+            return None
+        return (C0 / hi_hz, C0 / lo_hz)
+
+    def _fit_band(self, wl, band):
+        """Resolve the fit window: **explicit band, verbatim**; otherwise the
+        simulation source band; otherwise (no source) the data range.
+
+        An explicit ``band`` is never second-guessed: if it holds too few
+        samples the fit raises Lumerical-style ("Only N data points in band
+        … widen band"), because the user asked for exactly that window. The
+        *default* (source band) is a convenience, so it falls back to the
+        data range when it is too sparse — and says so.
+        """
+        if band is not None:
+            return band, None
+        want = self._source_band()
+        if want is None:
+            return None, None
+        w = np.asarray(wl, dtype=float)
+        inside = int(np.count_nonzero((w >= want[0]) & (w <= want[1])))
+        if inside >= 3:
+            return want, None
+        note = (f"source band {want[0] * 1e9:.0f}-{want[1] * 1e9:.0f} nm "
+                f"covers only {inside} data point(s) — fitted over the full "
+                f"data range instead; pass band= to force a window")
+        return None, note
+
+    def fit_nk(self, wl, n, k, band=None, accuracy=0.01, max_poles=12,
+               passive=None):
+        """**Single-component** nk → an ``NKFit`` (band · poles · quality ·
+        warnings; the opaque pole payload lives in ``model``).
+
+        The band defaults to the **simulation source band** (fit where you
+        will simulate, as Lumerical does), falling back to the data range
+        when the source band is too sparse. ``accuracy`` is the relative
+        n/k tolerance; ``max_poles`` is the pole budget (Lumerical's "max
+        coefficients"). Iso still goes through ``f.assemble_nk``."""
+        band, note = self._fit_band(wl, band)
+        fit = core_material.fit_nk(wl, n, k, band=band, accuracy=accuracy,
+                                   max_poles=max_poles, passive=passive)
+        if note is not None:
+            fit = dataclasses.replace(fit, warnings=tuple(fit.warnings)
+                                      + (note,))
+        return fit
 
     def assemble_nk(self, fits, name=None):
         """Per-component fit_nk results → a single material node (diagonal
@@ -314,11 +381,34 @@ class F:
         directly, multiple errors out)."""
         return core_material.load_nk(name, component=component)
 
-    def mat_from_nk(self, name):
-        """Library name → material node in one step (a zero-knob
+    def mat_from_nk(self, name, band=None, accuracy=0.01, max_poles=12):
+        """Library name → material node in one step (a near-zero-knob
         convenience layer; one line to add into the model:
-        ``f.mat.add_lorentz(node)``)."""
-        return core_material.mat_from_nk(name)
+        ``f.mat.add_lorentz(node)``).
+
+        ``band`` is the fit window [m]: **pass it and it is honoured
+        verbatim** (too few samples → a clear "widen band" error). Omit it
+        and the fit follows the **simulation source band**; if that band is
+        too sparse in the library, it falls back to the full data range and
+        says so on the terminal.
+        """
+        if band is not None:
+            return core_material.mat_from_nk(
+                name, band=band, accuracy=accuracy, max_poles=max_poles)
+        want = self._source_band()
+        if want is not None:
+            try:
+                return core_material.mat_from_nk(
+                    name, band=want, accuracy=accuracy, max_poles=max_poles)
+            except ValueError as exc:
+                if "data points in band" not in str(exc):
+                    raise
+                core_material._report(
+                    f"source band {want[0] * 1e9:.0f}-{want[1] * 1e9:.0f} nm "
+                    f"is too sparse in the {name} library — fitted over the "
+                    f"full data range instead; pass band= to force a window")
+        return core_material.mat_from_nk(name, band=None, accuracy=accuracy,
+                                         max_poles=max_poles)
 
     def list_library_materials(self):
         """Local library material names (sorted)."""
