@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "genie-sdk"
-version = "1.0.0a2"
+version = "1.0.0a3"
 description = "GENIE SDK v2 — build photonic FDTD simulations in Python, submit them to cloud GPUs, and keep results plus custom post_analyze in one portable .gensim document; local Studio included"
 # PEP 639 SPDX form requires setuptools>=77; LICENSE ships with the repo and the wheel.
 license = "Apache-2.0"
@@ -38,9 +38,15 @@ packages = ["genie", "genie.core", "genie.core.model", "genie.core.archive",
 package-dir = { genie = "genie-sdk", genie_protocol = "protocol/genie_protocol" }
 
 # Package data: the n-k material library yml files (the source of truth for
-# fit_nk / mat_from_nk).
+# fit_nk / mat_from_nk) and the Studio GUI shell served by host/app.py
+# (_STATIC_ROOT = genie/static). Without the static patterns the wheel ships
+# no GUI and `genie studio` answers 404 on `/` — the release gate in
+# tools/publish.py now blocks that. static/MODMAP.md is internal and stays out.
 [tool.setuptools.package-data]
-genie = ["resources/materials/*.yml"]
+genie = ["resources/materials/*.yml",
+         "static/*.js", "static/*.html", "static/*.css",
+         "static/modules/*.js", "static/views/*.js",
+         "static/vendor/*.js", "static/vendor/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
