@@ -36,7 +36,7 @@ def main(argv=None) -> int:
     if verb == "studio":
         return _studio(rest)
     if verb == "mcp":
-        return _mcp()
+        return _mcp(rest)
     print(f"unknown verb {verb!r} (available: {' / '.join(VERBS)})")
     return 2
 
@@ -89,7 +89,12 @@ def _studio(rest) -> int:
     return 0
 
 
-def _mcp() -> int:
-    """Agent adapter entry point — will be staged along with the ``agent/`` package; a placeholder for now, nothing pre-staged."""
-    print("genie mcp: the agent adapter is not implemented yet (arrives with the agent/ package)")
-    return 2
+def _mcp(rest) -> int:
+    """Agent adapter (Q6.6): hand off to ``genie.agent`` on stdio.
+
+    Imported lazily and on purpose — the adapter is Studio's *client*, not
+    part of the host; a plain Studio run never loads it. Locked by a test:
+    importing this module must not import ``genie.agent``.
+    """
+    from ..agent.mcp import main as agent_main
+    return agent_main(rest)
