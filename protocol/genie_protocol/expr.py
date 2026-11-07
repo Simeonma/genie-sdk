@@ -4,7 +4,9 @@ zero eval/exec.
 Responsibilities:
 
 - ``eval_expr(expr, env) -> float``: arithmetic expression string → float.
-  Whitelist nodes = Constant (numeric int/float) / Name (env lookup only) /
+  Whitelist nodes = Constant (numeric int/float) / Name (env lookup, then the
+  built-in constants ``pi`` / ``c0`` / ``eps0`` / ``mu0`` — a parameter of the
+  same name wins) /
   BinOp(+ - * / % **) / UnaryOp(+-) / Call (abs/min/max/sqrt only; abs/sqrt
   take a single numeric argument, min/max one or two) / unit suffix
   ``primary[unit]`` (the grammar ``primary '[' IDENT ']'`` binds tightest,
@@ -121,6 +123,20 @@ _UNITS = {
 # source typed MICRO SIGN or GREEK MU.
 _UNITS = {unicodedata.normalize("NFKC", k): v for k, v in _UNITS.items()}
 
+# Built-in constants (SI) — usable in every expression slot without being
+# declared in the parameters section: `2*pi/a`, `c0/f`. Two rules:
+#   - **a parameter of the same name wins** (a document that already defines
+#     `pi` in its table keeps its own value; nothing migrates);
+#   - they are values, not units: no dimension checking, so `a/c0` is seconds
+#     only when `a` is metres.
+# eta0 = sqrt(mu0/eps0) stays derivable — never a second copy here.
+_CONSTANTS = {
+    "pi": math.pi,                     # ratio
+    "c0": 299792458.0,                 # speed of light in vacuum, m/s
+    "eps0": 8.8541878128e-12,          # vacuum permittivity, F/m
+    "mu0": 1.25663706212e-6,           # vacuum permeability, H/m
+}
+
 
 class ExprError(ValueError):
     """Expression / parameters-section error (curated for HTTP 422). See the module docstring for kind."""
@@ -228,14 +244,14 @@ def eval_expr(expr: str, env: dict[str, float] | None = None) -> float:
             # exit likewise goes through _check_finite.
             return _check_finite(fv, "constant")
         if isinstance(node, ast.Name):
-            if node.id in env:
+            if node.id in env:                      # a parameter wins over a built-in
                 return float(env[node.id])
-            avail = sorted(env)
+            if node.id in _CONSTANTS:
+                return _CONSTANTS[node.id]
+            avail = sorted(set(env) | set(_CONSTANTS))
             raise ExprError(
                 "unknown_name",
-                f"unknown name {node.id!r}"
-                + (f" (available: {avail})" if avail
-                   else " (environment is empty, no names available)"))
+                f"unknown name {node.id!r} (available: {avail})")
         if isinstance(node, ast.BinOp):
             op_t = type(node.op)
             if op_t not in _BIN_OPS:

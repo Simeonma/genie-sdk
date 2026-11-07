@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "genie-protocol"
-version = "2.0.0b3"
+version = "2.0.0b4"
 description = "GENIE wire-format protocol layer - SimConfig models, expression evaluator, resolver, estimator (single source shared by SDK client, gateway and compute kernel)"
 requires-python = ">=3.10"
 dependencies = [
@@ -19,6 +19,9 @@ dependencies = [
     #   (time/freq = 'all', index = 'both') + down_sample moved from
     #   _MonitorMixin down to TimeMonSpec (freq/index carrying it = 422 at
     #   validation).
+    # 2.0.0b4 (released 2026-11-07): Q13 — built-in constants pi / c0 / eps0 /
+    #   mu0 in the expression dialect (a parameter of the same name wins); the
+    #   expression-slot entry itself lives in the SDK's model layer (Q13).
     "pydantic>=2,<3",
 ]
 license = "Apache-2.0"
