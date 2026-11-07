@@ -290,15 +290,16 @@ class F:
 
     # -- material verbs (implementation lives in core/material, zero terminal lines)------------
 
-    def fit_nk(self, wl, n, k, fit_range=(400e-9, 800e-9), n_drude=0,
-               n_lorentz=2, maxfev=5000):
+    def fit_nk(self, wl, n, k, fit_range=(400e-9, 800e-9), tolerance=0.05,
+               max_poles=8, n_drude=0):
         """**Single-component** nk → fitted numeric values (pure scalars,
         pure numbers; a six-key dict without node — the sole
         material-node factory is ``f.assemble_nk``; iso also goes through
-        assembly)."""
+        assembly). Fitting is tolerance-driven: the pole count is chosen
+        to meet ``tolerance`` within ``max_poles`` (no manual pole count)."""
         return core_material.fit_nk(wl, n, k, fit_range=fit_range,
-                                     n_drude=n_drude, n_lorentz=n_lorentz,
-                                     maxfev=maxfev)
+                                    tolerance=tolerance, max_poles=max_poles,
+                                    n_drude=n_drude)
 
     def assemble_nk(self, fits, name=None):
         """Per-component fit_nk results → a single material node (diagonal

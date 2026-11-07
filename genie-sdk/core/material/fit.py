@@ -244,7 +244,7 @@ def fit_range_bounds(fit_range):
     return lo, hi
 
 
-def scalar_result(fit, w, n_data, k_data, extra=None):
+def scalar_result(fit, w, n_data, k_data, *, passive, coverage):
     """Single-component result assembly (**numeric only** — a six-key
     dict, no material_node / name; the only material-node factory is
     :func:`assemble_nk`). The five quality scalars are computed on
@@ -274,25 +274,25 @@ def scalar_result(fit, w, n_data, k_data, extra=None):
         "max_abs_err_n": float(np.max(np.abs(n_fit - n_data))),
         "max_abs_err_k": float(np.max(np.abs(k_fit - k_data))),
     }
-    if extra:                                   # adaptive mode only (shape locked otherwise)
-        quality.update(extra)
-        if fit.target_met is False:
-            warnings_out.append(
-                f"tolerance not met: best max(rmse_n, rmse_k) = "
-                f"{fit.error:.4g} with {fit.poles_tried} Lorentz pole(s); "
-                f"raise max_poles, widen fit_range, or accept this fit "
-                f"knowing the residual")
-        if extra.get("passive") is False:
-            warnings_out.append(
-                "the fitted dispersion is NOT passive in the window "
-                "(imag(eps) < 0 somewhere) — a time-domain run would see "
-                "gain; re-fit with a different pole count or window")
-        cov = extra.get("coverage")
-        if isinstance(cov, float) and cov < 1.0:
-            warnings_out.append(
-                f"fit_range used {cov:.0%} of the supplied data; the fit is "
-                f"only meaningful inside that window — simulated bands "
-                f"outside it are unvalidated")
+    quality["passive"] = bool(passive)
+    quality["coverage"] = float(coverage)
+
+    if fit.target_met is False:
+        warnings_out.append(
+            f"tolerance not met: best max(rmse_n, rmse_k) = "
+            f"{fit.error:.4g} with {len(poles)} Lorentz pole(s); "
+            f"raise max_poles, widen fit_range, or accept this fit "
+            f"knowing the residual")
+    if not passive:
+        warnings_out.append(
+            "the fitted dispersion is NOT passive in the window "
+            "(imag(eps) < 0 somewhere) — a time-domain run would see "
+            "gain; re-fit with a different pole count or window")
+    if coverage < 1.0:
+        warnings_out.append(
+            f"fit_range used {coverage:.0%} of the supplied data; the fit is "
+            f"only meaningful inside that window — simulated bands "
+            f"outside it are unvalidated")
     return {
         "converged": bool(fit.converged),
         "eps_inf": float(fit.eps_inf),
@@ -317,7 +317,7 @@ def fit_error(fit, wavelengths, n, k):
 
 
 def fit_adaptive(wavelengths, n, k, *, tolerance, max_poles=8, n_drude=0,
-                 start_poles=2, maxfev=5000):
+                 start_poles=0, maxfev=5000):
     """Fit with the **pole count driven by a residual target**.
 
     Starts at ``start_poles`` Lorentz poles and adds one at a time until
@@ -335,9 +335,9 @@ def fit_adaptive(wavelengths, n, k, *, tolerance, max_poles=8, n_drude=0,
         raise ValueError(
             f"tolerance must be > 0, got {tolerance!r} — it is an absolute "
             f"bound on max(rmse_n, rmse_k)")
-    if int(max_poles) < 1:
-        raise ValueError(f"max_poles must be >= 1, got {max_poles!r}")
-    start = max(1, int(start_poles))
+    if int(max_poles) < 0:
+        raise ValueError(f"max_poles must be >= 0, got {max_poles!r}")
+    start = max(0, int(start_poles))
     best = None
     for n_pol in range(start, int(max_poles) + 1):
         fit = fit_drude_lorentz(wavelengths, n, k, n_drude=n_drude,

@@ -444,8 +444,8 @@ def assemble_nk(fits, name=None):
 # Public entry points
 # ═══════════════════════════════════════════════════════════════════════════
 
-def fit_nk(wl, n, k, fit_range=(400e-9, 800e-9), n_drude=0, n_lorentz=2,
-           maxfev=5000, tolerance=None, max_poles=8):
+def fit_nk(wl, n, k, fit_range=(400e-9, 800e-9), tolerance=0.05,
+           max_poles=8, n_drude=0):
     """Fit **one scalar n-k component** to a Drude-Lorentz pole model.
 
     One component is fitted per call and **only numbers come out** —
@@ -460,20 +460,18 @@ def fit_nk(wl, n, k, fit_range=(400e-9, 800e-9), n_drude=0, n_lorentz=2,
     fit_range : tuple[float, float]
         Fit window [m] (lo < hi); the data is masked to the window
         first, and fewer than 3 points inside raises.
-    n_drude / n_lorentz : int
-        Number of Drude / Lorentz poles (defaults 0 + 2). Ignored for the
-        Lorentz count when ``tolerance`` is given (adaptive mode).
-    maxfev : int
-        Maximum function evaluations for scipy ``curve_fit``.
-    tolerance : float | None
-        **Adaptive mode**: an absolute bound on ``max(rmse_n, rmse_k)`` —
-        the fitter starts at 2 Lorentz poles and adds one at a time until
-        the bound is met or ``max_poles`` is reached. ``None`` (default)
-        keeps the historical fixed-count behaviour byte-for-byte.
+    tolerance : float
+        Absolute bound on ``max(rmse_n, rmse_k)``. The fitter starts with
+        **no Lorentz pole** (a dispersionless medium needs none) and adds
+        one at a time until the bound is met or ``max_poles`` is reached.
+        Default 0.05 — tight enough that a metal in its window passes.
     max_poles : int
-        Pole budget in adaptive mode (default 8). A metal needs 2, a band
-        edge needs 6–8 — this is the knob that replaces guessing
-        ``n_lorentz``.
+        Lorentz pole budget (default 8). A metal needs 2, a band edge
+        needs 6–8; hitting the budget short of ``tolerance`` lands in
+        ``warnings``, never silent.
+    n_drude : int
+        Fixed Drude count (default 0) — a Drude term is a **model choice**
+        (free carriers), not something a tolerance can invent.
 
     Returns
     -------
@@ -482,9 +480,8 @@ def fit_nk(wl, n, k, fit_range=(400e-9, 800e-9), n_drude=0, n_lorentz=2,
         always exactly this shape. ``poles`` are wire-shaped dicts
         (``assemble_nk`` consumes them directly); ``quality`` holds
         five scalars (``n_points`` / ``rmse_n`` / ``rmse_k`` /
-        ``max_abs_err_n`` / ``max_abs_err_k``) — **adaptive mode adds two**
-        (``passive`` / ``coverage``); fixed-count mode keeps the locked
-        five-key shape. A non-converged fit
+        ``max_abs_err_n`` / ``max_abs_err_k`` / ``passive`` / ``coverage``)
+        — one shape, always. A non-converged fit
         still returns — ``converged=False`` plus tuning advice in
         ``warnings``.
 
@@ -534,21 +531,13 @@ def fit_nk(wl, n, k, fit_range=(400e-9, 800e-9), n_drude=0, n_lorentz=2,
                 f"rows; JSON null becomes NaN here) or use library "
                 f"data via f.load_nk; non-finite values cannot be "
                 f"fitted")
-    if tolerance is None:
-        fit = fit_drude_lorentz(wl[mask], n[mask], k[mask],
-                                n_drude=n_drude, n_lorentz=n_lorentz,
-                                maxfev=maxfev)
-        return scalar_result(fit, wl[mask], n[mask], k[mask])
     fit = fit_adaptive(wl[mask], n[mask], k[mask], tolerance=tolerance,
-                       max_poles=max_poles, n_drude=n_drude,
-                       maxfev=maxfev)
+                       max_poles=max_poles, n_drude=n_drude)
     omega_win = 2.0 * np.pi * C0_SI / wl[mask]
-    return scalar_result(
-        fit, wl[mask], n[mask], k[mask],
-        extra={"passive": passivity_report(fit.eps_inf, fit.poles, omega_win),
-               "coverage": coverage_fraction(lo, hi, wl),
-               "poles_tried": fit.poles_tried,
-               "residual": fit.error})
+    return scalar_result(fit, wl[mask], n[mask], k[mask],
+                         passive=passivity_report(fit.eps_inf, fit.poles,
+                                                  omega_win),
+                         coverage=coverage_fraction(lo, hi, wl))
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -564,22 +553,21 @@ _COMPONENT_AXES = {"o": ("xx", "yy"), "e": ("zz",),
 
 
 def _fit_convenience(wl, n, k):
-    """Convenience-layer window rule: try the **default window** first
-    (400–800nm ∩ data domain — metals / ordinary dielectrics carry
-    enough information inside this window and fit best there); only
-    when curve_fit **does not converge** is a **single full-range
-    retry on
-    the whole data domain** used (for weakly dispersive media with
-    sparse in-window points, e.g. ZnO-e tabulated data with only 10
-    points in the window; the full range carries complete dispersion
-    information and always converges, while in-window accuracy stays
-    no worse than the full-range rmse bound). The criterion = the
-    curve_fit convergence flag; no magic thresholds."""
+    """Convenience-layer window rule: fit the **default window** first
+    (400–800nm ∩ data domain — metals / ordinary dielectrics carry enough
+    information there and fit best); if the tolerance is **not met**,
+    retry once over the **whole data domain** and keep the better of the
+    two (for weakly dispersive media with sparse in-window points, e.g.
+    ZnO-e with only 10 points inside the window: the full range carries
+    the complete dispersion and meets the tolerance, while in-window
+    accuracy is still bounded by the same target). Criterion = the
+    tolerance, not a convergence flag — one rule, same as the primitive
+    layer."""
     lo = max(400e-9, float(np.min(wl)))
     hi = min(800e-9, float(np.max(wl)))
     if lo < hi:
         fit = fit_nk(wl, n, k, fit_range=(lo, hi))
-        if fit["converged"]:
+        if "tolerance not met" not in " ".join(fit["warnings"]):
             return fit
     return fit_nk(wl, n, k,
                   fit_range=(float(np.min(wl)), float(np.max(wl))))
@@ -590,9 +578,9 @@ def mat_from_nk(name):
     per-component, per-axis ``fit_nk`` → ``assemble_nk``).
 
     A zero-knob convenience layer: the default fit parameters
-    (400–800nm / 0+2 poles) are not adjustable and quality is not
-    visible — for control, use the primitive layer (``load_nk`` /
-    ``fit_nk`` / ``assemble_nk``). **Does not touch the model** (adding
+    (400–800nm / tolerance 0.05 / ≤8 poles) are not adjustable and the
+    per-component quality is not surfaced — for control use the primitive
+    layer (``load_nk`` / ``fit_nk`` / ``assemble_nk``). **Does not touch the model** (adding
     to a model is one line, ``f.mat.add_lorentz(node)``); the node
     name defaults to the library name. An iso material is fitted
     once and mounted on all three axes; compound materials are
