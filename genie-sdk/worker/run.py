@@ -35,7 +35,7 @@ from genie.core.model import Model
 from genie.core.model.draft import digest
 from genie.net import TERMINAL_OK, GenieJobError
 
-from . import chain, post, sweep
+from . import chain, plot, post, sweep
 from .chain import (ROW_CANCELED, ROW_DONE, ROW_FAILED, ROW_POST_FAILED,
                     ROW_SUBMIT_ONE)
 from .post import UNSET, resolve_result
@@ -188,6 +188,36 @@ class F:
         domain's single group taken directly, multiple groups named
         explicitly)."""
         return self._read_monitor("i", name)
+
+    # -- the two result-view verbs (Q4.5 public read verbs; emit structured
+    # out events for the GUI, zero terminal lines). -------------------------
+
+    def result_meta(self):
+        """Current result's structure list → emits ``out(kind="meta")``
+        and returns the same dict (script / agent use)."""
+        data = self.results()
+        try:
+            payload = plot.build_meta(data)
+            self._env.emit(ipc.out("result meta",
+                                   kind=ipc.OUT_KIND_META, data=payload))
+        finally:
+            data.close()
+        return payload
+
+    def visualize(self, mon, field=None, axes=None, slices=None):
+        """One result-view series → emits ``out(kind="series")`` and returns
+        the same dict. ``axes`` = two of x/y/z for index 2D grids;
+        ``slices`` = pin the remaining axis at an index (``{axis: i}``).
+        Full arrays — no downsampling (station decision 2026-11-06)."""
+        data = self.results()
+        try:
+            payload = plot.build_series(data, mon, field=field,
+                                        axes=axes, slices=slices)
+            self._env.emit(ipc.out("result series",
+                                   kind=ipc.OUT_KIND_SERIES, data=payload))
+        finally:
+            data.close()
+        return payload
 
     def _read_monitor(self, domain, name):
         env = self._env

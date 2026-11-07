@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GENIE — GPU-Empowered Nanophotonic Intelligent Engine · powered by Genie FDTD</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <!-- 内联 SVG 星芒 favicon（与顶栏 logo 同形同 accent 色，无外部文件依赖；R18 升级为
+       logo 同款两档渐变 #1F62B0 → #4E8FD9 —— 用 data: URI 内联，tab 直接显示品牌图标，
+       也不引入 /favicon.ico 的 404。 -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='24' y2='24'%3E%3Cstop offset='0' stop-color='%231F62B0'/%3E%3Cstop offset='1' stop-color='%234E8FD9'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M12 1 14.2 9.8 23 12 14.2 14.2 12 23 9.8 14.2 1 12 9.8 9.8z' fill='url(%23g)'/%3E%3C/svg%3E">
+</head>
+<body>
+  <!-- 登录闸（2026-10-21 站长裁决：未登录什么都不给做）。
+       未登录时铺满整窗、挡住工作区；登录框浮在它上面。数据侧同一道闸在
+       server.py 的 require_signin 中间件里（未带 X-API-Key 一律 401）。 -->
+  <div id="auth-gate" class="auth-gate hidden" role="dialog" aria-modal="true"
+       aria-label="Sign in required">
+    <div class="auth-gate-inner">
+      <div class="auth-gate-brand">GENIE<span>FDTD</span></div>
+      <div class="auth-gate-note">Sign in to open the studio</div>
+    </div>
+  </div>
+  <datalist id="mat-names"></datalist>
+
+  <!-- 动作钮停放区（main-layout 之外）：dock render 清场时「当前头部
+       用不到」的收养钮暂存于此（移动模式 3D 激活时 download-py 等），
+       面板切回时再被头部收养——boot 按 id 接线永不悬空 -->
+  <div id="dock-action-parking" hidden></div>
+
+
+  <!-- ── Top Bar ── -->
+  <header id="topbar">
+    <div class="logo">
+      <!-- logo 星芒渐变 = --accent 家族同色相两档（#1F62B0 → 亮档 #4E8FD9）；
+           勿再引入外族亮蓝（历史 GitHub 系亮蓝已清零） -->
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><defs><linearGradient id="lg" x1="0" y1="0" x2="24" y2="24"><stop offset="0" stop-color="#1F62B0"/><stop offset="1" stop-color="#4E8FD9"/></linearGradient></defs><path d="M12 1 L14.2 9.8 L23 12 L14.2 14.2 L12 23 L9.8 14.2 L1 12 L9.8 9.8 Z" fill="url(#lg)"/><circle cx="19.5" cy="4.5" r="1.3" fill="#4E8FD9" opacity="0.8"/><circle cx="4" cy="19" r="0.9" fill="#1F62B0" opacity="0.6"/></svg>
+      <span>GENIE</span><span class="vbadge">FDTD</span>
+      <span class="logo-full">GPU-Empowered Nanophotonic Intelligent Engine</span>
+    </div>
+      <div class="topbar-actions">
+      <!-- status-badge 已删（M1）：静态「未连接」纯误导——登录态由
+           #login-toggle 按钮回显（=用户名）。 -->
+      <a href="/manual/" target="_blank" class="helplink">手册</a>
+      <button id="login-toggle" class="hdr-btn" aria-haspopup="dialog" aria-expanded="false">Connect</button>
+    </div>
+  </header>
+
+  <nav id="tab-bar" role="tablist" aria-label="功能区">
+    <button class="app-tab" id="tab-file" type="button" role="tab" data-page="file"
+      aria-selected="false" aria-controls="page-file" tabindex="-1">File</button>
+    <button class="app-tab" id="tab-view" type="button" role="tab" data-page="view"
+      aria-selected="false" aria-controls="page-view" tabindex="-1">View</button>
+    <button class="app-tab" id="tab-design" type="button" role="tab" data-page="design"
+      aria-selected="true" aria-controls="page-design" tabindex="0">Design</button>
+    <button class="app-tab" id="tab-fdtd" type="button" role="tab" data-page="fdtd"
+      aria-selected="false" aria-controls="page-fdtd" tabindex="-1">FDTD</button>
+    <!-- Agent（站长裁决 2026-10-19）：与 FDTD 同级——页签行右端，非页面页签
+         故独立类 .tab-action（不入 TABS 激活逻辑） -->
+    <button id="agent-open-btn" class="tab-action" type="button" title="Agent 对话面板">
+      <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor"
+        stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M8 2 L9.6 6.4 L14 8 L9.6 9.6 L8 14 L6.4 9.6 L2 8 L6.4 6.4 Z"/>
+      </svg><span>Agent</span>
+    </button>
+  </nav>
+
+  <!-- 连接设置对话框（由 modules/boot.js connDialog 动态构建；
+       M1 账号密码登录：本地代理上游 /api/auth/login 换 token 存
+       localStorage（genie_v2_api_key），提交经同一收敛链） -->
+
+  <!-- 功能区页签（2026-10-17 站长裁决：对齐 Lumerical 2025 R2 的
+       FILE / VIEW / DESIGN / FDTD 四页签，独立一行；ribbon 随页签切换，
+       页内每组单行、内容顶对齐、组名钉底——单行组不再"掉到第二行"） -->
+
+  <!-- 仿真要素横条（2026-08-31bk：站长裁决——域/网格/材料/几何是仿真
+       重要信息, 置于顶部横条而非左栏上方） -->
+  <div id="workspace-bar">
+      <!-- ══ FILE：项目 I/O（原 File 框整组迁入；Lumerical FILE=Project） ══ -->
+      <div class="obj-toolbar tb-page" id="page-file" role="tabpanel"
+           aria-labelledby="tab-file" hidden>
+        <div class="tb-box" id="tb-file-box">
+          <span class="tb-box-title">Project</span>
+          <div class="tb-box-btns">
+            <button id="file-open-btn" class="tb-btn" type="button" data-preview="file_open"
+              title="打开仿真文件 (.gensim) — 校验配置 + 工作区快照整体恢复">
+              <span>Open</span></button>
+            <button id="file-save-btn" class="tb-btn" type="button" data-preview="file_save"
+              title="存储仿真文件 (.gensim = simconfig.json + 工作区快照)">
+              <span>Save</span></button>
+            <button id="file-script-btn" class="tb-btn" type="button" data-preview="file_script"
+              title="导出当前模型为 Python 脚本 (.py) — 与表单等价、可独立运行">
+              <span>Export .py</span></button>
+            <button id="file-workspace-btn" class="tb-btn" type="button" data-preview="file_workspace"
+              title="选择工作区 — 之后的结果/脚本/自动存档都落在这个文件夹">
+              <span>Workspace…</span></button>
+            <span id="file-workspace-path" class="file-ws-path" title=""></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ══ VIEW：脸的摆法 + 3D 显示开关（原 Layout 组 + 场景工具钮镜像）══ -->
+      <div class="obj-toolbar tb-page" id="page-view" role="tabpanel"
+           aria-labelledby="tab-view" hidden>
+        <div class="tb-box" id="tb-layout-box">
+          <span class="tb-box-title">Layout</span>
+          <div class="tb-box-btns">
+            <div class="tb-menu-wrap">
+              <button id="dock-layout-btn" class="tb-btn tb-menu-btn" type="button" data-preview="layout"
+                aria-haspopup="menu" aria-expanded="false" aria-label="工作台布局">
+                <span id="dock-layout-label">Default</span>
+              </button>
+              <div id="dock-layout-menu" class="tb-menu hidden" role="menu"
+                aria-label="布局预设"></div>
+            </div>
+          </div>
+        </div>
+        <div class="tb-box" id="tb-view-box">
+          <span class="tb-box-title">Scene</span>
+          <div class="tb-box-btns" id="tb-view-btns"></div>
+        </div>
+      </div>
+
+      <!-- ══ DESIGN：Material + Structures（Lumerical DESIGN=建模） ══ -->
+      <div class="obj-toolbar tb-page" id="page-design" role="tabpanel"
+           aria-labelledby="tab-design">
+        <div class="tb-box" id="tb-mat-box">
+          <span class="tb-box-title">Materials</span>
+          <div class="tb-box-btns" id="tb-mat-btns"></div>
+        </div>
+        <div class="tb-box" id="tb-geo-box">
+          <span class="tb-box-title">Structures</span>
+          <div class="tb-box-btns" id="tb-geo-btns"></div>
+        </div>
+      </div>
+
+      <!-- ══ FDTD：域/网格 + 源 + 监视器 + Run（Lumerical FDTD=仿真侧） ══ -->
+      <div class="obj-toolbar tb-page" id="page-fdtd" role="tabpanel"
+           aria-labelledby="tab-fdtd" hidden>
+        <div class="tb-box" id="tb-domain-box">
+          <span class="tb-box-title">Domain &amp; Mesh</span>
+          <div class="tb-box-btns">
+            <button id="domain-edit-btn" class="tb-btn" type="button" data-preview="domain"
+              title="编辑仿真域（范围 / 总时长 / CFL / 边界）">Domain</button>
+            <button id="mesh-edit-btn" class="tb-btn" type="button" data-preview="mesh"
+              title="编辑网格（dx / dy / dz）">Mesh</button>
+          </div>
+        </div>
+        <div class="tb-box" id="tb-src-box">
+          <span class="tb-box-title">Sources</span>
+          <div class="tb-box-btns" id="tb-src-btns"></div>
+        </div>
+        <div class="tb-box" id="tb-mon-box">
+          <span class="tb-box-title">Monitors</span>
+          <div class="tb-box-btns" id="tb-mon-btns"></div>
+        </div>
+        <div class="tb-box tb-run-box" id="tb-run-box">
+          <span class="tb-box-title">Simulation</span>
+          <div id="bar-run-slot"><div id="run-mount"></div></div>
+        </div>
+      </div>
+
+      <!-- Ribbon 右端遥测条（2026-10-21）：模型的"仪器读数"——域尺寸 / 对象数 /
+           材料数。只读信息，不是按钮；放在 ribbon 右端把那半屏留白读作"留白"
+           而不是"没做完"。窄窗（<1180px）隐藏，让位给组内容。 -->
+      <div id="ribbon-meta" class="ribbon-meta" aria-hidden="true"></div>
+  </div>
+
+  <!-- ── 工作台（树 / 检查器 / scene / 代码）── -->
+  <div id="main-layout">
+
+    <!-- 结构｜属性 工作面（2026-10 站长裁决：Tree 与 Inspector 恒左右
+         同现，结构上就是一个面板——dock 只收养 #struct-panel 一个原件；
+         内部 42:58 分割，#struct-split 拖拽调比例，存 genie.struct.ratio） -->
+    <div id="struct-panel">
+      <aside id="tree-panel">
+        <!-- 场景编辑器 v3 P1（2026-09-scene-editor 提案 D1/D2）：
+             工具栏=添加入口(Domain/Mesh 单例=编辑)；树=实例；检查器=选中对象 -->
+        <div id="obj-tree"></div>
+      </aside>
+      <div id="struct-split" aria-orientation="vertical"></div>
+      <main id="config-panel">
+        <div id="config-content"></div>
+      </main>
+    </div>
+
+    <!-- Col 3: 3D 场景（2026-10 站长裁决：Plot 升格为同级 Visualize 模块，
+         场景区回归纯 3D——view-tabbar/plot-view 已迁 #visualize-panel） -->
+    <div id="scene-panel">
+      <div id="scene-stage">
+        <div id="three-container"></div>
+      <!-- B3/B4 工作区文件面板（col3 标签卡「文件」）：脚本/savefig 图片/
+           数据文件统一列、看、传、下。走 view-tabbar 现成 tab 框架；
+           .py 编辑仍归 col4 脚本工作流，这里只管文件。 -->
+      <div id="scene-tools" class="scene-tools">
+        <!-- 分组（2026-10-21）：视角 → 图层 → 分析 → 输出。分隔线 1px。 -->
+        <button class="tool-btn" id="btn-fitcam" title="复位视角" aria-label="复位视角" data-preview="view_fit"></button>
+        <button class="tool-btn" id="btn-proj" title="透视 / 正交" aria-label="透视 / 正交" aria-pressed="false" data-preview="view_proj"></button>
+        <div class="tool-sep" aria-hidden="true"></div>
+        <button class="tool-btn active" id="btn-wire" title="结构线框" aria-label="结构线框" aria-pressed="true" data-preview="view_wire"></button>
+        <button class="tool-btn active" id="btn-ruler" title="边框坐标" aria-label="边框坐标" aria-pressed="true" data-preview="view_ruler"></button>
+        <button class="tool-btn" id="btn-xray" title="X 光（结构半透明）" aria-label="X 光" aria-pressed="false" data-preview="view_xray"></button>
+        <button class="tool-btn" id="btn-grid" title="参考网格" aria-label="参考网格" aria-pressed="false" data-preview="view_grid"></button>
+        <button class="tool-btn" id="btn-labels" title="对象标签" aria-label="对象标签" aria-pressed="false" data-preview="view_labels"></button>
+        <div class="tool-sep" aria-hidden="true"></div>
+        <button class="tool-btn" id="btn-sec" title="剖面切片" aria-label="剖面切片" aria-pressed="false" data-preview="view_section"></button>
+        <div class="tool-sep" aria-hidden="true"></div>
+        <button class="tool-btn" id="btn-shot" title="截图" aria-label="截图" data-preview="view_shot"></button>
+      </div>
+      <!-- 剖面控制板：贴浮条左侧弹出（top 由 JS 对齐到"剖面"按钮） -->
+      <div id="sec-panel" class="sec-panel hidden" role="group" aria-label="剖面控制">
+        <div class="sec-axes">
+          <button type="button" class="sec-ax" data-axis="x" aria-pressed="false">X</button>
+          <button type="button" class="sec-ax" data-axis="y" aria-pressed="false">Y</button>
+          <button type="button" class="sec-ax is-on" data-axis="z" aria-pressed="true">Z</button>
+        </div>
+        <input type="range" id="sec-pos" class="sec-pos" min="0" max="100" value="50"
+               aria-label="剖面位置">
+      </div>
+      </div><!-- /scene-stage -->
+      <div id="term-dock">
+        <!-- 内嵌代码卡：与脚本面板 #code-wrap 同构（白纸面板 + 卡面代码） -->
+        <div id="term-card" class="code-card">
+          <div id="term-out" aria-live="polite"></div>
+          <div id="term-in-row">
+            <span id="term-prompt" aria-hidden="true">❯</span>
+            <textarea id="term-in" rows="2" spellcheck="false" autocomplete="off"
+              aria-label="Terminal 指令输入（Python，直接操作会话 f）"></textarea>
+          </div>
+        </div>
+      </div><!-- /term-dock -->
+    </div><!-- /scene-panel -->
+
+    <!-- Col 3b: Visualize 模块（2026-10 站长裁决：Plot 与 3D/文件同级）。
+         每个 Plot = 本模块一个页签；页签条右端 chip = 作业摘要/流水进度。
+         无 Plot 时显示空态引导（树选监视器 → 检查器「新建 Plot」）。 -->
+    <div id="visualize-panel">
+      <div id="view-tabbar">
+        <div id="view-tabs" role="tablist"></div>
+        <div id="result-chip" class="hidden"></div>
+      </div>
+      <div id="viz-empty" class="viz-empty empty-state">
+        <span class="empty-ic" data-icon="results" aria-hidden="true"></span>
+        <div class="empty-title">还没有 Plot</div>
+        <div class="empty-hint">左树选一个监视器 → 检查器里「新建 Plot」；每张 Plot 会
+          成为本模块的一个页签。</div>
+      </div>
+      <div id="plot-view" class="hidden"></div>
+    </div>
+
+    <!-- Col 3c: 工作区文件（dock 面板，默认与 3D 叠成多标签） -->
+      <div id="files-view" class="hidden">
+        <div class="files-head">
+          <button id="files-upload" class="mini" type="button"
+            title="上传文件到工作区（.py/.png/.jpg/.npz/.csv/.h5/.json/.txt；文本 ≤256KiB，数据 ≤512MiB）">上传…</button>
+          <input id="files-file" type="file" class="hidden" tabindex="-1" aria-hidden="true">
+          <button id="files-refresh" class="mini" type="button" title="刷新列表">刷新</button>
+          <span class="files-hint">图片点行内联预览；数据文件只下载不预览。</span>
+        </div>
+        <div id="files-table-wrap">
+          <table id="files-table">
+            <thead>
+              <tr><th class="col-kind" aria-label="类型"></th><th>名称</th><th>大小</th><th class="col-act" aria-label="下载"></th><th class="col-act" aria-label="删除"></th></tr>
+            </thead>
+            <tbody id="files-tbody"></tbody>
+          </table>
+          <div id="files-empty" class="dim empty-state">
+            <span class="empty-ic" data-icon="upload" aria-hidden="true"></span>
+            <div class="empty-title">工作区暂无文件</div>
+            <div class="empty-hint">上传文件，或跑一次脚本产出（savefig / 数据落盘）后出现在这里。</div>
+          </div>
+        </div>
+        <div id="files-preview" class="files-preview hidden"></div>
+      </div>
+
+    <!-- Col 4: Python SDK 代码（唯一视图；2026-10 站长裁决：JSON 视图
+         整体移除——线格式是生成物不是工作面） -->
+    <!-- 面板动作钮暂存区（dock 统一头收养；原件全局唯一） -->
+    <div id="panel-actions-staging" hidden>
+      <button id="run-py" class="mini icon-btn primary" type="button" data-icon="run"
+        title="Run — executes in the Terminal session (f.run submits)"
+        aria-label="Run script"></button>
+      <!-- load-py / download-py 归脚本面板头（2026-10 站长裁决：语义
+           针对 script，不随文件 I/O 上收）；import-cfg/export-cfg/
+           导出会话记录功能已删（2026-10 站长裁决：不重要） -->
+      <button id="load-py" class="mini icon-btn" type="button" data-icon="upload"
+        title="Open a .py from your computer" aria-label="Open script file"></button>
+      <button id="download-py" class="mini icon-btn" type="button" data-icon="download"
+        title="Download .py" aria-label="Download script"></button>
+      <button id="term-stop" class="mini" type="button" data-icon="stop"
+        title="停止当前执行" aria-label="停止当前执行" hidden></button>
+      <!-- R31：清理重启（进程级兜底）——停止投不进（死循环/无控制台）
+           时杀 worker 重起：只清执行态，模型与终端历史保留 -->
+      <button id="term-reset" class="mini" type="button" data-icon="refresh"
+        title="清理重启会话（停止无效时使用；模型与历史保留）"
+        aria-label="清理重启会话" hidden></button>
+    </div>
+    <div id="json-panel">
+      <div id="py-view">
+        <!-- 代码面：textarea 可编辑（行号 gutter 见 boot 接线） -->
+        <div id="pycode" class="pycode" aria-label="Python SDK code (editable)" role="region">
+          <div id="code-wrap" class="code-card">
+            <textarea id="code-editor" class="code-editor" spellcheck="false"
+              aria-label="Python SDK code (editable)"></textarea>
+          </div>
+        </div>
+      </div>
+      <!-- P3 对话面板（v1 遗留，已删除）：Agent 入口只明说「随宿主模式」，
+           不再保留一套无接线的死 UI。 -->
+
+    </div>
+  </div><!-- /main-layout -->
+  <!-- Terminal（terminal 战役，2026-10-10 站长裁决）：主区下半 = 会话
+       命令面。三条命令腿同汇 /api/exec：①输入行 ②脚本「运行」整体 exec
+       ③工具栏 Run = f.run()。输出流唯一在这里滚；cfg 快照驱动 表单/树/3D
+       刷新（SDK/agent 与 terminal 同一执行层）。宽度=3D 中心列（站长裁决：
+       terminal 不做全宽，与场景区同宽）。 -->
+  <!-- v2 显示模式（2026-10 定案）：DOM 与 v1 逐字节同构——登录框/工具条/
+       聊天面板等编辑器官全部保留在页面上，但 app.js 不给它们接线；
+       只有显示链路（脚本→会话cfg→树/表单/3D/JSON）是活的。 -->
+  <script src="/static/vendor/three.min.js"></script>
+  <script src="/static/vendor/OrbitControls.js"></script>
+  <script src="/static/icons.js"></script>
+  <script src="/static/views/previews.js"></script>
+  <script src="/static/views/scene_palette.js"></script>
+  <script src="/static/views/scene3d.js"></script>
+  <script src="/static/views/scene2d.js"></script>
+  <script src="/static/views/form.js"></script>
+  <!-- G5 拆分（2026-10-14）：app.js → modules/*（经典 script 按序加载，
+       顺序即依赖序：状态 → 视图驱动 → 通道 → 面板 → 终端 → 结果 → 接线） -->
+  <script src="/static/modules/util.js"></script>
+  <script src="/static/modules/app.js"></script>
+  <script src="/static/modules/api.js"></script>
+  <script src="/static/modules/state.js"></script>
+  <script src="/static/modules/tree.js"></script>
+  <script src="/static/modules/inspector.js"></script>
+  <script src="/static/modules/sweep.js"></script>
+  <script src="/static/modules/scene.js"></script>
+  <script src="/static/modules/edit.js"></script>
+  <script src="/static/modules/toolbar.js"></script>
+  <script src="/static/modules/script.js"></script>
+  <script src="/static/modules/workspace.js"></script>
+  <script src="/static/modules/term.js"></script>
+  <script src="/static/modules/result.js"></script>
+  <script src="/static/modules/dock.js"></script>
+  <script src="/static/modules/boot.js"></script>
+  </body>
+</html>

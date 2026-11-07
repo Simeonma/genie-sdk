@@ -15,7 +15,8 @@ from __future__ import annotations
 __all__ = [
     # words
     "OP_EXEC", "EV_READY", "EV_OUT", "EV_CFG", "EV_DONE",
-    "OUT_KIND_PLOT", "OUT_KIND_ERROR", "OUT_KIND_PROGRESS", "OUT_KINDS",
+    "OUT_KIND_PLOT", "OUT_KIND_ERROR", "OUT_KIND_PROGRESS",
+    "OUT_KIND_META", "OUT_KIND_SERIES", "OUT_KINDS",
     # constructors (one per message)
     "exec", "ready", "out", "cfg", "done",
 ]
@@ -37,7 +38,17 @@ OUT_KIND_ERROR = "error"     # red error line; the text is the payload
 # progress is optional (display only, never decides terminal state);
 # a single run is a batch of length 1
 OUT_KIND_PROGRESS = "progress"
-OUT_KINDS = frozenset({OUT_KIND_PLOT, OUT_KIND_ERROR, OUT_KIND_PROGRESS})
+# Result-view structure list (emitter = f.result_meta; consumer = the GUI's
+# result panel / plot builder). Q4.5 public read verbs:
+# data = {ok, job_id, executed_steps, dt, grid_shape,
+#         monitors: [{name, domain, fields, axes: {axis: length}}]}
+OUT_KIND_META = "meta"
+# One result-view series (emitter = f.visualize; consumer = the GUI plot
+# canvas). Full arrays (no downsampling — station decision 2026-11-06):
+# data = {ok, mon, field, dim, x, y[, z], x_label[, y_label], peak, tag}
+OUT_KIND_SERIES = "series"
+OUT_KINDS = frozenset({OUT_KIND_PLOT, OUT_KIND_ERROR, OUT_KIND_PROGRESS,
+                       OUT_KIND_META, OUT_KIND_SERIES})
 
 
 # ── op (host → worker; built by session)──────────────────────────────
