@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "genie-sdk"
-version = "1.0.0a4"
+version = "1.0.0a5"
 description = "GENIE SDK v2 — build photonic FDTD simulations in Python, submit them to cloud GPUs, and keep results plus custom post_analyze in one portable .gensim document; local Studio included"
 # PEP 639 SPDX form requires setuptools>=77; LICENSE ships with the repo and the wheel.
 license = "Apache-2.0"
