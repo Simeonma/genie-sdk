@@ -28,7 +28,7 @@ from genie import ipc
 from genie.core import archive
 from genie.core.model.draft import digest
 from genie.net import (TERMINAL_BAD, TERMINAL_OK, GenieConfigError)
-from genie_protocol.resolve import validate_for_ui
+from genie_protocol.resolve import resolve_parameters, validate_for_ui
 
 __all__ = ["submit", "wait", "as_completed", "cancel", "stage",
            "state_for"]
@@ -72,6 +72,15 @@ def _validate(cfgs) -> None:
             "run.precheck: " + "; ".join(
                 f"{e.get('loc') or 'cfg'}: {e.get('msg')}" for e in errs),
             detail=errs)
+
+
+def _resolve(cfgs):
+    """Promotion to what the engine gets: numeric slots holding an
+    expression string (``"L*2"``, Q13) are evaluated against the
+    parameters table here — one call to ``protocol.resolve``, the only
+    implementation. The document keeps the authored form (expressions +
+    table); the payload carries the numbers."""
+    return [resolve_parameters(cfg) for cfg in cfgs]
 
 
 def _payload(cfgs, n_gpu):
@@ -124,6 +133,7 @@ def submit(env, model, cfg_or_cfgs=None, *, n_gpu=None):
     own business."""
     single, cfgs = _normalize(model, cfg_or_cfgs)
     _validate(cfgs)
+    cfgs = _resolve(cfgs)                                # expression slots → numbers (Q13)
     ids = env.client().submit(_payload(cfgs, n_gpu))  # always batch form
     if not isinstance(ids, list):
         ids = [ids]
