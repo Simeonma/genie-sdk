@@ -890,14 +890,23 @@ class Scene3D {
             geo.applyMatrix4(m);
             geo.translate(-tx * hgt / 2, -ty * hgt / 2, -hgt / 2);
           }
-        } else {
-          geo.translate(0, 0, -hgt / 2);
         }
+        /* polygon_z 不补第二次平移：map 里已按 -hgt/2 居中（z ∈ [-h/2, +h/2]），
+         * 再平移一次会让整块下沉 hgt/2，看着孔没穿透平板，而 z_range 是对的。 */
         pos = { x: cx, y: cy, z: zc };
         break;
       }
       default:
         return null;
+    }
+    /* 表达式槽（Q13）：字段值可能是 "L*2" 这类还没解开的字符串，算出来是
+     * NaN。三维里画不出一个还没求值的尺寸——**不画**（标签仍在，检查器显示
+     * 原文），别把 NaN 顶点喂给 three 让整个场景的包围盒跟着坏掉。 */
+    geo.computeBoundingBox();
+    const bb = geo.boundingBox;
+    if (!bb || ![bb.min.x, bb.min.y, bb.min.z,
+                 bb.max.x, bb.max.y, bb.max.z].every(Number.isFinite)) {
+      return null;
     }
     /* 实体材质（2026-10-21）：MeshPhysical（无 envMap 时又贵又平）→ Standard +
      * 影棚环境贴图。DoubleSide 保留（几何的 face winding 不保证朝外，单面裁
