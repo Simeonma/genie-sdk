@@ -314,6 +314,8 @@
     const imw = window.prompt("虚部权重 imaginary_weight（默认 1.0；k 很小时可调大）：",
                               fitPref("imw", "1.0"));
     if (imw === null) return;
+    const passive = window.prompt("强制无源 make_passive?（y/N，默认 N = 只报告）", "N");
+    if (passive === null) return;
     fitRemember("win", (win || "").trim());
     fitRemember("poles", (poles || "").trim());
     fitRemember("imw", (imw || "").trim());
@@ -328,6 +330,9 @@
     }
     if (/^\s*\d+(?:\.\d+)?\s*$/.test(imw || "")) {
       parts.push("imaginary_weight=" + parseFloat(imw));
+    }
+    if (/^\s*y(?:es)?\s*$/i.test(passive || "")) {
+      parts.push("make_passive=True");
     }
     termExec("f.mat.add_lorentz(node=f.mat_from_nk(" + parts.join(", ") + "))");
   }

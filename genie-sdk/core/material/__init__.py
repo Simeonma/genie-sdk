@@ -479,7 +479,8 @@ class NKFit:
                 "n_fit": d.n, "k_fit": d.k}
 
 
-def fit_nk(wl, n, k, band=None, max_poles=10, imaginary_weight=1.0):
+def fit_nk(wl, n, k, band=None, max_poles=10, imaginary_weight=1.0,
+           make_passive=False):
     """Fit **one scalar n-k component** to a rational dispersion model.
 
     Three knobs, everything else automatic:
@@ -487,13 +488,14 @@ def fit_nk(wl, n, k, band=None, max_poles=10, imaginary_weight=1.0):
     - ``band`` — where you will simulate;
     - ``max_poles`` — the ceiling on the automatic order search (10 by
       default; one pole = one second-order section = one conjugate pair);
-    - ``imaginary_weight`` — weight on the imaginary residual (1.0 default).
+    - ``imaginary_weight`` — weight on the imaginary residual (1.0 default);
+    - ``make_passive`` — opt-in rejection of gain fits (default off = report).
 
     The order search starts at **0** (a constant model), grows only while the
     fixed internal tolerance (0.1, Lumerical's weighted-RMS yardstick) is
     unmet, and keeps the best RMS.  The model family is not a user choice:
     the fitter always fits the general rational form; Lorentz/Drude survive
-    only as wire-format shorthands.  Passivity is reported, never penalised.
+    only as wire-format shorthands.
 
     Parameters
     ----------
@@ -501,7 +503,9 @@ def fit_nk(wl, n, k, band=None, max_poles=10, imaginary_weight=1.0):
         Single-component data, SI [m, dimensionless, dimensionless].
     band : tuple[float, float] or None
         Fit window [m] (lo < hi). **Default = the whole data range** — the
-        fit never silently truncates. Fewer than 3 points inside raises.
+        fit never silently truncates.  The number of samples inside is the
+        caller's call (one sample fits a constant model); an empty window
+        raises.
     max_poles : int
         **Ceiling** for the order search. The search starts at order 0 and
         grows only while the tolerance is unmet, so this is an upper bound,
@@ -511,6 +515,11 @@ def fit_nk(wl, n, k, band=None, max_poles=10, imaginary_weight=1.0):
         Weight on the **imaginary** residual (Lumerical's "imaginary weight",
         default 1.0). When k is tiny the imaginary part of eps is tiny too;
         raising this makes its fit accuracy count proportionally more.
+    make_passive : bool
+        ``False`` (default) = report only: passivity lands in
+        ``quality['passive']`` plus a warning.  ``True`` = Lumerical's "make
+        fit passive": an order with gain > 1e-14 gets its error ×1e6 so the
+        search rejects it.
 
     Returns
     -------
@@ -523,8 +532,8 @@ def fit_nk(wl, n, k, band=None, max_poles=10, imaginary_weight=1.0):
     Raises
     ------
     ValueError
-        band reversed; unequal column lengths; fewer than 3 samples inside;
-        non-finite n/k inside the band (with a data-cleaning prescription).
+        band reversed; unequal column lengths; empty window; non-finite n/k
+        inside the band (with a data-cleaning prescription).
     """
     wl = np.asarray(wl, dtype=float)
     n = np.asarray(n, dtype=float)
@@ -554,11 +563,10 @@ def fit_nk(wl, n, k, band=None, max_poles=10, imaginary_weight=1.0):
             f"cause")
     mask = (wl >= lo) & (wl <= hi)
     n_in = int(mask.sum())
-    if n_in < 3:                                  # one pole pair needs (n-1)//2 >= 1
+    if n_in < 1:                                  # an empty window has nothing to fit
         raise ValueError(
-            f"Only {n_in} data points in band "
-            f"{lo * 1e9:.0f}-{hi * 1e9:.0f} nm — the one-pole minimum needs "
-            f"3; widen band or supply more data inside it")
+            f"band {lo * 1e9:.0f}-{hi * 1e9:.0f} nm contains no data points — "
+            f"widen the band; the amount of data inside is the caller's call")
     # Non-finite inside the window = an input-data problem: raise with
     # a **data-cleaning prescription** before fitting, distinct from
     # the tuning advice given when the iteration cap is hit (the two
@@ -578,7 +586,8 @@ def fit_nk(wl, n, k, band=None, max_poles=10, imaginary_weight=1.0):
                 f"data via f.load_nk; non-finite values cannot be "
                 f"fitted")
     fit = fit_adaptive(wl[mask], n[mask], k[mask], tolerance=_TOLERANCE,
-                       max_poles=max_poles, w_im=imaginary_weight)
+                       max_poles=max_poles, w_im=imaginary_weight,
+                       make_passive=make_passive)
     omega_win = 2.0 * np.pi * C0_SI / wl[mask]
     res = scalar_result(fit, wl[mask], n[mask], k[mask],
                         passive=passivity_report(fit.eps_inf, fit.poles,
@@ -602,7 +611,8 @@ _COMPONENT_AXES = {"o": ("xx", "yy"), "e": ("zz",),
                    "x": ("xx",), "y": ("yy",), "z": ("zz",)}
 
 
-def _fit_convenience(wl, n, k, band=None, max_poles=10, imaginary_weight=1.0):
+def _fit_convenience(wl, n, k, band=None, max_poles=10, imaginary_weight=1.0,
+                     make_passive=False):
     """Convenience-layer rule: fit the window the **caller** names at the
     default tolerance and keep the result even if the tolerance is missed —
     the warnings say so, and ``mat_from_nk`` surfaces them.
@@ -613,7 +623,7 @@ def _fit_convenience(wl, n, k, band=None, max_poles=10, imaginary_weight=1.0):
     source band holds too few samples to constrain a fit.
     """
     return fit_nk(wl, n, k, band=band, max_poles=max_poles,
-                  imaginary_weight=imaginary_weight)
+                  imaginary_weight=imaginary_weight, make_passive=make_passive)
 
 
 def _report(line: str) -> None:
@@ -630,7 +640,8 @@ def _report(line: str) -> None:
         print(line)
 
 
-def mat_from_nk(name, band=None, max_poles=10, imaginary_weight=1.0):
+def mat_from_nk(name, band=None, max_poles=10, imaginary_weight=1.0,
+                make_passive=False):
     """Library name → a material node in **one call** (read library →
     per-component, per-axis ``fit_nk`` → ``assemble_nk``).
 
@@ -669,7 +680,8 @@ def mat_from_nk(name, band=None, max_poles=10, imaginary_weight=1.0):
         wl, n, k = _to_m(comps[""])
         fit = _fit_convenience(wl, n, k, band=band,
                                max_poles=max_poles,
-                               imaginary_weight=imaginary_weight)
+                               imaginary_weight=imaginary_weight,
+                               make_passive=make_passive)
         _report(f"{name} (iso)  {fit.summary()}")
         return assemble_nk({"xx": fit, "yy": fit, "zz": fit}, name=name)
     by_axis: dict = {}
@@ -681,7 +693,8 @@ def mat_from_nk(name, band=None, max_poles=10, imaginary_weight=1.0):
         wl, n, k = _to_m(comps[comp])
         fit = _fit_convenience(wl, n, k, band=band,
                                max_poles=max_poles,
-                               imaginary_weight=imaginary_weight)
+                               imaginary_weight=imaginary_weight,
+                               make_passive=make_passive)
         _report(f"{name} ({comp})  {fit.summary()}")
         for ax in _COMPONENT_AXES[comp]:
             by_axis[ax] = fit

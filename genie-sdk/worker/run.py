@@ -375,7 +375,7 @@ class F:
         return None, note
 
     def fit_nk(self, wl, n, k, band=None, max_poles=10,
-               imaginary_weight=1.0):
+               imaginary_weight=1.0, make_passive=False):
         """**Single-component** nk → an ``NKFit`` (band · poles · quality ·
         warnings; the opaque pole payload lives in ``model``).
 
@@ -387,7 +387,8 @@ class F:
         band, note = self._fit_band(wl, band)
         fit = core_material.fit_nk(wl, n, k, band=band,
                                    max_poles=max_poles,
-                                   imaginary_weight=imaginary_weight)
+                                   imaginary_weight=imaginary_weight,
+                                   make_passive=make_passive)
         if note is not None:
             fit = dataclasses.replace(fit, warnings=tuple(fit.warnings)
                                       + (note,))
@@ -407,7 +408,7 @@ class F:
         return core_material.load_nk(name, component=component)
 
     def mat_from_nk(self, name, band=None, max_poles=10,
-                     imaginary_weight=1.0):
+                     imaginary_weight=1.0, make_passive=False):
         """Library name → material node in one step (a near-zero-knob
         convenience layer; one line to add into the model:
         ``f.mat.add_lorentz(node)``).
@@ -421,7 +422,7 @@ class F:
         if band is not None:
             return core_material.mat_from_nk(
                 name, band=band, max_poles=max_poles,
-                imaginary_weight=imaginary_weight)
+                imaginary_weight=imaginary_weight, make_passive=make_passive)
         want = self._source_band()
         if want is None:
             raise ValueError(
@@ -432,7 +433,7 @@ class F:
         try:
             return core_material.mat_from_nk(
                 name, band=want, max_poles=max_poles,
-                imaginary_weight=imaginary_weight)
+                imaginary_weight=imaginary_weight, make_passive=make_passive)
         except ValueError as exc:
             if "data points in band" not in str(exc):
                 raise
@@ -442,7 +443,8 @@ class F:
                 f"data range instead; pass band= to force a window")
         return core_material.mat_from_nk(name, band=None,
                                          max_poles=max_poles,
-                                         imaginary_weight=imaginary_weight)
+                                         imaginary_weight=imaginary_weight,
+                                         make_passive=make_passive)
 
     def list_library_materials(self):
         """Local library material names (sorted)."""
