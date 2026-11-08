@@ -176,6 +176,34 @@ def _pair_den(s, p):
     return s * s - 2.0 * p.real * s + abs(p) ** 2
 
 
+def _sigma_zeros(pairs, u, v):
+    """Zeros of ``σ(s) = 1 + Σ (u_k s + v_k)/den_k`` via state-space.
+
+    Each section is realised as ``A_k = [[0,1],[-b0,-b1]]``, ``B_k = [0,1]ᵀ``,
+    ``C_k = [v_k, u_k]``; then σ = 1 + C(sI−A)⁻¹B = det(sI−A+BC)/det(sI−A),
+    so its zeros are the eigenvalues of ``A − B·C`` (2P×2P).  This replaces the
+    monomial-polynomial expansion + ``np.roots``, which is ill-conditioned at
+    higher orders and was losing the good pole set (Au order 5/6 regressed).
+    """
+    P = len(pairs)
+    if P == 0:
+        return np.array([], dtype=complex)
+    A = np.zeros((2 * P, 2 * P))
+    B = np.zeros((2 * P, 1))
+    C = np.zeros((1, 2 * P))
+    for k, p in enumerate(pairs):
+        b0 = float(abs(p) ** 2)
+        b1 = float(-2.0 * p.real)
+        i = 2 * k
+        A[i, i + 1] = 1.0
+        A[i + 1, i] = -b0
+        A[i + 1, i + 1] = -b1
+        B[i + 1, 0] = 1.0
+        C[0, i] = float(v[k])
+        C[0, i + 1] = float(u[k])
+    return np.linalg.eigvals(A - B @ C)
+
+
 def _vf_step(s, f, pairs, w_im=_W_IMAG, with_const=True):
     """One pole-relocation step in the **conjugate-pair basis**.
 
@@ -229,18 +257,11 @@ def _vf_step(s, f, pairs, w_im=_W_IMAG, with_const=True):
     x, *_ = np.linalg.lstsq(A, rhs, rcond=None)
     u = x[base::2][:P]
     v = x[base + 1::2][:P]
-    # σ(s) = 1 + Σ (u_k s + v_k)/den_k → numerator over the common denominator
-    num = np.poly1d([1.0])
-    for k in range(P):
-        num = np.polymul(num, _den_poly(pairs[k]))
-    for k in range(P):
-        term = np.poly1d([1.0])
-        for j in range(P):
-            if j != k:
-                term = np.polymul(term, _den_poly(pairs[j]))
-        term = np.polymul(term, np.poly1d([float(u[k]), float(v[k])]))
-        num = np.polyadd(num, term)
-    roots = np.roots(num.coeffs)
+    # zeros of σ(s) = 1 + Σ (u_k s + v_k)/den_k via a state-space linearisation
+    # (eig(A − B·C), 2P×2P) — numerically far better than expanding the common
+    # denominator into a monomial polynomial and calling np.roots, which loses
+    # the good poles at higher orders
+    roots = _sigma_zeros(pairs, u, v)
     keep = [r for r in roots if r.imag > 0.0]
     if len(keep) < P:                      # pad with the best available roots
         rest = sorted((r for r in roots if r.imag <= 0.0),
@@ -598,11 +619,12 @@ def coverage_fraction(lo, hi, wl):
 def scalar_result(fit, w, n_data, k_data, *, passive, coverage):
     """Single-component result assembly (**numeric only** — no node/name).
 
-    ``quality['rms']`` is the **acceptance metric** (Lumerical's weighted RMS
-    of the eps residual) and ``quality['tolerance_met']`` says whether it
-    landed under the requested tolerance.  The relative n/k errors are kept
-    as **diagnostics** only — at k≈0 they are dominated by the ratio, not by
-    the model (a 6e-4 absolute deviation reads as 60%).
+    ``quality['rms']`` is the **acceptance metric** — Lumerical's weighted RMS
+    of the eps residual (absolute) — and ``quality['tolerance_met']`` says
+    whether it landed under the requested tolerance.  ``rms_rel`` is the same
+    residual divided by the data norm (the number a human should read:
+    0.03 = 3%); the relative n/k errors are **diagnostics** only (at k≈0 they
+    are dominated by the ratio, not by the model).
     """
     omega = 2.0 * np.pi * C0_SI / np.asarray(w, dtype=float)
     d = evaluate_dispersion(fit.eps_inf, fit.poles, omega)
@@ -612,9 +634,12 @@ def scalar_result(fit, w, n_data, k_data, *, passive, coverage):
     k_data = np.asarray(k_data, dtype=float)
 
     warnings_out: list[str] = []
+    eps_norm = (float(np.sqrt(np.mean(np.abs((n_data + 1j * k_data) ** 2) ** 2)))
+                or 1.0)
     if fit.target_met is False:
         warnings_out.append(
-            f"tolerance not met: best weighted RMS = {fit.error:.3g} with "
+            f"tolerance not met: best weighted RMS = {fit.error:.3g} "\
+            f"({fit.error / eps_norm:.1%} of data) with "
             f"{len(fit.poles)} pole(s) (of the orders tried) — raise "
             f"max_poles, narrow the band, or accept this fit knowing the "
             f"residual")
@@ -641,9 +666,11 @@ def scalar_result(fit, w, n_data, k_data, *, passive, coverage):
     poles = [pole_to_node(*p) for p in fit.poles]
     scale_n = np.maximum(np.abs(n_data), 1e-12)
     scale_k = np.maximum(np.abs(k_data), 1e-3)
+    eps_norm = float(np.sqrt(np.mean(np.abs((n_data + 1j * k_data) ** 2) ** 2))) or 1.0
     quality = {
         "n_points": int(np.size(w)),
-        "rms": float(fit.rms if fit.rms is not None else fit.error),
+        "rms": float(fit.rms if fit.rms is not None else fit.error or 0.0),
+        "rms_rel": float((fit.rms if fit.rms is not None else fit.error or 0.0) / eps_norm),
         "tolerance_met": bool(fit.target_met),
         "rel_err_n": float(np.max(np.abs(n_fit - n_data) / scale_n)),
         "rel_err_k": float(np.max(np.abs(k_fit - k_data) / scale_k)),
