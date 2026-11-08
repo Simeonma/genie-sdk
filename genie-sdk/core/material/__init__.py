@@ -483,14 +483,16 @@ class NKFit:
                 "n_fit": d.n, "k_fit": d.k}
 
 
-def fit_nk(wl, n, k, band=None, accuracy=0.01, max_poles=12, passive=None):
+def fit_nk(wl, n, k, band=None, tolerance=0.1, max_poles=6, passive=None):
     """Fit **one scalar n-k component** to a rational dispersion model.
 
-    The user supplies data and at most three decisions: the **band**, the
-    **accuracy** (relative error on n and k) and — from v2 — whether the
-    result must be forced passive. The model family is *not* a user choice:
-    the fitter always fits the general rational form (poles with complex
-    residues); Lorentz/Drude survive only as wire-format shorthands.
+    The knobs and the yardstick are **Lumerical's**: ``tolerance`` is the
+    ``PoleFit`` tolerance on the **weighted RMS of the eps residual**
+    ("Tolerance for RMS error in data fit"), not a relative n/k bound, and
+    the material defaults are 6 poles / 0.1 (both from Lumerical's shipped
+    material database).  The model family is not a user choice: the fitter
+    always fits the general rational form; Lorentz/Drude survive only as
+    wire-format shorthands.
 
     Parameters
     ----------
@@ -499,39 +501,34 @@ def fit_nk(wl, n, k, band=None, accuracy=0.01, max_poles=12, passive=None):
     band : tuple[float, float] or None
         Fit window [m] (lo < hi). **Default = the whole data range** — the
         fit never silently truncates. Fewer than 3 points inside raises.
-    accuracy : float
-        Bound on the **relative** error of n and k inside the band
-        (0.01 = 1%). The pole count grows until it is met or
-        ``max_poles`` is reached.
+    tolerance : float
+        Weighted-RMS tolerance for the order search (Lumerical default 0.1).
+        The order grows until it is met or ``max_poles`` is reached; an
+        unmet tolerance lands in ``warnings`` (never silent).
     max_poles : int
-        Pole budget (one pole = one second-order section = one conjugate
-        pair). Hitting the budget short of ``accuracy`` lands in
-        ``warnings``, never silent.
+        Coefficient budget (one pole = one second-order section = one
+        conjugate pair). Lumerical's material default is 6.
     passive : bool or None
-        None (default) = report passivity only. ``True`` = force it (v2,
-        not implemented yet — raises rather than pretending).
+        ``None`` (default) = passivity penalty **on** (Lumerical's "make fit
+        passive"): a model with gain > 1e-14 gets its error multiplied by
+        1e6 so the order search rejects it. ``False`` = report passivity
+        only, never penalise.
 
     Returns
     -------
     NKFit
         ``band`` / ``n_poles`` / ``quality`` / ``warnings`` / ``model``,
-        plus ``summary()`` and ``curve()``. ``quality`` carries the
-        relative errors (``rel_err_n`` / ``rel_err_k``), the absolute rmse,
-        ``passive`` and ``coverage``.
+        plus ``summary()`` and ``curve()``. ``quality['rms']`` is the
+        acceptance metric; ``rel_err_n`` / ``rel_err_k`` are diagnostics
+        only (at k≈0 their denominator makes them meaningless).
 
     Raises
     ------
     ValueError
-        band reversed; unequal column lengths; fewer than 3 points inside;
+        band reversed; unequal column lengths; fewer than 5 samples inside;
         non-finite n/k inside the band (with a data-cleaning prescription).
-    NotImplementedError
-        ``passive=True`` (the enforcement stage is v2).
     """
-    if passive:
-        raise NotImplementedError(
-            "passive=True (forcing the fit passive) is the v2 stage — for "
-            "now the fit reports passivity in quality['passive'] and warns "
-            "in warnings; re-fit with a smaller band or more poles instead")
+    make_passive = True if passive is None else bool(passive)
     wl = np.asarray(wl, dtype=float)
     n = np.asarray(n, dtype=float)
     k = np.asarray(k, dtype=float)
@@ -560,11 +557,11 @@ def fit_nk(wl, n, k, band=None, accuracy=0.01, max_poles=12, passive=None):
             f"cause")
     mask = (wl >= lo) & (wl <= hi)
     n_in = int(mask.sum())
-    if n_in < 3:
+    if n_in < 5:                                  # two poles need (n-1)//2 >= 2
         raise ValueError(
             f"Only {n_in} data points in band "
-            f"{lo * 1e9:.0f}-{hi * 1e9:.0f} nm — widen band or "
-            f"supply more data inside it")
+            f"{lo * 1e9:.0f}-{hi * 1e9:.0f} nm — the two-pole minimum needs "
+            f"5; widen band or supply more data inside it")
     # Non-finite inside the window = an input-data problem: raise with
     # a **data-cleaning prescription** before fitting, distinct from
     # the tuning advice given when the iteration cap is hit (the two
@@ -583,8 +580,8 @@ def fit_nk(wl, n, k, band=None, accuracy=0.01, max_poles=12, passive=None):
                 f"rows; JSON null becomes NaN here) or use library "
                 f"data via f.load_nk; non-finite values cannot be "
                 f"fitted")
-    fit = fit_adaptive(wl[mask], n[mask], k[mask], accuracy=accuracy,
-                       max_poles=max_poles)
+    fit = fit_adaptive(wl[mask], n[mask], k[mask], tolerance=tolerance,
+                       max_poles=max_poles, make_passive=make_passive)
     omega_win = 2.0 * np.pi * C0_SI / wl[mask]
     res = scalar_result(fit, wl[mask], n[mask], k[mask],
                         passive=passivity_report(fit.eps_inf, fit.poles,
@@ -608,9 +605,9 @@ _COMPONENT_AXES = {"o": ("xx", "yy"), "e": ("zz",),
                    "x": ("xx",), "y": ("yy",), "z": ("zz",)}
 
 
-def _fit_convenience(wl, n, k, band=None, accuracy=0.01, max_poles=12):
+def _fit_convenience(wl, n, k, band=None, tolerance=0.1, max_poles=6):
     """Convenience-layer rule: fit the window the **caller** names at the
-    default accuracy and keep the result even if the accuracy is missed —
+    default tolerance and keep the result even if the tolerance is missed —
     the warnings say so, and ``mat_from_nk`` surfaces them.
 
     ``band=None`` means "the whole data range" *at this layer*; the worker
@@ -618,7 +615,7 @@ def _fit_convenience(wl, n, k, band=None, accuracy=0.01, max_poles=12):
     where you will simulate), falling back to the data range when the
     source band holds too few samples to constrain a fit.
     """
-    return fit_nk(wl, n, k, band=band, accuracy=accuracy,
+    return fit_nk(wl, n, k, band=band, tolerance=tolerance,
                   max_poles=max_poles)
 
 
@@ -636,12 +633,13 @@ def _report(line: str) -> None:
         print(line)
 
 
-def mat_from_nk(name, band=None, accuracy=0.01, max_poles=12):
+def mat_from_nk(name, band=None, tolerance=0.1, max_poles=6):
     """Library name → a material node in **one call** (read library →
     per-component, per-axis ``fit_nk`` → ``assemble_nk``).
 
     A near-zero-knob convenience layer: ``band`` (fit window [m]),
-    ``accuracy`` and ``max_poles`` are forwarded, nothing else is. The
+    ``tolerance`` (weighted-RMS, Lumerical default 0.1) and ``max_poles``
+    are forwarded, nothing else is. The
     per-component quality is not surfaced — for control use the primitive
     layer (``load_nk`` / ``fit_nk`` / ``assemble_nk``). **Does not touch the model** (adding
     to a model is one line, ``f.mat.add_lorentz(node)``); the node
@@ -673,7 +671,7 @@ def mat_from_nk(name, band=None, accuracy=0.01, max_poles=12):
             f"f.list_library_materials() lists all local library names")
     if set(comps) == {""}:                       # iso: fit once, mount on all three axes
         wl, n, k = _to_m(comps[""])
-        fit = _fit_convenience(wl, n, k, band=band, accuracy=accuracy,
+        fit = _fit_convenience(wl, n, k, band=band, tolerance=tolerance,
                                max_poles=max_poles)
         _report(f"{name} (iso)  {fit.summary()}")
         return assemble_nk({"xx": fit, "yy": fit, "zz": fit}, name=name)
@@ -684,7 +682,7 @@ def mat_from_nk(name, band=None, accuracy=0.01, max_poles=12):
                 f"library {name!r}: unknown component direction {comp!r} "
                 f"(known: o/e/x/y/z)")
         wl, n, k = _to_m(comps[comp])
-        fit = _fit_convenience(wl, n, k, band=band, accuracy=accuracy,
+        fit = _fit_convenience(wl, n, k, band=band, tolerance=tolerance,
                                max_poles=max_poles)
         _report(f"{name} ({comp})  {fit.summary()}")
         for ax in _COMPONENT_AXES[comp]:

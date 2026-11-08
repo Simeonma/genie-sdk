@@ -18,8 +18,9 @@ solving another linear problem for the zeros of an auxiliary function σ(s)
 and iterating. No nonlinear optimiser, no local-minimum roulette, no scipy.
 
 ``vector_fit`` returns the pole set; ``fit_adaptive`` grows the pole count
-until the **relative** n/k error meets ``accuracy``. Passivity is reported
-(``passivity_report``); enforcing it is a separate, opt-in stage.
+until the **weighted RMS** of the eps residual meets ``tolerance``
+(Lumerical's yardstick). Passivity is penalised inside the order search
+(``make_passive``), matching Lumerical's "make fit passive".
 """
 from __future__ import annotations
 
@@ -37,16 +38,24 @@ _VF_ITER = 20
 #: Convergence: stop relocating when the weighted RMS error moves by less
 #: than this (Lumerical `PoleFit` field 0x210 = 1e-6).
 _VF_EPS = 1e-6
-#: Weight on the imaginary equations ("imaginary weight", `PoleFit` field
-#: 0x1f8; default 1.0, Lumerical flips it to 2.0 for some input shapes).
+#: Weight on the imaginary equations ("imaginary weight", `PoleFit` field 0x1f8).
+#: Lumerical's material default is 1.0 for all shipped materials (`.mdf`, 55/55).
 _W_IMAG = 1.0
-#: Poles are radially clamped into [_BAND_LO·ω_min, _BAND_HI·ω_max] — the
-#: same band-relative rule as Lumerical's stability clamp (`FUN_1403a90e0`).
-_BAND_LO = 0.1
-_BAND_HI = 10.0
-#: Lumerical's default tolerance and coefficient budget (GUI defaults).
+#: Stability clamp band: `[0.01·ω_min, 2.0·ω_max]` (slot[6]; constants
+#: `0x14422ffb8` = 0.01, `0x14422ff70` = 2.0). Applied **once per order** when
+#: ``improve_stability`` is on — not inside the relocation loop.
+_BAND_LO = 0.01
+_BAND_HI = 2.0
+#: Lumerical material defaults (`.mdf`, 55 entries): 6 poles, RMS tolerance 0.1.
 _TOLERANCE = 0.1
 _MAX_COEFFS = 6
+#: Passivity penalty (slot[5], gated by ``make_passive``): gain above
+#: ``_GAIN_EPS`` multiplies the order's error by ``_PENALTY`` so the order
+#: search rejects it (`0x14422ffa8` = 1e-14, `0x14422ffb0` = 1e6).
+_GAIN_EPS = 1e-14
+_PENALTY = 1e6
+#: Lossy-sample threshold for the penalty branch (`FUN_1403aa6a0`: 1e-6 relative).
+_LOSSY_EPS = 1e-6
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -109,9 +118,11 @@ class ComponentFit:
     eps_inf: float
     poles: list                      # [(a0, a1, a2, b0, b1), ...] SI
     converged: bool = True
-    error: float | None = None       # max relative error over the band (n/k)
+    error: float | None = None       # weighted RMS (penalised) — the selection score
+    rms: float | None = None         # weighted RMS before the passivity penalty
     poles_tried: int | None = None   # pole count the fit finally used
-    target_met: bool = True          # False = budget exhausted short of accuracy
+    target_met: bool = True          # False = best order was over tolerance
+    eps_inf_fixed: bool = False      # True = constant pinned to 1.0 (wire contract)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -163,7 +174,7 @@ def _pair_den(s, p):
     return s * s - 2.0 * p.real * s + abs(p) ** 2
 
 
-def _vf_step(s, f, pairs, w_im=_W_IMAG):
+def _vf_step(s, f, pairs, w_im=_W_IMAG, with_const=True):
     """One pole-relocation step in the **conjugate-pair basis**.
 
     Working with pairs (rather than raw poles) makes the whole thing
@@ -174,6 +185,8 @@ def _vf_step(s, f, pairs, w_im=_W_IMAG):
         Σ_k (a1_k·s + a0_k)/den_k + d  ≈  f · [ 1 + Σ_k (u_k·s + v_k)/den_k ]
 
     Zeros of the bracket are the improved poles (polynomial roots).
+    ``with_const=False`` drops the ``d`` column — used by the constrained
+    pass where the constant is pinned (``f`` is then already ``eps - d``).
 
     ``w_im`` weights every **imaginary** equation row (Lumerical's
     "imaginary weight" knob, default 1.0, optionally 2.0 — reverse-engineered
@@ -186,7 +199,8 @@ def _vf_step(s, f, pairs, w_im=_W_IMAG):
     Bs = [s / d for d in dens]
     B1 = [1.0 / d for d in dens]
     N = s.size
-    ncol = 2 * P + 1 + 2 * P
+    base = 2 * P + (1 if with_const else 0)
+    ncol = base + 2 * P
     A = np.zeros((2 * N, ncol))
     rhs = np.zeros(2 * N)
     # model residues (a0 real column, a1 real column)
@@ -195,23 +209,24 @@ def _vf_step(s, f, pairs, w_im=_W_IMAG):
         A[:N, 2 * k + 1] = Bs[k].real
         A[N:, 2 * k] = B1[k].imag
         A[N:, 2 * k + 1] = Bs[k].imag
-    A[:N, 2 * P] = 1.0
+    if with_const:
+        A[:N, 2 * P] = 1.0
     # − f · σ  (σ coefficients u, v)
     for k in range(P):
         cu = -f * Bs[k]
         cv = -f * B1[k]
-        A[:N, 2 * P + 1 + 2 * k] = cu.real
-        A[N:, 2 * P + 1 + 2 * k] = cu.imag
-        A[:N, 2 * P + 2 + 2 * k] = cv.real
-        A[N:, 2 * P + 2 + 2 * k] = cv.imag
+        A[:N, base + 2 * k] = cu.real
+        A[N:, base + 2 * k] = cu.imag
+        A[:N, base + 2 * k + 1] = cv.real
+        A[N:, base + 2 * k + 1] = cv.imag
     rhs[:N] = f.real
     rhs[N:] = f.imag
     if w_im != 1.0:
         A[N:] *= w_im
         rhs[N:] *= w_im
     x, *_ = np.linalg.lstsq(A, rhs, rcond=None)
-    u = x[2 * P + 1::2][:P]
-    v = x[2 * P + 2::2][:P]
+    u = x[base::2][:P]
+    v = x[base + 1::2][:P]
     # σ(s) = 1 + Σ (u_k s + v_k)/den_k → numerator over the common denominator
     num = np.poly1d([1.0])
     for k in range(P):
@@ -235,7 +250,7 @@ def _vf_step(s, f, pairs, w_im=_W_IMAG):
         re = -abs(r.real) if r.real > 0 else r.real
         im = abs(r.imag) if r.imag != 0 else 1e-6
         out.append(complex(re, im))
-    return _clamp_band(out, s)
+    return out
 
 
 def _clamp_band(pairs, s):
@@ -295,6 +310,35 @@ def _residues(s, f, pairs, w_im=_W_IMAG):
     return float(x[2 * P]), coefs
 
 
+def _residues_fixed(s, f, pairs, eps_inf, w_im=_W_IMAG):
+    """Fixed poles **and** fixed constant → residues only (2P unknowns).
+
+    The bridge for our wire contract (`eps_inf > 0`) when the free solve
+    lands on a non-positive constant: refit the residues against the data
+    with ``eps_inf`` pinned instead of discarding the order.
+    """
+    P = len(pairs)
+    dens = [_pair_den(s, p) for p in pairs]
+    N = s.size
+    A = np.zeros((2 * N, 2 * P))
+    rhs = np.zeros(2 * N)
+    for k in range(P):
+        B1 = 1.0 / dens[k]
+        Bs = s / dens[k]
+        A[:N, 2 * k] = B1.real
+        A[:N, 2 * k + 1] = Bs.real
+        A[N:, 2 * k] = B1.imag
+        A[N:, 2 * k + 1] = Bs.imag
+    r = f - complex(eps_inf, 0.0)
+    rhs[:N] = r.real
+    rhs[N:] = r.imag
+    if w_im != 1.0:
+        A[N:] *= w_im
+        rhs[N:] *= w_im
+    x, *_ = np.linalg.lstsq(A, rhs, rcond=None)
+    return [(float(x[2 * k]), float(x[2 * k + 1])) for k in range(P)]
+
+
 def _weighted_rms(s, f, eps_inf, pairs, coefs, w_im=_W_IMAG):
     """Weighted RMS residual — **Lumerical's error function**, verbatim.
 
@@ -313,7 +357,28 @@ def _weighted_rms(s, f, eps_inf, pairs, coefs, w_im=_W_IMAG):
     return float(np.sqrt(np.mean(res ** 2)))
 
 
-def vector_fit(s, f, pairs, w_im=_W_IMAG):
+def _gain_violation(eps_inf, sections, omega, f):
+    """Max gain on the lossy samples (the quantity slot[5] penalises).
+
+    Passive means ``imag(eps) >= 0`` in this convention, so a violation is
+    ``max(-imag(eps), 0)`` over the samples whose *data* is lossy (threshold
+    1e-6 relative, `FUN_1403aa6a0`).  Above 1e-14 the order's error is
+    multiplied by 1e6 and the order search rejects it.
+    """
+    s = -1j * np.asarray(omega, dtype=float)
+    eps = np.full(s.shape, float(eps_inf), dtype=complex)
+    for a0, a1, a2, b0, b1 in sections:
+        eps += (a0 + a1 * s + a2 * s * s) / (s * s + b1 * s + b0)
+    f = np.asarray(f, dtype=complex)
+    scale = float(np.max(np.abs(f))) or 1.0
+    lossy = f.imag > _LOSSY_EPS * scale
+    if not lossy.any():
+        return 0.0
+    return float(np.max(np.maximum(0.0, -eps.imag[lossy])))
+
+
+def vector_fit(s, f, pairs, w_im=_W_IMAG, improve_stability=True,
+               eps_inf_fixed=None):
     """Pole relocation + residues in **normalized frequency**.
 
     1/(s−p) with s, p ~ 1e15 makes the LSQ matrix condition ~1e30 (SVD stops
@@ -322,25 +387,47 @@ def vector_fit(s, f, pairs, w_im=_W_IMAG):
 
     Iteration follows ``PoleFit``: at most ``_VF_ITER`` (20) relocations,
     stopping when the weighted RMS error moves by less than ``_VF_EPS``
-    (1e-6); the best iterate is kept.
+    (1e-6); the best iterate is kept.  When ``improve_stability`` is on, the
+    final pole set goes through the band clamp (slot[6]) and the residues are
+    re-solved for the clamped poles — once per order, not per iteration.
+
+    ``eps_inf_fixed`` pins the constant for the whole relocation (the
+    constrained pass used when the free solve lands on a non-positive
+    constant but the wire needs ``eps_inf > 0``).
     """
     s = np.asarray(s, dtype=complex)
     f = np.asarray(f, dtype=complex)
+    d0 = None if eps_inf_fixed is None else float(eps_inf_fixed)
+    g = f if d0 is None else f - d0
     s0 = float(np.exp(np.mean(np.log(np.abs(s)))))
     sn = s / s0
     pairs = [complex(p) / s0 for p in pairs]
     best = None
     prev = None
     for _ in range(max(1, int(_VF_ITER))):
-        pairs = _vf_step(sn, f, pairs, w_im)
-        eps_inf, coefs = _residues(sn, f, pairs, w_im)
-        err = _weighted_rms(sn, f, eps_inf, pairs, coefs, w_im)
+        pairs = _vf_step(sn, g, pairs, w_im, with_const=(d0 is None))
+        if d0 is None:
+            eps_inf, coefs = _residues(sn, g, pairs, w_im)
+        else:
+            eps_inf, coefs = d0, _residues_fixed(sn, g, pairs, 0.0, w_im)
+        err = _weighted_rms(sn, g, 0.0 if d0 is not None else eps_inf,
+                            pairs, coefs, w_im)
         if best is None or err < best[0]:
             best = (err, eps_inf, list(pairs), coefs)
         if prev is not None and abs(err - prev) < _VF_EPS:
             break                       # |Δerr| < 1e-6, as in PoleFit
         prev = err
     err, eps_inf, pairs, coefs = best
+    if improve_stability:                    # slot[6], once per order
+        clamped = _clamp_band(pairs, sn)
+        if d0 is None:
+            eps_inf, coefs = _residues(sn, g, clamped, w_im)
+            err = _weighted_rms(sn, g, eps_inf, clamped, coefs, w_im)
+        else:
+            eps_inf = d0
+            coefs = _residues_fixed(sn, g, clamped, 0.0, w_im)
+            err = _weighted_rms(sn, g, 0.0, clamped, coefs, w_im)
+        pairs = clamped
     sections = []
     for p, (a0, a1) in zip(pairs, coefs):
         p = p * s0
@@ -364,25 +451,29 @@ def fit_error(eps_inf, poles, wavelengths, n, k):
     return max(rn, rk)
 
 
-def fit_adaptive(wavelengths, n, k, *, accuracy=0.01, max_poles=12,
-                 w_im=_W_IMAG):
-    """Grow the pole count until the **relative** n/k error meets ``accuracy``.
+def fit_adaptive(wavelengths, n, k, *, tolerance=_TOLERANCE,
+                 max_poles=_MAX_COEFFS, w_im=_W_IMAG,
+                 make_passive=True, improve_stability=True):
+    """Lumerical's ``PoleFit::fit_auto`` — same knobs, same yardstick.
 
-    Same shape as ``PoleFit::fit_auto``: fit order 2, 3, 4, … (one order = one
-    conjugate pair here, i.e. one wire section), **stop at the first order
-    whose error is under the tolerance**, and if no order gets there, keep
-    the best one (Lumerical re-fits at the argmin order; the fit is already
-    deterministic here, so the argmin itself is the result).
+    - orders 2, 3, … up to ``min(max_poles, (n_samples−1)//2)`` (slot[2]);
+    - each order is scored by the **weighted RMS** of the eps residual
+      (slot[5]) — the quantity the fit itself minimises — with the passivity
+      penalty on top when ``make_passive`` (gain > 1e-14 → error ×1e6);
+    - stop at the first order with ``err < tolerance``; otherwise keep the
+      argmin order (Lumerical re-fits at it; this fit is deterministic);
+    - ``improve_stability`` runs the band clamp once per order.
 
-    Ranking uses the **weighted RMS** error from ``vector_fit`` (Lumerical's
-    error function); acceptance uses the user-facing relative n/k error.
+    ``eps_inf <= 0`` is **not** a reason to drop an order (Lumerical has no
+    such gate).  If the best order's free constant is non-positive, the
+    residues are re-solved with the constant pinned to ``1.0`` so the wire
+    contract (``eps_inf > 0``) holds; the result is marked
+    ``eps_inf_fixed``.
     """
-    if not (accuracy > 0):
-        raise ValueError(
-            f"accuracy must be > 0, got {accuracy!r} — it is a bound on the "
-            f"relative max error of n and k")
-    if int(max_poles) < 1:
-        raise ValueError(f"max_poles must be >= 1, got {max_poles!r}")
+    if not (tolerance > 0):
+        raise ValueError(f"tolerance must be > 0, got {tolerance!r}")
+    if int(max_poles) < 2:
+        raise ValueError(f"max_poles must be >= 2, got {max_poles!r}")
     wl = np.asarray(wavelengths, dtype=float)
     n = np.asarray(n, dtype=float)
     k = np.asarray(k, dtype=float)
@@ -390,43 +481,47 @@ def fit_adaptive(wavelengths, n, k, *, accuracy=0.01, max_poles=12,
     s = -1j * omega
     f = (n + 1j * k) ** 2
     w_lo, w_hi = float(np.min(omega)), float(np.max(omega))
-    # Order 0 first: a constant model. A non-dispersive medium is *exactly*
-    # this, and without the test the pole loop happily hangs a zero-strength
-    # pole on it (delta_eps ~ 1e-17) just because it can.
-    if np.allclose(f.imag, 0.0, atol=1e-14):
-        eps0 = float(np.mean(f.real))
-        if eps0 > 0.0:
-            const = ComponentFit(eps_inf=eps0, poles=[], converged=True,
-                                 error=0.0, poles_tried=0, target_met=True)
-            try:
-                const_err = fit_error(eps0, [], wl, n, k)
-            except (ValueError, FloatingPointError):
-                const_err = None
-            if const_err is not None and const_err <= accuracy:
-                const.error = const_err
-                return const
-    best = None
-    for n_pol in range(1, int(max_poles) + 1):
-        poles0 = _starting_poles(w_lo, w_hi, n_pol)
-        eps_inf, sections, rms = vector_fit(s, f, poles0, w_im)
-        if not np.isfinite(eps_inf) or eps_inf <= 0.0:
-            continue
-        try:
-            err = fit_error(eps_inf, sections, wl, n, k)
-        except (ValueError, FloatingPointError):
-            continue
-        fit = ComponentFit(eps_inf=eps_inf, poles=sections, converged=True,
-                           error=err, poles_tried=n_pol,
-                           target_met=err <= accuracy)
-        if best is None or err < best[0].error:
-            best = (fit, rms)
-        if err <= accuracy:
-            return fit
-    if best is None:
+    max_order = int(min(int(max_poles), (wl.size - 1) // 2))
+    if max_order < 2:
         raise ValueError(
-            "vector fitting produced no assembable model (every pole count "
-            "gave a non-positive eps_inf) — check the band and the data")
-    return best[0]
+            f"need at least 5 samples for the two-pole minimum, got {wl.size}")
+    def _search(eps_inf_fixed):
+        """One order search; the constant is free (None) or pinned."""
+        best = None
+        for order in range(2, max_order + 1):
+            poles0 = _starting_poles(w_lo, w_hi, order)
+            eps_inf, sections, rms = vector_fit(
+                s, f, poles0, w_im, improve_stability=improve_stability,
+                eps_inf_fixed=eps_inf_fixed)
+            if not np.isfinite(eps_inf) or not np.all(np.isfinite(sections)):
+                continue
+            err = rms
+            if make_passive and _gain_violation(
+                    eps_inf, sections, omega, f) > _GAIN_EPS:
+                err *= _PENALTY
+            fit = ComponentFit(
+                eps_inf=eps_inf, poles=sections, converged=True,
+                error=err, rms=rms, poles_tried=order,
+                target_met=err < tolerance,
+                eps_inf_fixed=eps_inf_fixed is not None)
+            if best is None or err < best.error:
+                best = fit
+            if err < tolerance:
+                break
+        return best
+
+    best = _search(None)
+    if best is not None and best.eps_inf > 0.0:
+        return best
+    # Wire contract: eps_inf must be positive.  Re-run the whole search with
+    # the constant pinned (a constrained fit) instead of discarding orders.
+    pinned = _search(1.0)
+    if pinned is not None:
+        return pinned
+    if best is not None:
+        return best                     # let assemble_nk reject it loudly
+    raise ValueError(
+        "vector fitting failed for every order — check the band and the data")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -479,10 +574,11 @@ def coverage_fraction(lo, hi, wl):
 def scalar_result(fit, w, n_data, k_data, *, passive, coverage):
     """Single-component result assembly (**numeric only** — no node/name).
 
-    Quality is the user's language: the band's **relative** max error of n
-    and k (the acceptance metric), plus rmse, passivity and coverage. The
-    pole coefficients live in ``poles`` (wire dicts) and are *not* meant to
-    be read — ``assemble_nk`` consumes them.
+    ``quality['rms']`` is the **acceptance metric** (Lumerical's weighted RMS
+    of the eps residual) and ``quality['tolerance_met']`` says whether it
+    landed under the requested tolerance.  The relative n/k errors are kept
+    as **diagnostics** only — at k≈0 they are dominated by the ratio, not by
+    the model (a 6e-4 absolute deviation reads as 60%).
     """
     omega = 2.0 * np.pi * C0_SI / np.asarray(w, dtype=float)
     d = evaluate_dispersion(fit.eps_inf, fit.poles, omega)
@@ -494,9 +590,15 @@ def scalar_result(fit, w, n_data, k_data, *, passive, coverage):
     warnings_out: list[str] = []
     if fit.target_met is False:
         warnings_out.append(
-            f"accuracy not met: best relative error = {fit.error:.3g} with "
-            f"{len(fit.poles)} pole(s) (budget reached) — raise max_poles, "
-            f"narrow the band, or accept this fit knowing the residual")
+            f"tolerance not met: best weighted RMS = {fit.error:.3g} with "
+            f"{len(fit.poles)} pole(s) (of the orders tried) — raise "
+            f"max_poles, narrow the band, or accept this fit knowing the "
+            f"residual")
+    if getattr(fit, "eps_inf_fixed", False):
+        warnings_out.append(
+            "the free solve gave eps_inf <= 0; the residues were re-solved "
+            "with eps_inf pinned to 1.0 so the material is wire-valid — "
+            "re-check the band if this matters")
     if not (fit.eps_inf > 0):
         warnings_out.append(
             f"eps_inf={fit.eps_inf!r} <= 0 — cannot be assembled into a "
@@ -517,6 +619,8 @@ def scalar_result(fit, w, n_data, k_data, *, passive, coverage):
     scale_k = np.maximum(np.abs(k_data), 1e-3)
     quality = {
         "n_points": int(np.size(w)),
+        "rms": float(fit.rms if fit.rms is not None else fit.error),
+        "tolerance_met": bool(fit.target_met),
         "rel_err_n": float(np.max(np.abs(n_fit - n_data) / scale_n)),
         "rel_err_k": float(np.max(np.abs(k_fit - k_data) / scale_k)),
         "rmse_n": float(np.sqrt(np.mean((n_fit - n_data) ** 2))),

@@ -374,18 +374,20 @@ class F:
                 f"data range instead; pass band= to force a window")
         return None, note
 
-    def fit_nk(self, wl, n, k, band=None, accuracy=0.01, max_poles=12,
+    def fit_nk(self, wl, n, k, band=None, tolerance=0.1, max_poles=6,
                passive=None):
         """**Single-component** nk → an ``NKFit`` (band · poles · quality ·
         warnings; the opaque pole payload lives in ``model``).
 
         The band defaults to the **simulation source band** (fit where you
         will simulate, as Lumerical does), falling back to the data range
-        when the source band is too sparse. ``accuracy`` is the relative
-        n/k tolerance; ``max_poles`` is the pole budget (Lumerical's "max
-        coefficients"). Iso still goes through ``f.assemble_nk``."""
+        when the source band is too sparse. ``tolerance`` is Lumerical's
+        weighted-RMS bound on the eps residual (default 0.1); ``max_poles``
+        is the coefficient budget (default 6 — both are Lumerical's material
+        defaults). ``passive=None`` runs the passivity penalty. Iso still
+        goes through ``f.assemble_nk``."""
         band, note = self._fit_band(wl, band)
-        fit = core_material.fit_nk(wl, n, k, band=band, accuracy=accuracy,
+        fit = core_material.fit_nk(wl, n, k, band=band, tolerance=tolerance,
                                    max_poles=max_poles, passive=passive)
         if note is not None:
             fit = dataclasses.replace(fit, warnings=tuple(fit.warnings)
@@ -405,7 +407,7 @@ class F:
         directly, multiple errors out)."""
         return core_material.load_nk(name, component=component)
 
-    def mat_from_nk(self, name, band=None, accuracy=0.01, max_poles=12):
+    def mat_from_nk(self, name, band=None, tolerance=0.1, max_poles=6):
         """Library name → material node in one step (a near-zero-knob
         convenience layer; one line to add into the model:
         ``f.mat.add_lorentz(node)``).
@@ -418,12 +420,12 @@ class F:
         """
         if band is not None:
             return core_material.mat_from_nk(
-                name, band=band, accuracy=accuracy, max_poles=max_poles)
+                name, band=band, tolerance=tolerance, max_poles=max_poles)
         want = self._source_band()
         if want is not None:
             try:
                 return core_material.mat_from_nk(
-                    name, band=want, accuracy=accuracy, max_poles=max_poles)
+                    name, band=want, tolerance=tolerance, max_poles=max_poles)
             except ValueError as exc:
                 if "data points in band" not in str(exc):
                     raise
@@ -431,7 +433,7 @@ class F:
                     f"source band {want[0] * 1e9:.0f}-{want[1] * 1e9:.0f} nm "
                     f"is too sparse in the {name} library — fitted over the "
                     f"full data range instead; pass band= to force a window")
-        return core_material.mat_from_nk(name, band=None, accuracy=accuracy,
+        return core_material.mat_from_nk(name, band=None, tolerance=tolerance,
                                          max_poles=max_poles)
 
     def list_library_materials(self):
