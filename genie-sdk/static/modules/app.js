@@ -284,18 +284,23 @@
   }
 
   /* ── 库材料：按钮 = worker 里一句 f 命令 ───────────────────────
-   * f.mat_from_nk(名[, 分量]) 从材料库读 nk 并按缺省窗拟合成整节点，
+   * f.mat_from_nk(名, band=(lo,hi)) 从材料库读 nk、在**用户给的波长窗口**
+   * 里拟合成整节点（没有源带又不给窗口时 worker 会明报，不再全域硬拟）；
    * f.mat.add_lorentz(node=…) 整装入模（Q1.4 窄例外：只收整节点）。 */
   function addLibraryMaterial() {
-    const name = window.prompt("材料库名称（如 Au / SiO2 / Si）：", "");
+    const name = window.prompt("材料库名称（如 Au / SiO2 / ZnO）：", "");
     if (name === null) return;
     const n = name.trim();
     if (!n) return;
-    const comp = window.prompt("分量（iso 直接留空；ZnO 等复合材料填 e / o）：", "");
-    const args = comp && comp.trim()
-      ? JSON.stringify(n) + ", " + JSON.stringify(comp.trim())
-      : JSON.stringify(n);
-    termExec("f.mat.add_lorentz(node=f.mat_from_nk(" + args + "))");
+    const win = window.prompt("拟合波长窗口 nm（lo-hi，如 400-800）：", "400-800");
+    if (win === null) return;
+    const parts = [JSON.stringify(n)];
+    const m = /^\s*(\d+(?:\.\d+)?)\s*[-~,，]\s*(\d+(?:\.\d+)?)\s*$/.exec(win || "");
+    if (m) {
+      parts.push("band=(" + (parseFloat(m[1]) * 1e-9) + ", " +
+                 (parseFloat(m[2]) * 1e-9) + ")");
+    }
+    termExec("f.mat.add_lorentz(node=f.mat_from_nk(" + parts.join(", ") + "))");
   }
 
   /* ── 扫参：按钮 = worker 里 f.add_param_sweep(...) + f.run_param_sweep(...)

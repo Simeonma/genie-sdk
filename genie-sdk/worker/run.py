@@ -414,25 +414,30 @@ class F:
 
         ``band`` is the fit window [m]: **pass it and it is honoured
         verbatim** (too few samples → a clear "widen band" error). Omit it
-        and the fit follows the **simulation source band**; if that band is
-        too sparse in the library, it falls back to the full data range and
-        says so on the terminal.
+        and the fit follows the **simulation source band**; with neither a
+        source nor a band there is no defensible window, so the verb raises
+        instead of silently fitting the whole data domain.
         """
         if band is not None:
             return core_material.mat_from_nk(
                 name, band=band, tolerance=tolerance, max_poles=max_poles)
         want = self._source_band()
-        if want is not None:
-            try:
-                return core_material.mat_from_nk(
-                    name, band=want, tolerance=tolerance, max_poles=max_poles)
-            except ValueError as exc:
-                if "data points in band" not in str(exc):
-                    raise
-                core_material._report(
-                    f"source band {want[0] * 1e9:.0f}-{want[1] * 1e9:.0f} nm "
-                    f"is too sparse in the {name} library — fitted over the "
-                    f"full data range instead; pass band= to force a window")
+        if want is None:
+            raise ValueError(
+                "f.mat_from_nk needs a wavelength window: no simulation "
+                "source is set, and fitting the whole data domain is not a "
+                "meaningful default — pass band=(lo, hi) in metres, e.g. "
+                "band=(400e-9, 800e-9)")
+        try:
+            return core_material.mat_from_nk(
+                name, band=want, tolerance=tolerance, max_poles=max_poles)
+        except ValueError as exc:
+            if "data points in band" not in str(exc):
+                raise
+            core_material._report(
+                f"source band {want[0] * 1e9:.0f}-{want[1] * 1e9:.0f} nm "
+                f"is too sparse in the {name} library — fitted over the full "
+                f"data range instead; pass band= to force a window")
         return core_material.mat_from_nk(name, band=None, tolerance=tolerance,
                                          max_poles=max_poles)
 
