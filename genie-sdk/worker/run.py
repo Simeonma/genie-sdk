@@ -7,6 +7,9 @@ material verbs' thin-delegation pattern, generalized).
   → the post tail hook → return the job id; failure / cancel raises
   ``GenieJobError``. Composed from chain's primitives — the same machine
   the sweep driver imports (Q10: a sweep is a batched submit).
+- ``f.validate()`` (design-time preflight): the same check ``submit`` runs
+  (promote + ``validate_for_ui``), with no submit, no document write and no
+  terminal row; returns the error list instead of raising.
 - The four read verbs (parsing semantics live in core/results; this module
   only does "pick the member + open the file").
 - The four post verbs (add / update / run / delete) — thin delegates to
@@ -38,6 +41,7 @@ from genie.core.material import C0_SI as C0
 from genie.core.model import Model
 from genie.core.model.draft import digest
 from genie.net import TERMINAL_OK, GenieJobError
+from genie_protocol.resolve import validate_for_ui
 
 from . import chain, plot, post, sweep
 from .chain import (ROW_CANCELED, ROW_DONE, ROW_FAILED, ROW_POST_FAILED,
@@ -100,10 +104,11 @@ def load_sweeps(doc_path) -> dict:
 class F:
     """f = core ``Model`` + actions (semantics live in core; binding and
     action implementations live in worker). All attribute reads/writes
-    delegate to the model; submit / _submit / _wait / _cancel / _save /
-    _open / _dirty + the four read verbs + five material verbs + the four
-    post verbs + the three param_sweep verbs; **there is no cancel** —
-    public cancel is a session-intercepted command, not in worker."""
+    delegate to the model; submit / validate / _submit / _wait / _cancel /
+    _save / _open / _dirty + the four read verbs + five material verbs +
+    the four post verbs + the three param_sweep verbs; **there is no
+    cancel** — public cancel is a session-intercepted command, not in
+    worker."""
 
     __slots__ = ("_model", "_env")
 
@@ -161,6 +166,25 @@ class F:
         else:                                      # killed / canceled
             env.emit(ipc.out(ROW_CANCELED.format(id=jid)))
         raise GenieJobError(jid, outcome["state"], error=outcome.get("error"))
+
+    # -- design-time preflight (the same surface as submit's precheck, no submit) --
+
+    def validate(self):
+        """Preflight the **current model** without submitting.
+
+        Promotes the live model exactly like ``submit`` does and runs the
+        same validation surface (``protocol.validate_for_ui``): parameter
+        key names → expression evaluation (Q13) → structural / value
+        guards. Nothing is sent anywhere, nothing is written to the
+        document, no terminal row is emitted.
+
+        Returns a list of ``{"loc": ..., "msg": ...}`` — empty means the
+        model would pass submit's precheck; ``loc`` is the in-config path
+        (e.g. ``materials.0.const.eps``), ``""`` means a whole-config
+        error. Design-time only: the resource guard is deployment policy
+        and is not part of this surface.
+        """
+        return validate_for_ui(self._model.to_config())
 
     # -- the four read verbs (parsing semantics live in core/results, zero terminal lines)---------
 
