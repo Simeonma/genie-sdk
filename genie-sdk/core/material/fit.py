@@ -32,6 +32,12 @@ C0_SI = 299792458.0
 
 #: Starting poles sit this far off the imaginary axis (standard VF heuristic).
 _VF_ALPHA = 0.01
+#: Pole-relocation is non-convex: different starting sets converge to
+#: different local minima (Ag 16% vs 0.8% on the same data).  Every order is
+#: therefore tried from this small deterministic family and the best RMS is
+#: kept — the cheap remedy for "the fit got stuck".
+_VF_INITS = ((0.001, "log"), (0.01, "log"), (0.1, "log"),
+             (0.3, "log"), (0.3, "lin"), (1.0, "lin"))
 #: Pole-relocation iterations per fit. Lumerical's `PoleFit` caps this at 20
 #: (field 0x218) and stops early when |Δerr| < 1e-6 (field 0x210).
 _VF_ITER = 20
@@ -155,20 +161,25 @@ def pole_to_node(a0, a1, a2, b0, b1):
 # Vector fitting (pole relocation)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _starting_poles(omega_lo, omega_hi, n_pairs):
-    """Deterministic log-spaced complex starting poles — **one per pair**
-    (the caller's pole count *is* the pair count, since a wire pole is a
-    second-order section).
+def _starting_poles(omega_lo, omega_hi, n_pairs, alpha=_VF_ALPHA, grid="log"):
+    """One deterministic starting-pole set: **one pole per pair** (the caller's
+    pole count *is* the pair count, since a wire pole is a second-order
+    section), placed on ``grid`` (``"log"`` or ``"lin"``) with the real part
+    ``-alpha·ω``.
 
-    No Lorentz pre-fit: the starting point is a property of the *band*, not
-    of a previous model.
+    There is no Lorentz pre-fit: the starting point is a property of the
+    band.  ``_search`` tries the ``_VF_INITS`` family because relocation is
+    non-convex.
     """
     if n_pairs <= 0:
         return []
-    lo = np.log(max(float(omega_lo), 1.0))
-    hi = np.log(max(float(omega_hi), float(omega_lo) * 1.000001))
-    w = np.exp(np.linspace(lo, hi, n_pairs))
-    return [complex(-_VF_ALPHA * float(wk), float(wk)) for wk in w]
+    lo = max(float(omega_lo), 1.0)
+    hi = max(float(omega_hi), lo * 1.000001)
+    if grid == "log":
+        w = np.exp(np.linspace(np.log(lo), np.log(hi), n_pairs))
+    else:
+        w = np.linspace(lo, hi, n_pairs)
+    return [complex(-alpha * float(wk), float(wk)) for wk in w]
 
 
 def _pair_den(s, p):
@@ -487,6 +498,10 @@ def fit_adaptive(wavelengths, n, k, *, tolerance=_TOLERANCE,
       ``w_im`` ("imaginary weight") applied to the imaginary residual — and
       with the passivity penalty on top when ``make_passive``
       (gain > 1e-14 → error ×1e6);
+    - every order is tried from the deterministic ``_VF_INITS`` starting
+      family and the best RMS is kept — pole relocation is non-convex, so a
+      single starting point can land in a local minimum (on the library this
+      is the difference between Ag at 16% and Ag at 0.8%);
     - stop at the first order with ``err < tolerance``; otherwise keep the
       argmin order (Lumerical re-fits at it; this fit is deterministic);
     - ``improve_stability`` runs the band clamp once per order.
@@ -534,12 +549,25 @@ def fit_adaptive(wavelengths, n, k, *, tolerance=_TOLERANCE,
                 return best
 
         for order in range(1, max_order + 1):
-            poles0 = _starting_poles(w_lo, w_hi, order)
-            eps_inf, sections, rms = vector_fit(
-                s, f, poles0, w_im, improve_stability=improve_stability,
-                eps_inf_fixed=eps_inf_fixed)
-            if not np.isfinite(eps_inf) or not np.all(np.isfinite(sections)):
+            # relocation is non-convex — try the deterministic init family and
+            # keep the best converged result for this order
+            best_order = None
+            for alpha, grid in _VF_INITS:
+                poles0 = _starting_poles(w_lo, w_hi, order, alpha, grid)
+                try:
+                    eps_inf, sections, rms = vector_fit(
+                        s, f, poles0, w_im,
+                        improve_stability=improve_stability,
+                        eps_inf_fixed=eps_inf_fixed)
+                except (ValueError, np.linalg.LinAlgError):
+                    continue
+                if not np.isfinite(eps_inf) or not np.all(np.isfinite(sections)):
+                    continue
+                if best_order is None or rms < best_order[2]:
+                    best_order = (eps_inf, sections, rms)
+            if best_order is None:
                 continue
+            eps_inf, sections, rms = best_order
             err = rms
             if make_passive and _gain_violation(
                     eps_inf, sections, omega, f) > _GAIN_EPS:
