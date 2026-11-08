@@ -284,20 +284,39 @@
   }
 
   /* ── 库材料：按钮 = worker 里一句 f 命令 ───────────────────────
-   * f.mat_from_nk(名, band=(lo,hi), max_poles=n) 从材料库读 nk、在**用户给
-   * 的波长窗口**里拟合成整节点（缺省 1 根；没有源带又不给窗口时 worker 明
-   * 报，不再全域硬拟）；f.mat.add_lorentz(node=…) 整装入模。 */
+   * f.mat_from_nk(名, band=(lo,hi), max_poles=n, imaginary_weight=w) 从材料
+   * 库读 nk、在**用户给的波长窗口**里拟合成整节点（max_poles 是 0-n 自动
+   * 选的上限，缺省 6；没有源带又不给窗口时 worker 明报）；窗口/上限/权重
+   * 记在 localStorage 里，下次点按钮直接带出来。 */
+  const FIT_LS = { win: "v2-fit-window", poles: "v2-fit-poles",
+                   imw: "v2-fit-imaginary-weight" };
+  function fitPref(key, fallback) {
+    try {
+      const v = window.localStorage.getItem(FIT_LS[key]);
+      return v === null || v === "" ? fallback : v;
+    } catch (e) { return fallback; }          /* private mode / disabled storage */
+  }
+  function fitRemember(key, value) {
+    try { window.localStorage.setItem(FIT_LS[key], String(value)); } catch (e) { /* ignore */ }
+  }
+
   function addLibraryMaterial() {
     const name = window.prompt("材料库名称（如 Au / SiO2 / ZnO）：", "");
     if (name === null) return;
     const n = name.trim();
     if (!n) return;
-    const win = window.prompt("拟合波长窗口 nm（lo-hi，如 400-800）：", "400-800");
+    const win = window.prompt("拟合波长窗口 nm（lo-hi，如 400-800）：",
+                              fitPref("win", "400-800"));
     if (win === null) return;
-    const poles = window.prompt("极点上限 max_poles（0-n 自动选，默认 6）：", "6");
+    const poles = window.prompt("极点上限 max_poles（0-n 自动选，默认 6）：",
+                                fitPref("poles", "6"));
     if (poles === null) return;
-    const imw = window.prompt("虚部权重 imaginary_weight（默认 1.0；k 很小时可调大）：", "1.0");
+    const imw = window.prompt("虚部权重 imaginary_weight（默认 1.0；k 很小时可调大）：",
+                              fitPref("imw", "1.0"));
     if (imw === null) return;
+    fitRemember("win", (win || "").trim());
+    fitRemember("poles", (poles || "").trim());
+    fitRemember("imw", (imw || "").trim());
     const parts = [JSON.stringify(n)];
     const m = /^\s*(\d+(?:\.\d+)?)\s*[-~,，]\s*(\d+(?:\.\d+)?)\s*$/.exec(win || "");
     if (m) {
