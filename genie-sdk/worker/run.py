@@ -374,8 +374,8 @@ class F:
                 f"data range instead; pass band= to force a window")
         return None, note
 
-    def fit_nk(self, wl, n, k, band=None, tolerance=0.1, max_poles=1,
-               passive=None):
+    def fit_nk(self, wl, n, k, band=None, tolerance=0.1, max_poles=6,
+               imaginary_weight=1.0, passive=None):
         """**Single-component** nk → an ``NKFit`` (band · poles · quality ·
         warnings; the opaque pole payload lives in ``model``).
 
@@ -388,7 +388,8 @@ class F:
         goes through ``f.assemble_nk``."""
         band, note = self._fit_band(wl, band)
         fit = core_material.fit_nk(wl, n, k, band=band, tolerance=tolerance,
-                                   max_poles=max_poles, passive=passive)
+                                   max_poles=max_poles, imaginary_weight=imaginary_weight,
+                                   passive=passive)
         if note is not None:
             fit = dataclasses.replace(fit, warnings=tuple(fit.warnings)
                                       + (note,))
@@ -407,7 +408,8 @@ class F:
         directly, multiple errors out)."""
         return core_material.load_nk(name, component=component)
 
-    def mat_from_nk(self, name, band=None, tolerance=0.1, max_poles=1):
+    def mat_from_nk(self, name, band=None, tolerance=0.1, max_poles=6,
+                     imaginary_weight=1.0):
         """Library name → material node in one step (a near-zero-knob
         convenience layer; one line to add into the model:
         ``f.mat.add_lorentz(node)``).
@@ -420,7 +422,8 @@ class F:
         """
         if band is not None:
             return core_material.mat_from_nk(
-                name, band=band, tolerance=tolerance, max_poles=max_poles)
+                name, band=band, tolerance=tolerance, max_poles=max_poles,
+                imaginary_weight=imaginary_weight)
         want = self._source_band()
         if want is None:
             raise ValueError(
@@ -430,7 +433,8 @@ class F:
                 "band=(400e-9, 800e-9)")
         try:
             return core_material.mat_from_nk(
-                name, band=want, tolerance=tolerance, max_poles=max_poles)
+                name, band=want, tolerance=tolerance, max_poles=max_poles,
+                imaginary_weight=imaginary_weight)
         except ValueError as exc:
             if "data points in band" not in str(exc):
                 raise
@@ -439,7 +443,8 @@ class F:
                 f"is too sparse in the {name} library — fitted over the full "
                 f"data range instead; pass band= to force a window")
         return core_material.mat_from_nk(name, band=None, tolerance=tolerance,
-                                         max_poles=max_poles)
+                                         max_poles=max_poles,
+                                         imaginary_weight=imaginary_weight)
 
     def list_library_materials(self):
         """Local library material names (sorted)."""

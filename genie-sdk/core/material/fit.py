@@ -46,11 +46,11 @@ _W_IMAG = 1.0
 #: ``improve_stability`` is on — not inside the relocation loop.
 _BAND_LO = 0.01
 _BAND_HI = 2.0
-#: Lumerical material defaults (`.mdf`, 55 entries): tolerance 0.1, but the
-#: pole budget default is **1** here — the simplest model, raised by the user
-#: (or by the GUI prompt) when the tolerance is not met.
+#: Lumerical material defaults (`.mdf`, 55 entries): tolerance 0.1, pole cap 6.
+#: The search itself starts at **0** (constant model) and only grows when the
+#: tolerance is not met, so the cap is a ceiling, not a target.
 _TOLERANCE = 0.1
-_MAX_COEFFS = 1
+_MAX_COEFFS = 6
 #: Passivity penalty (slot[5], gated by ``make_passive``): gain above
 #: ``_GAIN_EPS`` multiplies the order's error by ``_PENALTY`` so the order
 #: search rejects it (`0x14422ffa8` = 1e-14, `0x14422ffb0` = 1e6).
@@ -458,11 +458,14 @@ def fit_adaptive(wavelengths, n, k, *, tolerance=_TOLERANCE,
                  make_passive=True, improve_stability=True):
     """Lumerical's ``PoleFit::fit_auto`` — same knobs, same yardstick.
 
-    - orders 1, 2, … up to ``min(max_poles, (n_samples−1)//2)`` (slot[2] starts
-      at two *poles* = one conjugate pair = one section);
+    - orders **0, 1, 2, …** up to ``min(max_poles, (n_samples−1)//2)`` —
+      order 0 is the constant model, order 1 is one conjugate pair, and the
+      caller's ``max_poles`` is only a ceiling;
     - each order is scored by the **weighted RMS** of the eps residual
-      (slot[5]) — the quantity the fit itself minimises — with the passivity
-      penalty on top when ``make_passive`` (gain > 1e-14 → error ×1e6);
+      (slot[5]) — the quantity the fit itself minimises, with the
+      ``w_im`` ("imaginary weight") applied to the imaginary residual — and
+      with the passivity penalty on top when ``make_passive``
+      (gain > 1e-14 → error ×1e6);
     - stop at the first order with ``err < tolerance``; otherwise keep the
       argmin order (Lumerical re-fits at it; this fit is deterministic);
     - ``improve_stability`` runs the band clamp once per order.
@@ -489,8 +492,26 @@ def fit_adaptive(wavelengths, n, k, *, tolerance=_TOLERANCE,
         raise ValueError(
             f"need at least 3 samples for one pole pair, got {wl.size}")
     def _search(eps_inf_fixed):
-        """One order search; the constant is free (None) or pinned."""
+        """Order search from 0 (constant model) up to ``max_order``.
+
+        Returns the first order that meets the tolerance, else the argmin of
+        the penalised weighted RMS — i.e. the *smallest model that works*,
+        with ``max_order`` only as a ceiling.
+        """
         best = None
+
+        # order 0: a constant model — exact for a non-dispersive medium and
+        # the smallest candidate.  A non-positive constant cannot be
+        # wire-valid, so it is only considered when positive.
+        eps0 = float(np.mean(f.real))
+        if np.isfinite(eps0) and eps0 > 0.0:
+            rms0 = _weighted_rms(s, f, eps0, [], [], w_im)
+            best = ComponentFit(eps_inf=eps0, poles=[], converged=True,
+                                error=rms0, rms=rms0, poles_tried=0,
+                                target_met=rms0 < tolerance)
+            if rms0 < tolerance:
+                return best
+
         for order in range(1, max_order + 1):
             poles0 = _starting_poles(w_lo, w_hi, order)
             eps_inf, sections, rms = vector_fit(

@@ -294,8 +294,10 @@
     if (!n) return;
     const win = window.prompt("拟合波长窗口 nm（lo-hi，如 400-800）：", "400-800");
     if (win === null) return;
-    const poles = window.prompt("极点预算 max_poles（先试 1，不够再加）：", "1");
+    const poles = window.prompt("极点上限 max_poles（0-n 自动选，默认 6）：", "6");
     if (poles === null) return;
+    const imw = window.prompt("虚部权重 imaginary_weight（默认 1.0；k 很小时可调大）：", "1.0");
+    if (imw === null) return;
     const parts = [JSON.stringify(n)];
     const m = /^\s*(\d+(?:\.\d+)?)\s*[-~,，]\s*(\d+(?:\.\d+)?)\s*$/.exec(win || "");
     if (m) {
@@ -304,6 +306,9 @@
     }
     if (/^\s*\d+\s*$/.test(poles || "")) {
       parts.push("max_poles=" + parseInt(poles, 10));
+    }
+    if (/^\s*\d+(?:\.\d+)?\s*$/.test(imw || "")) {
+      parts.push("imaginary_weight=" + parseFloat(imw));
     }
     termExec("f.mat.add_lorentz(node=f.mat_from_nk(" + parts.join(", ") + "))");
   }
