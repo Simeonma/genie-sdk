@@ -49,7 +49,7 @@ from pathlib import Path
 
 import numpy as np
 from genie_protocol import _wire
-from .fit import (C0_SI, ComponentFit, DispersionResult,
+from .fit import (_TOLERANCE, C0_SI, ComponentFit, DispersionResult,
                    coverage_fraction, evaluate_dispersion, fit_adaptive,
                    fit_error, fit_range_bounds, passivity_report,
                    pole_from_node, pole_to_node, scalar_result)
@@ -479,17 +479,21 @@ class NKFit:
                 "n_fit": d.n, "k_fit": d.k}
 
 
-def fit_nk(wl, n, k, band=None, tolerance=0.1, max_poles=10, imaginary_weight=1.0, passive=None):
+def fit_nk(wl, n, k, band=None, max_poles=10, imaginary_weight=1.0):
     """Fit **one scalar n-k component** to a rational dispersion model.
 
-    The yardstick is **Lumerical's**: ``tolerance`` is the ``PoleFit``
-    tolerance on the **weighted RMS of the eps residual** ("Tolerance for RMS
-    error in data fit").  The pole budget starts at **1** (the simplest
-    model) and is raised by the caller when the residual is too large — the
-    order search grows up to ``max_poles`` and stops as soon as the tolerance
-    is met.  The model family is not a user choice: the fitter always fits
-    the general rational form; Lorentz/Drude survive only as wire-format
-    shorthands.
+    Three knobs, everything else automatic:
+
+    - ``band`` — where you will simulate;
+    - ``max_poles`` — the ceiling on the automatic order search (10 by
+      default; one pole = one second-order section = one conjugate pair);
+    - ``imaginary_weight`` — weight on the imaginary residual (1.0 default).
+
+    The order search starts at **0** (a constant model), grows only while the
+    fixed internal tolerance (0.1, Lumerical's weighted-RMS yardstick) is
+    unmet, and keeps the best RMS.  The model family is not a user choice:
+    the fitter always fits the general rational form; Lorentz/Drude survive
+    only as wire-format shorthands.  Passivity is reported, never penalised.
 
     Parameters
     ----------
@@ -498,28 +502,15 @@ def fit_nk(wl, n, k, band=None, tolerance=0.1, max_poles=10, imaginary_weight=1.
     band : tuple[float, float] or None
         Fit window [m] (lo < hi). **Default = the whole data range** — the
         fit never silently truncates. Fewer than 3 points inside raises.
-    tolerance : float
-        Weighted-RMS tolerance for the order search (Lumerical default 0.1).
-        The order grows until it is met or ``max_poles`` is reached; an
-        unmet tolerance lands in ``warnings`` (never silent).
     max_poles : int
-        **Ceiling** for the order search (one pole = one second-order section
-        = one conjugate pair). The search starts at order 0 (a constant
-        model) and grows only while the tolerance is unmet, so this is an
-        upper bound, not a target; default 10 (the 12-point metals need 9-10
-        pairs, and the sample count bounds it anyway).
+        **Ceiling** for the order search. The search starts at order 0 and
+        grows only while the tolerance is unmet, so this is an upper bound,
+        not a target; default 10 (the 12-point metals need 9-10 pairs, and
+        the sample count bounds it anyway).
     imaginary_weight : float
         Weight on the **imaginary** residual (Lumerical's "imaginary weight",
         default 1.0). When k is tiny the imaginary part of eps is tiny too;
         raising this makes its fit accuracy count proportionally more.
-    passive : bool or None
-        ``None`` (default) = **report only**: passivity lands in
-        ``quality['passive']`` and a warning fires when it is False.
-        ``True`` = enforce Lumerical's "make fit passive" penalty (a model
-        with gain > 1e-14 gets its error multiplied by 1e6 so the order
-        search rejects it).  Off by default because a narrow band often has a
-        slightly non-passive best fit and the penalty would force a much
-        worse one (TiO2 over 120nm-125um: 0.3% free vs 62% penalised).
 
     Returns
     -------
@@ -535,7 +526,6 @@ def fit_nk(wl, n, k, band=None, tolerance=0.1, max_poles=10, imaginary_weight=1.
         band reversed; unequal column lengths; fewer than 3 samples inside;
         non-finite n/k inside the band (with a data-cleaning prescription).
     """
-    make_passive = False if passive is None else bool(passive)
     wl = np.asarray(wl, dtype=float)
     n = np.asarray(n, dtype=float)
     k = np.asarray(k, dtype=float)
@@ -587,9 +577,8 @@ def fit_nk(wl, n, k, band=None, tolerance=0.1, max_poles=10, imaginary_weight=1.
                 f"rows; JSON null becomes NaN here) or use library "
                 f"data via f.load_nk; non-finite values cannot be "
                 f"fitted")
-    fit = fit_adaptive(wl[mask], n[mask], k[mask], tolerance=tolerance,
-                       max_poles=max_poles, w_im=imaginary_weight,
-                       make_passive=make_passive)
+    fit = fit_adaptive(wl[mask], n[mask], k[mask], tolerance=_TOLERANCE,
+                       max_poles=max_poles, w_im=imaginary_weight)
     omega_win = 2.0 * np.pi * C0_SI / wl[mask]
     res = scalar_result(fit, wl[mask], n[mask], k[mask],
                         passive=passivity_report(fit.eps_inf, fit.poles,
@@ -613,7 +602,7 @@ _COMPONENT_AXES = {"o": ("xx", "yy"), "e": ("zz",),
                    "x": ("xx",), "y": ("yy",), "z": ("zz",)}
 
 
-def _fit_convenience(wl, n, k, band=None, tolerance=0.1, max_poles=10, imaginary_weight=1.0):
+def _fit_convenience(wl, n, k, band=None, max_poles=10, imaginary_weight=1.0):
     """Convenience-layer rule: fit the window the **caller** names at the
     default tolerance and keep the result even if the tolerance is missed —
     the warnings say so, and ``mat_from_nk`` surfaces them.
@@ -623,8 +612,8 @@ def _fit_convenience(wl, n, k, band=None, tolerance=0.1, max_poles=10, imaginary
     where you will simulate), falling back to the data range when the
     source band holds too few samples to constrain a fit.
     """
-    return fit_nk(wl, n, k, band=band, tolerance=tolerance,
-                  max_poles=max_poles, imaginary_weight=imaginary_weight)
+    return fit_nk(wl, n, k, band=band, max_poles=max_poles,
+                  imaginary_weight=imaginary_weight)
 
 
 def _report(line: str) -> None:
@@ -641,13 +630,13 @@ def _report(line: str) -> None:
         print(line)
 
 
-def mat_from_nk(name, band=None, tolerance=0.1, max_poles=10, imaginary_weight=1.0):
+def mat_from_nk(name, band=None, max_poles=10, imaginary_weight=1.0):
     """Library name → a material node in **one call** (read library →
     per-component, per-axis ``fit_nk`` → ``assemble_nk``).
 
-    A near-zero-knob convenience layer: ``band`` (fit window [m]),
-    ``tolerance`` (weighted-RMS, Lumerical default 0.1) and ``max_poles``
-    are forwarded, nothing else is. The
+    A near-zero-knob convenience layer: only ``band`` (fit window [m]),
+    ``max_poles`` (order-search ceiling) and ``imaginary_weight`` are
+    forwarded. The
     per-component quality is not surfaced — for control use the primitive
     layer (``load_nk`` / ``fit_nk`` / ``assemble_nk``). **Does not touch the model** (adding
     to a model is one line, ``f.mat.add_lorentz(node)``); the node
@@ -678,7 +667,7 @@ def mat_from_nk(name, band=None, tolerance=0.1, max_poles=10, imaginary_weight=1
             f"f.list_library_materials() lists all local library names")
     if set(comps) == {""}:                       # iso: fit once, mount on all three axes
         wl, n, k = _to_m(comps[""])
-        fit = _fit_convenience(wl, n, k, band=band, tolerance=tolerance,
+        fit = _fit_convenience(wl, n, k, band=band,
                                max_poles=max_poles,
                                imaginary_weight=imaginary_weight)
         _report(f"{name} (iso)  {fit.summary()}")
@@ -690,7 +679,7 @@ def mat_from_nk(name, band=None, tolerance=0.1, max_poles=10, imaginary_weight=1
                 f"library {name!r}: unknown component direction {comp!r} "
                 f"(known: o/e/x/y/z)")
         wl, n, k = _to_m(comps[comp])
-        fit = _fit_convenience(wl, n, k, band=band, tolerance=tolerance,
+        fit = _fit_convenience(wl, n, k, band=band,
                                max_poles=max_poles,
                                imaginary_weight=imaginary_weight)
         _report(f"{name} ({comp})  {fit.summary()}")
