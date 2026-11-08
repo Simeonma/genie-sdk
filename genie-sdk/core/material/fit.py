@@ -30,28 +30,18 @@ from dataclasses import dataclass, field
 #: Speed of light [m/s] — the one copy (``__init__`` imports it from here).
 C0_SI = 299792458.0
 
-#: Starting poles sit this far off the imaginary axis (standard VF heuristic).
-_VF_ALPHA = 0.01
-#: Pole-relocation is non-convex: different starting sets converge to
-#: different local minima (Ag 16% vs 0.8% on the same data).  Every order is
-#: therefore tried from this small deterministic family and the best RMS is
-#: kept — the cheap remedy for "the fit got stuck".
-_VF_INITS = ((0.001, "log"), (0.01, "log"), (0.1, "log"),
-             (0.3, "log"), (0.3, "lin"), (1.0, "lin"))
-#: Pole-relocation iterations per fit. Lumerical's `PoleFit` caps this at 20
-#: (field 0x218) and stops early when |Δerr| < 1e-6 (field 0x210).
-_VF_ITER = 20
-#: Convergence: stop relocating when the weighted RMS error moves by less
-#: than this (Lumerical `PoleFit` field 0x210 = 1e-6).
-_VF_EPS = 1e-6
+#: Pole relocation is non-convex, so every order is restarted from a set of
+#: random starting points (log-uniform off-axis angle, log/lin spacing) and the
+#: best RMS is kept.  Fixed seed ⇒ reproducible on the same data.
+_VF_STARTS = 12
+_VF_SEED = 20261108
+#: Relocation runs to convergence (Δerr < 1e-12); 200 is only a termination
+#: guard for pathological cases, not a quality knob.
+_VF_MAX_ITER = 200
+_VF_EPS = 1e-12
 #: Weight on the imaginary equations ("imaginary weight", `PoleFit` field 0x1f8).
 #: Lumerical's material default is 1.0 for all shipped materials (`.mdf`, 55/55).
 _W_IMAG = 1.0
-#: Stability clamp band: `[0.01·ω_min, 2.0·ω_max]` (slot[6]; constants
-#: `0x14422ffb8` = 0.01, `0x14422ff70` = 2.0). Applied **once per order** when
-#: ``improve_stability`` is on — not inside the relocation loop.
-_BAND_LO = 0.01
-_BAND_HI = 2.0
 #: Lumerical material defaults (`.mdf`, 55 entries): tolerance 0.1, pole cap 6; our cap is 10 (the 12-point metals need 9-10 pairs).
 #: The search itself starts at **0** (constant model) and only grows when the
 #: tolerance is not met, so the cap is a ceiling, not a target.
@@ -160,15 +150,13 @@ def pole_to_node(a0, a1, a2, b0, b1):
 # Vector fitting (pole relocation)
 # ═══════════════════════════════════════════════════════════════════════════
 
-def _starting_poles(omega_lo, omega_hi, n_pairs, alpha=_VF_ALPHA, grid="log"):
-    """One deterministic starting-pole set: **one pole per pair** (the caller's
-    pole count *is* the pair count, since a wire pole is a second-order
-    section), placed on ``grid`` (``"log"`` or ``"lin"``) with the real part
-    ``-alpha·ω``.
+def _starting_poles(omega_lo, omega_hi, n_pairs, alpha, grid="log"):
+    """One starting-pole set: **one pole per pair** (the caller's pole count
+    *is* the pair count, since a wire pole is a second-order section), placed
+    on ``grid`` (``"log"`` or ``"lin"``) with the real part ``-alpha·ω``.
 
     There is no Lorentz pre-fit: the starting point is a property of the
-    band.  ``_search`` tries the ``_VF_INITS`` family because relocation is
-    non-convex.
+    band.  ``_vf_starts`` samples this family because relocation is non-convex.
     """
     if n_pairs <= 0:
         return []
@@ -179,6 +167,19 @@ def _starting_poles(omega_lo, omega_hi, n_pairs, alpha=_VF_ALPHA, grid="log"):
     else:
         w = np.linspace(lo, hi, n_pairs)
     return [complex(-alpha * float(wk), float(wk)) for wk in w]
+
+
+def _vf_starts(seed=_VF_SEED, n=_VF_STARTS):
+    """Randomized (but seeded ⇒ reproducible) starting points.
+
+    The old fixed six-set family was itself a restriction; relocation is
+    non-convex, so the off-axis angle is sampled log-uniformly in
+    ``[1e-3, 1]`` and the spacing is log or lin with equal probability.
+    """
+    rng = np.random.default_rng(seed)
+    return [(10.0 ** rng.uniform(-3.0, 0.0),
+             "log" if rng.random() < 0.5 else "lin")
+            for _ in range(int(n))]
 
 
 def _pair_den(s, p):
@@ -286,33 +287,6 @@ def _vf_step(s, f, pairs, w_im=_W_IMAG, with_const=True):
     return out
 
 
-def _clamp_band(pairs, s):
-    """Radially clamp every pole into [_BAND_LO·ω_min, _BAND_HI·ω_max].
-
-    Lumerical does exactly this (`FUN_1403a90e0`: each pole's magnitude is
-    rescaled into `[C·ω_min, C·ω_max]`, taken from the *fitted band*, with
-    pairwise proportional rescaling). Pole magnitudes far outside the band
-    are harmless physically but wreck the conditioning of the next solve.
-    """
-    if not pairs:
-        return pairs
-    w = np.abs(s)
-    lo = _BAND_LO * float(np.min(w))
-    hi = _BAND_HI * float(np.max(w))
-    out = []
-    for p in pairs:
-        mag = abs(p)
-        if mag <= 0.0:
-            out.append(p)
-        elif mag < lo:
-            out.append(p * (lo / mag))
-        elif mag > hi:
-            out.append(p * (hi / mag))
-        else:
-            out.append(p)
-    return out
-
-
 def _den_poly(p):
     """(s² − 2Re(p)s + |p|²) as a polynomial, real coefficients."""
     return np.poly1d([1.0, -2.0 * float(p.real), float(abs(p) ** 2)])
@@ -381,18 +355,18 @@ def _gain_violation(eps_inf, sections, omega, f):
     return float(np.max(np.maximum(0.0, -eps.imag[lossy])))
 
 
-def vector_fit(s, f, pairs, w_im=_W_IMAG, improve_stability=True):
+def vector_fit(s, f, pairs, w_im=_W_IMAG):
     """Pole relocation + residues in **normalized frequency**.
 
     1/(s−p) with s, p ~ 1e15 makes the LSQ matrix condition ~1e30 (SVD stops
     converging), so everything is solved with s' = s/s0 and converted back
     (poles ×s0). Returns (eps_inf, section list, weighted RMS error).
 
-    Iteration follows ``PoleFit``: at most ``_VF_ITER`` (20) relocations,
-    stopping when the weighted RMS error moves by less than ``_VF_EPS``
-    (1e-6); the best iterate is kept.  When ``improve_stability`` is on, the
-    final pole set goes through the band clamp (slot[6]) and the residues are
-    re-solved for the clamped poles — once per order, not per iteration.
+    The relocation runs to convergence (``|Δerr| < _VF_EPS``, i.e. 1e-12);
+    ``_VF_MAX_ITER`` is only a termination guard, and the best iterate is
+    kept.  There is no pole clamp: a clamp is a heuristic that can throw away
+    valid poles, and the LSQ solve is already conditioned by the frequency
+    normalization.
     """
     s = np.asarray(s, dtype=complex)
     f = np.asarray(f, dtype=complex)
@@ -401,21 +375,16 @@ def vector_fit(s, f, pairs, w_im=_W_IMAG, improve_stability=True):
     pairs = [complex(p) / s0 for p in pairs]
     best = None
     prev = None
-    for _ in range(max(1, int(_VF_ITER))):
+    for _ in range(max(1, int(_VF_MAX_ITER))):
         pairs = _vf_step(sn, f, pairs, w_im, with_const=True)
         eps_inf, coefs = _residues(sn, f, pairs, w_im)
         err = _weighted_rms(sn, f, eps_inf, pairs, coefs, w_im)
         if best is None or err < best[0]:
             best = (err, eps_inf, list(pairs), coefs)
         if prev is not None and abs(err - prev) < _VF_EPS:
-            break                       # |Δerr| < 1e-6, as in PoleFit
+            break                       # converged (|Δerr| < 1e-12)
         prev = err
     err, eps_inf, pairs, coefs = best
-    if improve_stability:                    # slot[6], once per order
-        clamped = _clamp_band(pairs, sn)
-        eps_inf, coefs = _residues(sn, f, clamped, w_im)
-        err = _weighted_rms(sn, f, eps_inf, clamped, coefs, w_im)
-        pairs = clamped
     sections = []
     for p, (a0, a1) in zip(pairs, coefs):
         p = p * s0
@@ -441,24 +410,23 @@ def fit_error(eps_inf, poles, wavelengths, n, k):
 
 def fit_adaptive(wavelengths, n, k, *, tolerance=_TOLERANCE,
                  max_poles=_MAX_COEFFS, w_im=_W_IMAG,
-                 make_passive=False, improve_stability=True):
+                 make_passive=False):
     """Lumerical's ``PoleFit::fit_auto`` — same knobs, same yardstick.
 
-    - orders **0, 1, 2, …** up to ``min(max_poles, (n_samples−1)//2)`` —
-      order 0 is the constant model, order 1 is one conjugate pair, and the
-      caller's ``max_poles`` is only a ceiling;
+    - orders **0, 1, 2, …** up to ``min(max_poles, n_samples−1)`` — order 0
+      is the constant model, order 1 is one conjugate pair, and the caller's
+      ``max_poles`` is only a ceiling;
     - each order is scored by the **weighted RMS** of the eps residual
-      (slot[5]) — the quantity the fit itself minimises, with the
-      ``w_im`` ("imaginary weight") applied to the imaginary residual — and
-      with the passivity penalty on top when ``make_passive``
-      (gain > 1e-14 → error ×1e6);
-    - every order is tried from the deterministic ``_VF_INITS`` starting
-      family and the best RMS is kept — pole relocation is non-convex, so a
-      single starting point can land in a local minimum (on the library this
-      is the difference between Ag at 16% and Ag at 0.8%);
-    - stop at the first order with ``err < tolerance``; otherwise keep the
-      argmin order (Lumerical re-fits at it; this fit is deterministic);
-    - ``improve_stability`` runs the band clamp once per order.
+      (slot[5]), with the ``w_im`` ("imaginary weight") applied to the
+      imaginary residual — and with the passivity penalty on top when
+      ``make_passive`` (gain > 1e-14 → error ×1e6);
+    - every order is restarted from ``_VF_STARTS`` randomized starting points
+      and the best RMS is kept — pole relocation is non-convex, so a single
+      starting point can land in a local minimum (Ag 16% vs 0.8%);
+    - **all** orders up to the ceiling are evaluated and the global argmin is
+      kept (``tolerance`` is the acceptance/report threshold, not an early
+      stop);
+    - relocation runs to convergence; there is no pole clamp.
 
     ``eps_inf`` is a free real constant: there is **no positivity constraint**
     anywhere in the pipeline (a negative constant is a perfectly ordinary
@@ -475,41 +443,30 @@ def fit_adaptive(wavelengths, n, k, *, tolerance=_TOLERANCE,
     s = -1j * omega
     f = (n + 1j * k) ** 2
     w_lo, w_hi = float(np.min(omega)), float(np.max(omega))
-    # 2N complex equations must cover 2P+1 unknowns → P ≤ N−1; the old
-    # (N−1)//2 was twice as strict and excluded perfectly feasible fits
-    # (Ag/Ti/Pd at 12 points: order 6 was out of reach, order 5 was worse)
+    # 2N complex equations must cover 2P+1 unknowns → P ≤ N−1
     max_order = int(min(int(max_poles), max(0, wl.size - 1)))
-    def _search():
-        """Order search from 0 (constant model) up to ``max_order``.
+    starts = _vf_starts()
 
-        Returns the first order that meets the tolerance, else the argmin of
-        the penalised weighted RMS — i.e. the *smallest model that works*,
-        with ``max_order`` only as a ceiling.
-        """
+    def _search():
+        """All orders 0..max_order; keep the global argmin."""
         best = None
 
         # order 0: a constant model — exact for a non-dispersive medium and
-        # the smallest candidate.  The constant may be negative (no wire
-        # positivity gate any more), it just has to be finite.
+        # the smallest candidate.  The constant may be negative.
         eps0 = float(np.mean(f.real))
         if np.isfinite(eps0):
             rms0 = _weighted_rms(s, f, eps0, [], [], w_im)
             best = ComponentFit(eps_inf=eps0, poles=[], converged=True,
                                 error=rms0, rms=rms0, poles_tried=0,
                                 target_met=rms0 < tolerance)
-            if rms0 < tolerance:
-                return best
 
         for order in range(1, max_order + 1):
-            # relocation is non-convex — try the deterministic init family and
-            # keep the best converged result for this order
+            # relocation is non-convex — randomized (seeded) restarts per order
             best_order = None
-            for alpha, grid in _VF_INITS:
+            for alpha, grid in starts:
                 poles0 = _starting_poles(w_lo, w_hi, order, alpha, grid)
                 try:
-                    eps_inf, sections, rms = vector_fit(
-                        s, f, poles0, w_im,
-                        improve_stability=improve_stability)
+                    eps_inf, sections, rms = vector_fit(s, f, poles0, w_im)
                 except (ValueError, np.linalg.LinAlgError):
                     continue
                 if not np.isfinite(eps_inf) or not np.all(np.isfinite(sections)):
@@ -529,8 +486,6 @@ def fit_adaptive(wavelengths, n, k, *, tolerance=_TOLERANCE,
                 target_met=err < tolerance)
             if best is None or err < best.error:
                 best = fit
-            if err < tolerance:
-                break
         return best
 
     best = _search()
