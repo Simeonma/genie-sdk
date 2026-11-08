@@ -483,16 +483,17 @@ class NKFit:
                 "n_fit": d.n, "k_fit": d.k}
 
 
-def fit_nk(wl, n, k, band=None, tolerance=0.1, max_poles=6, passive=None):
+def fit_nk(wl, n, k, band=None, tolerance=0.1, max_poles=1, passive=None):
     """Fit **one scalar n-k component** to a rational dispersion model.
 
-    The knobs and the yardstick are **Lumerical's**: ``tolerance`` is the
-    ``PoleFit`` tolerance on the **weighted RMS of the eps residual**
-    ("Tolerance for RMS error in data fit"), not a relative n/k bound, and
-    the material defaults are 6 poles / 0.1 (both from Lumerical's shipped
-    material database).  The model family is not a user choice: the fitter
-    always fits the general rational form; Lorentz/Drude survive only as
-    wire-format shorthands.
+    The yardstick is **Lumerical's**: ``tolerance`` is the ``PoleFit``
+    tolerance on the **weighted RMS of the eps residual** ("Tolerance for RMS
+    error in data fit").  The pole budget starts at **1** (the simplest
+    model) and is raised by the caller when the residual is too large — the
+    order search grows up to ``max_poles`` and stops as soon as the tolerance
+    is met.  The model family is not a user choice: the fitter always fits
+    the general rational form; Lorentz/Drude survive only as wire-format
+    shorthands.
 
     Parameters
     ----------
@@ -507,7 +508,9 @@ def fit_nk(wl, n, k, band=None, tolerance=0.1, max_poles=6, passive=None):
         unmet tolerance lands in ``warnings`` (never silent).
     max_poles : int
         Coefficient budget (one pole = one second-order section = one
-        conjugate pair). Lumerical's material default is 6.
+        conjugate pair). Default **1**; Lumerical's shipped materials use 6,
+        but the simplest model is the honest default — raise it when the
+        warning says the tolerance was not met.
     passive : bool or None
         ``None`` (default) = passivity penalty **on** (Lumerical's "make fit
         passive"): a model with gain > 1e-14 gets its error multiplied by
@@ -525,7 +528,7 @@ def fit_nk(wl, n, k, band=None, tolerance=0.1, max_poles=6, passive=None):
     Raises
     ------
     ValueError
-        band reversed; unequal column lengths; fewer than 5 samples inside;
+        band reversed; unequal column lengths; fewer than 3 samples inside;
         non-finite n/k inside the band (with a data-cleaning prescription).
     """
     make_passive = True if passive is None else bool(passive)
@@ -557,11 +560,11 @@ def fit_nk(wl, n, k, band=None, tolerance=0.1, max_poles=6, passive=None):
             f"cause")
     mask = (wl >= lo) & (wl <= hi)
     n_in = int(mask.sum())
-    if n_in < 5:                                  # two poles need (n-1)//2 >= 2
+    if n_in < 3:                                  # one pole pair needs (n-1)//2 >= 1
         raise ValueError(
             f"Only {n_in} data points in band "
-            f"{lo * 1e9:.0f}-{hi * 1e9:.0f} nm — the two-pole minimum needs "
-            f"5; widen band or supply more data inside it")
+            f"{lo * 1e9:.0f}-{hi * 1e9:.0f} nm — the one-pole minimum needs "
+            f"3; widen band or supply more data inside it")
     # Non-finite inside the window = an input-data problem: raise with
     # a **data-cleaning prescription** before fitting, distinct from
     # the tuning advice given when the iteration cap is hit (the two
@@ -605,7 +608,7 @@ _COMPONENT_AXES = {"o": ("xx", "yy"), "e": ("zz",),
                    "x": ("xx",), "y": ("yy",), "z": ("zz",)}
 
 
-def _fit_convenience(wl, n, k, band=None, tolerance=0.1, max_poles=6):
+def _fit_convenience(wl, n, k, band=None, tolerance=0.1, max_poles=1):
     """Convenience-layer rule: fit the window the **caller** names at the
     default tolerance and keep the result even if the tolerance is missed —
     the warnings say so, and ``mat_from_nk`` surfaces them.
@@ -633,7 +636,7 @@ def _report(line: str) -> None:
         print(line)
 
 
-def mat_from_nk(name, band=None, tolerance=0.1, max_poles=6):
+def mat_from_nk(name, band=None, tolerance=0.1, max_poles=1):
     """Library name → a material node in **one call** (read library →
     per-component, per-axis ``fit_nk`` → ``assemble_nk``).
 

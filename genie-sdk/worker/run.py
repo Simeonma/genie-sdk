@@ -374,7 +374,7 @@ class F:
                 f"data range instead; pass band= to force a window")
         return None, note
 
-    def fit_nk(self, wl, n, k, band=None, tolerance=0.1, max_poles=6,
+    def fit_nk(self, wl, n, k, band=None, tolerance=0.1, max_poles=1,
                passive=None):
         """**Single-component** nk → an ``NKFit`` (band · poles · quality ·
         warnings; the opaque pole payload lives in ``model``).
@@ -407,7 +407,7 @@ class F:
         directly, multiple errors out)."""
         return core_material.load_nk(name, component=component)
 
-    def mat_from_nk(self, name, band=None, tolerance=0.1, max_poles=6):
+    def mat_from_nk(self, name, band=None, tolerance=0.1, max_poles=1):
         """Library name → material node in one step (a near-zero-knob
         convenience layer; one line to add into the model:
         ``f.mat.add_lorentz(node)``).

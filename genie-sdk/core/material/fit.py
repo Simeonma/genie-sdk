@@ -46,9 +46,11 @@ _W_IMAG = 1.0
 #: ``improve_stability`` is on — not inside the relocation loop.
 _BAND_LO = 0.01
 _BAND_HI = 2.0
-#: Lumerical material defaults (`.mdf`, 55 entries): 6 poles, RMS tolerance 0.1.
+#: Lumerical material defaults (`.mdf`, 55 entries): tolerance 0.1, but the
+#: pole budget default is **1** here — the simplest model, raised by the user
+#: (or by the GUI prompt) when the tolerance is not met.
 _TOLERANCE = 0.1
-_MAX_COEFFS = 6
+_MAX_COEFFS = 1
 #: Passivity penalty (slot[5], gated by ``make_passive``): gain above
 #: ``_GAIN_EPS`` multiplies the order's error by ``_PENALTY`` so the order
 #: search rejects it (`0x14422ffa8` = 1e-14, `0x14422ffb0` = 1e6).
@@ -456,7 +458,8 @@ def fit_adaptive(wavelengths, n, k, *, tolerance=_TOLERANCE,
                  make_passive=True, improve_stability=True):
     """Lumerical's ``PoleFit::fit_auto`` — same knobs, same yardstick.
 
-    - orders 2, 3, … up to ``min(max_poles, (n_samples−1)//2)`` (slot[2]);
+    - orders 1, 2, … up to ``min(max_poles, (n_samples−1)//2)`` (slot[2] starts
+      at two *poles* = one conjugate pair = one section);
     - each order is scored by the **weighted RMS** of the eps residual
       (slot[5]) — the quantity the fit itself minimises — with the passivity
       penalty on top when ``make_passive`` (gain > 1e-14 → error ×1e6);
@@ -472,8 +475,8 @@ def fit_adaptive(wavelengths, n, k, *, tolerance=_TOLERANCE,
     """
     if not (tolerance > 0):
         raise ValueError(f"tolerance must be > 0, got {tolerance!r}")
-    if int(max_poles) < 2:
-        raise ValueError(f"max_poles must be >= 2, got {max_poles!r}")
+    if int(max_poles) < 1:
+        raise ValueError(f"max_poles must be >= 1, got {max_poles!r}")
     wl = np.asarray(wavelengths, dtype=float)
     n = np.asarray(n, dtype=float)
     k = np.asarray(k, dtype=float)
@@ -482,13 +485,13 @@ def fit_adaptive(wavelengths, n, k, *, tolerance=_TOLERANCE,
     f = (n + 1j * k) ** 2
     w_lo, w_hi = float(np.min(omega)), float(np.max(omega))
     max_order = int(min(int(max_poles), (wl.size - 1) // 2))
-    if max_order < 2:
+    if max_order < 1:
         raise ValueError(
-            f"need at least 5 samples for the two-pole minimum, got {wl.size}")
+            f"need at least 3 samples for one pole pair, got {wl.size}")
     def _search(eps_inf_fixed):
         """One order search; the constant is free (None) or pinned."""
         best = None
-        for order in range(2, max_order + 1):
+        for order in range(1, max_order + 1):
             poles0 = _starting_poles(w_lo, w_hi, order)
             eps_inf, sections, rms = vector_fit(
                 s, f, poles0, w_im, improve_stability=improve_stability,

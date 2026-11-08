@@ -284,9 +284,9 @@
   }
 
   /* ── 库材料：按钮 = worker 里一句 f 命令 ───────────────────────
-   * f.mat_from_nk(名, band=(lo,hi)) 从材料库读 nk、在**用户给的波长窗口**
-   * 里拟合成整节点（没有源带又不给窗口时 worker 会明报，不再全域硬拟）；
-   * f.mat.add_lorentz(node=…) 整装入模（Q1.4 窄例外：只收整节点）。 */
+   * f.mat_from_nk(名, band=(lo,hi), max_poles=n) 从材料库读 nk、在**用户给
+   * 的波长窗口**里拟合成整节点（缺省 1 根；没有源带又不给窗口时 worker 明
+   * 报，不再全域硬拟）；f.mat.add_lorentz(node=…) 整装入模。 */
   function addLibraryMaterial() {
     const name = window.prompt("材料库名称（如 Au / SiO2 / ZnO）：", "");
     if (name === null) return;
@@ -294,11 +294,16 @@
     if (!n) return;
     const win = window.prompt("拟合波长窗口 nm（lo-hi，如 400-800）：", "400-800");
     if (win === null) return;
+    const poles = window.prompt("极点预算 max_poles（先试 1，不够再加）：", "1");
+    if (poles === null) return;
     const parts = [JSON.stringify(n)];
     const m = /^\s*(\d+(?:\.\d+)?)\s*[-~,，]\s*(\d+(?:\.\d+)?)\s*$/.exec(win || "");
     if (m) {
       parts.push("band=(" + (parseFloat(m[1]) * 1e-9) + ", " +
                  (parseFloat(m[2]) * 1e-9) + ")");
+    }
+    if (/^\s*\d+\s*$/.test(poles || "")) {
+      parts.push("max_poles=" + parseInt(poles, 10));
     }
     termExec("f.mat.add_lorentz(node=f.mat_from_nk(" + parts.join(", ") + "))");
   }
