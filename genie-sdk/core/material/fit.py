@@ -130,7 +130,6 @@ class ComponentFit:
     rms: float | None = None         # weighted RMS before the passivity penalty
     poles_tried: int | None = None   # pole count the fit finally used
     target_met: bool = True          # False = best order was over tolerance
-    eps_inf_fixed: bool = False      # True = constant pinned to 1.0 (wire contract)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -344,35 +343,6 @@ def _residues(s, f, pairs, w_im=_W_IMAG):
     return float(x[2 * P]), coefs
 
 
-def _residues_fixed(s, f, pairs, eps_inf, w_im=_W_IMAG):
-    """Fixed poles **and** fixed constant → residues only (2P unknowns).
-
-    The bridge for our wire contract (`eps_inf > 0`) when the free solve
-    lands on a non-positive constant: refit the residues against the data
-    with ``eps_inf`` pinned instead of discarding the order.
-    """
-    P = len(pairs)
-    dens = [_pair_den(s, p) for p in pairs]
-    N = s.size
-    A = np.zeros((2 * N, 2 * P))
-    rhs = np.zeros(2 * N)
-    for k in range(P):
-        B1 = 1.0 / dens[k]
-        Bs = s / dens[k]
-        A[:N, 2 * k] = B1.real
-        A[:N, 2 * k + 1] = Bs.real
-        A[N:, 2 * k] = B1.imag
-        A[N:, 2 * k + 1] = Bs.imag
-    r = f - complex(eps_inf, 0.0)
-    rhs[:N] = r.real
-    rhs[N:] = r.imag
-    if w_im != 1.0:
-        A[N:] *= w_im
-        rhs[N:] *= w_im
-    x, *_ = np.linalg.lstsq(A, rhs, rcond=None)
-    return [(float(x[2 * k]), float(x[2 * k + 1])) for k in range(P)]
-
-
 def _weighted_rms(s, f, eps_inf, pairs, coefs, w_im=_W_IMAG):
     """Weighted RMS residual — **Lumerical's error function**, verbatim.
 
@@ -411,8 +381,7 @@ def _gain_violation(eps_inf, sections, omega, f):
     return float(np.max(np.maximum(0.0, -eps.imag[lossy])))
 
 
-def vector_fit(s, f, pairs, w_im=_W_IMAG, improve_stability=True,
-               eps_inf_fixed=None):
+def vector_fit(s, f, pairs, w_im=_W_IMAG, improve_stability=True):
     """Pole relocation + residues in **normalized frequency**.
 
     1/(s−p) with s, p ~ 1e15 makes the LSQ matrix condition ~1e30 (SVD stops
@@ -424,28 +393,18 @@ def vector_fit(s, f, pairs, w_im=_W_IMAG, improve_stability=True,
     (1e-6); the best iterate is kept.  When ``improve_stability`` is on, the
     final pole set goes through the band clamp (slot[6]) and the residues are
     re-solved for the clamped poles — once per order, not per iteration.
-
-    ``eps_inf_fixed`` pins the constant for the whole relocation (the
-    constrained pass used when the free solve lands on a non-positive
-    constant but the wire needs ``eps_inf > 0``).
     """
     s = np.asarray(s, dtype=complex)
     f = np.asarray(f, dtype=complex)
-    d0 = None if eps_inf_fixed is None else float(eps_inf_fixed)
-    g = f if d0 is None else f - d0
     s0 = float(np.exp(np.mean(np.log(np.abs(s)))))
     sn = s / s0
     pairs = [complex(p) / s0 for p in pairs]
     best = None
     prev = None
     for _ in range(max(1, int(_VF_ITER))):
-        pairs = _vf_step(sn, g, pairs, w_im, with_const=(d0 is None))
-        if d0 is None:
-            eps_inf, coefs = _residues(sn, g, pairs, w_im)
-        else:
-            eps_inf, coefs = d0, _residues_fixed(sn, g, pairs, 0.0, w_im)
-        err = _weighted_rms(sn, g, 0.0 if d0 is not None else eps_inf,
-                            pairs, coefs, w_im)
+        pairs = _vf_step(sn, f, pairs, w_im, with_const=True)
+        eps_inf, coefs = _residues(sn, f, pairs, w_im)
+        err = _weighted_rms(sn, f, eps_inf, pairs, coefs, w_im)
         if best is None or err < best[0]:
             best = (err, eps_inf, list(pairs), coefs)
         if prev is not None and abs(err - prev) < _VF_EPS:
@@ -454,13 +413,8 @@ def vector_fit(s, f, pairs, w_im=_W_IMAG, improve_stability=True,
     err, eps_inf, pairs, coefs = best
     if improve_stability:                    # slot[6], once per order
         clamped = _clamp_band(pairs, sn)
-        if d0 is None:
-            eps_inf, coefs = _residues(sn, g, clamped, w_im)
-            err = _weighted_rms(sn, g, eps_inf, clamped, coefs, w_im)
-        else:
-            eps_inf = d0
-            coefs = _residues_fixed(sn, g, clamped, 0.0, w_im)
-            err = _weighted_rms(sn, g, 0.0, clamped, coefs, w_im)
+        eps_inf, coefs = _residues(sn, f, clamped, w_im)
+        err = _weighted_rms(sn, f, eps_inf, clamped, coefs, w_im)
         pairs = clamped
     sections = []
     for p, (a0, a1) in zip(pairs, coefs):
@@ -506,11 +460,9 @@ def fit_adaptive(wavelengths, n, k, *, tolerance=_TOLERANCE,
       argmin order (Lumerical re-fits at it; this fit is deterministic);
     - ``improve_stability`` runs the band clamp once per order.
 
-    ``eps_inf <= 0`` is **not** a reason to drop an order (Lumerical has no
-    such gate).  If the best order's free constant is non-positive, the
-    residues are re-solved with the constant pinned to ``1.0`` so the wire
-    contract (``eps_inf > 0``) holds; the result is marked
-    ``eps_inf_fixed``.
+    ``eps_inf`` is a free real constant: there is **no positivity constraint**
+    anywhere in the pipeline (a negative constant is a perfectly ordinary
+    rational model, and metals routinely need one).
     """
     if not (tolerance > 0):
         raise ValueError(f"tolerance must be > 0, got {tolerance!r}")
@@ -527,7 +479,7 @@ def fit_adaptive(wavelengths, n, k, *, tolerance=_TOLERANCE,
     if max_order < 1:
         raise ValueError(
             f"need at least 3 samples for one pole pair, got {wl.size}")
-    def _search(eps_inf_fixed):
+    def _search():
         """Order search from 0 (constant model) up to ``max_order``.
 
         Returns the first order that meets the tolerance, else the argmin of
@@ -537,10 +489,10 @@ def fit_adaptive(wavelengths, n, k, *, tolerance=_TOLERANCE,
         best = None
 
         # order 0: a constant model — exact for a non-dispersive medium and
-        # the smallest candidate.  A non-positive constant cannot be
-        # wire-valid, so it is only considered when positive.
+        # the smallest candidate.  The constant may be negative (no wire
+        # positivity gate any more), it just has to be finite.
         eps0 = float(np.mean(f.real))
-        if np.isfinite(eps0) and eps0 > 0.0:
+        if np.isfinite(eps0):
             rms0 = _weighted_rms(s, f, eps0, [], [], w_im)
             best = ComponentFit(eps_inf=eps0, poles=[], converged=True,
                                 error=rms0, rms=rms0, poles_tried=0,
@@ -557,8 +509,7 @@ def fit_adaptive(wavelengths, n, k, *, tolerance=_TOLERANCE,
                 try:
                     eps_inf, sections, rms = vector_fit(
                         s, f, poles0, w_im,
-                        improve_stability=improve_stability,
-                        eps_inf_fixed=eps_inf_fixed)
+                        improve_stability=improve_stability)
                 except (ValueError, np.linalg.LinAlgError):
                     continue
                 if not np.isfinite(eps_inf) or not np.all(np.isfinite(sections)):
@@ -575,26 +526,18 @@ def fit_adaptive(wavelengths, n, k, *, tolerance=_TOLERANCE,
             fit = ComponentFit(
                 eps_inf=eps_inf, poles=sections, converged=True,
                 error=err, rms=rms, poles_tried=order,
-                target_met=err < tolerance,
-                eps_inf_fixed=eps_inf_fixed is not None)
+                target_met=err < tolerance)
             if best is None or err < best.error:
                 best = fit
             if err < tolerance:
                 break
         return best
 
-    best = _search(None)
-    if best is not None and best.eps_inf > 0.0:
-        return best
-    # Wire contract: eps_inf must be positive.  Re-run the whole search with
-    # the constant pinned (a constrained fit) instead of discarding orders.
-    pinned = _search(1.0)
-    if pinned is not None:
-        return pinned
-    if best is not None:
-        return best                     # let assemble_nk reject it loudly
-    raise ValueError(
-        "vector fitting failed for every order — check the band and the data")
+    best = _search()
+    if best is None:
+        raise ValueError(
+            "vector fitting failed for every order — check the band and the data")
+    return best
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -671,15 +614,6 @@ def scalar_result(fit, w, n_data, k_data, *, passive, coverage):
             f"{len(fit.poles)} pole(s) (of the orders tried) — raise "
             f"max_poles, narrow the band, or accept this fit knowing the "
             f"residual")
-    if getattr(fit, "eps_inf_fixed", False):
-        warnings_out.append(
-            "the free solve gave eps_inf <= 0; the residues were re-solved "
-            "with eps_inf pinned to 1.0 so the material is wire-valid — "
-            "re-check the band if this matters")
-    if not (fit.eps_inf > 0):
-        warnings_out.append(
-            f"eps_inf={fit.eps_inf!r} <= 0 — cannot be assembled into a "
-            f"valid material (assemble_nk rejects this component)")
     if not passive:
         warnings_out.append(
             "the fitted dispersion is NOT passive in the band "

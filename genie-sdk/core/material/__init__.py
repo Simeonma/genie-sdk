@@ -376,8 +376,9 @@ def assemble_nk(fits, name=None):
         ``fits`` is not a non-empty dict; unknown key names (the
         lower triangle yx/zx/zy is not accepted — mirroring for
         symmetric materials is automatic); a missing diagonal; a
-        non-assemblable component (not converged or eps_inf ≤ 0,
-        named explicitly in the message).
+        non-assemblable component (not converged, named explicitly in
+        the message).  ``eps_inf`` may be any real value (negative
+        constants are valid rational models).
     """
     if not isinstance(fits, dict) or not fits:
         raise ValueError(
@@ -399,11 +400,6 @@ def assemble_nk(fits, name=None):
             raise ValueError(
                 f"assemble_nk: component {key!r} must be an NKFit from "
                 f"f.fit_nk(...), got {type(r).__name__}")
-        if not (r.model.get("eps_inf", 0.0) > 0):
-            raise ValueError(
-                f"assemble_nk: component {key!r} is not assemblable "
-                f"(eps_inf={r.model.get('eps_inf')!r}) — refit that "
-                f"component before assembling")
 
     eps_inf = [fits[c].model["eps_inf"] for c in _DIAG]
     poles = []
@@ -668,9 +664,8 @@ def mat_from_nk(name, band=None, tolerance=0.1, max_poles=6, imaginary_weight=1.
         Library name not found (pointing to
         :func:`list_library_materials`); an unknown component
         direction; incomplete components (missing axes); any
-        component's fit not assemblable (not converged /
-        eps_inf≤0 — assemble names it explicitly). Messages are
-        always English.
+        component's fit not assemblable (not converged —
+        assemble names it explicitly). Messages are always English.
     """
     comps = _load_raw(name)
     if comps is None:

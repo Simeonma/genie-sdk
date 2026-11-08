@@ -185,15 +185,13 @@ def _check_range(v: tuple[float, float]) -> tuple[float, float]:
     return (lo, hi)
 
 
-def _check_tensor_sym(v):
-    """3×3 tensor guard: shape 3×3, every element finite, main diagonal
-    > 0, symmetric (relative tolerance 1e-6). Mirrors the kernel's
-    symmetric write in _inf_to_tensor and the main-diagonal>0 criterion
-    of _require_positive_diagonal; off-diagonal entries may be negative —
-    negative anisotropic coupling is legal, and the
-    schema-layer defense for physical stability only checks main
-    diagonal > 0 (positive-definiteness is the engine's responsibility,
-    same as the kernel)."""
+def _check_tensor_sym(v, positive_diag=True):
+    """3×3 tensor guard: shape 3×3, every element finite, symmetric
+    (relative tolerance 1e-6); ``positive_diag=True`` additionally requires
+    the main diagonal > 0 (the eps/mu path).  For ``eps_inf``/``mu_inf`` the
+    diagonal may be negative — a negative constant is a valid rational model
+    (metals routinely need one).  Off-diagonal entries may always be
+    negative."""
     if len(v) != 3 or any(len(row) != 3 for row in v):
         raise ValueError(
             "tensor must be 3x3 (row-major nested list[list[float]])")
@@ -201,11 +199,12 @@ def _check_tensor_sym(v):
         for x in row:
             if not math.isfinite(x):
                 raise ValueError(f"tensor elements must be finite, got {x!r}")
-    for i in range(3):
-        if not v[i][i] > 0:
-            raise ValueError(
-                f"tensor main diagonal must be > 0, got v[{i}][{i}]="
-                f"{v[i][i]!r}")
+    if positive_diag:
+        for i in range(3):
+            if not v[i][i] > 0:
+                raise ValueError(
+                    f"tensor main diagonal must be > 0, got v[{i}][{i}]="
+                    f"{v[i][i]!r}")
     for i in range(3):
         for j in range(i + 1, 3):
             a, b = v[i][j], v[j][i]
@@ -217,14 +216,12 @@ def _check_tensor_sym(v):
 
 
 def _check_finite_pos(v):
-    """Per-element guard for the eps family (eps/mu/eps_inf/mu_inf):
-    scalar / 3-element diagonal = **finite and > 0** (mirrors the local
-    _require_positive_diagonal, isfinite included: eps=inf passes
-    ">0", would silently build, and then NaN-pollute the whole
-    simulation); 3×3 tensor = every element finite + main diagonal > 0
-    + symmetric (_check_tensor_sym; off-diagonal may be negative).
-    Invalid values fail with an early 422 here instead of at driver
-    time."""
+    """Per-element guard for the eps/mu family: scalar / 3-element diagonal =
+    **finite and > 0** (isfinite included: eps=inf passes ">0", would
+    silently build, and then NaN-pollute the whole simulation); 3×3 tensor =
+    every element finite + main diagonal > 0 + symmetric (off-diagonal may be
+    negative).  Invalid values fail with an early 422 here instead of at
+    driver time."""
     if isinstance(v, list):          # 3×3 tensor
         return _check_tensor_sym(v)
     for x in (v if isinstance(v, tuple) else (v,)):
@@ -232,6 +229,23 @@ def _check_finite_pos(v):
             raise ValueError(
                 f"must be finite and positive (scalar iso or 3-element "
                 f"diagonal, per element), got {x!r}")
+    return v
+
+
+def _check_finite_real(v):
+    """Guard for ``eps_inf``/``mu_inf``: finite, **any sign**.
+
+    There is no physical requirement that the high-frequency constant be
+    positive — a negative constant is an ordinary rational model and metals
+    routinely fit to one.  Only non-finite values are rejected.
+    """
+    if isinstance(v, list):          # 3×3 tensor
+        return _check_tensor_sym(v, positive_diag=False)
+    for x in (v if isinstance(v, tuple) else (v,)):
+        if not math.isfinite(x):
+            raise ValueError(
+                f"must be finite (scalar iso or 3-element diagonal, per "
+                f"element, any sign), got {x!r}")
     return v
 
 
@@ -597,9 +611,12 @@ class ConstMatSpec(_Identified, _StrictModel):
 class LorentzMatSpec(_Identified, _StrictModel):
     """Lorentz/Drude dispersive material. eps_inf/mu_inf follow the same
     shape semantics as ConstMatSpec's eps/mu (scalar iso | 3-element
-    diagonal | 3×3 tensor); per-pole forms of poles/mu_poles are
-    described in PoleSpec (iso | rank-1, purely scalar parameters ± α/β
-    direction). color: same as ConstMatSpec.color (display only)."""
+    diagonal | 3×3 tensor) but **any finite sign** is accepted: a negative
+    high-frequency constant is an ordinary rational model (metals fit to
+    one), so there is no positivity gate here. Per-pole forms of
+    poles/mu_poles are described in PoleSpec (iso | rank-1, purely scalar
+    parameters ± α/β direction). color: same as ConstMatSpec.color
+    (display only)."""
 
     type: Literal["lorentz"] = "lorentz"
     name: str = Field(min_length=1)
@@ -609,7 +626,7 @@ class LorentzMatSpec(_Identified, _StrictModel):
     mu_poles: list[PoleSpec] = Field(default_factory=list)
     color: Optional[str] = None
 
-    _v = field_validator("eps_inf", "mu_inf", mode="after")(_check_finite_pos)
+    _v = field_validator("eps_inf", "mu_inf", mode="after")(_check_finite_real)
     _vc = field_validator("color", mode="after")(_check_hex_color)
 
 
