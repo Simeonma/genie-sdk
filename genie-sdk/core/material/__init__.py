@@ -547,20 +547,10 @@ def fit_nk(wl, n, k, band=None, max_poles=10, imaginary_weight=1.0,
     if band is None:
         lo = float(np.min(wl))
         hi = float(np.max(wl))
+        if not lo < hi:          # a single sample still fits a constant model
+            hi = float(np.nextafter(lo, np.inf))
     else:
-        lo, hi = fit_range_bounds(band)
-    if not lo < hi:
-        raise ValueError(
-            f"band must satisfy lo < hi [m]; got ({lo!r}, {hi!r})")
-    wl = np.asarray(wl, dtype=float)
-    n = np.asarray(n, dtype=float)
-    k = np.asarray(k, dtype=float)
-    if not (wl.size == n.size == k.size):
-        raise ValueError(
-            f"columns must have equal lengths, got wl={wl.size}, "
-            f"n={n.size}, k={k.size} — boolean masking of mismatched "
-            f"columns would crash with a bare IndexError far from the "
-            f"cause")
+        lo, hi = fit_range_bounds(band)      # explicit band: validated lo < hi
     mask = (wl >= lo) & (wl <= hi)
     n_in = int(mask.sum())
     if n_in < 1:                                  # an empty window has nothing to fit
