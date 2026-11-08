@@ -475,10 +475,13 @@ def fit_adaptive(wavelengths, n, k, *, tolerance=_TOLERANCE,
     s = -1j * omega
     f = (n + 1j * k) ** 2
     w_lo, w_hi = float(np.min(omega)), float(np.max(omega))
-    max_order = int(min(int(max_poles), (wl.size - 1) // 2))
+    # 2N complex equations must cover 2P+1 unknowns → P ≤ N−1; the old
+    # (N−1)//2 was twice as strict and excluded perfectly feasible fits
+    # (Ag/Ti/Pd at 12 points: order 6 was out of reach, order 5 was worse)
+    max_order = int(min(int(max_poles), wl.size - 1))
     if max_order < 1:
         raise ValueError(
-            f"need at least 3 samples for one pole pair, got {wl.size}")
+            f"need at least 2 samples for one pole pair, got {wl.size}")
     def _search():
         """Order search from 0 (constant model) up to ``max_order``.
 
