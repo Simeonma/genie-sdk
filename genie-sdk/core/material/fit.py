@@ -5,22 +5,24 @@ One scalar n-k component → a **rational pole model**
     eps(s) = eps_inf + Σ_k [ r_k/(s − p_k) + conj(r_k)/(s − conj(p_k)) ]
     s = −jω        (e^{−iωt}; the same convention as ωp²/(ω0² − ω² − jγω))
 
-The fitter is **vector fitting with pole relocation** (Gustavsen–Semlyen
-with Sanathanan–Koerner weighting). Every pole carries a complex residue,
-so "zeros" are not a separate stage — they *are* the residue phase. Lorentz
-and Drude are then the special case (a single real positive residue on the
-axis) and survive only as **wire-format shorthands** a user may hand-write;
-the fitter has no Lorentz stage (Q14).
+The fitter is **vector fitting with pole relocation** (Gustavsen–Semlyen;
+no SK reweighting — that broke convergence here). Every pole carries a
+complex residue, so "zeros" are not a separate stage — they *are* the
+residue phase. Lorentz and Drude are then the special case (a single real
+positive residue on the axis) and survive only as **wire-format
+shorthands** a user may hand-write; the fitter has no Lorentz stage (Q14).
 
-Why this algorithm, from first principles: with the poles fixed the model is
-**linear** in the residues; the pole *positions* are then recovered by
-solving another linear problem for the zeros of an auxiliary function σ(s)
-and iterating. No nonlinear optimiser, no local-minimum roulette, no scipy.
+Why this algorithm: with the poles fixed the model is **linear** in the
+residues; the pole *positions* are recovered by solving another linear
+problem for the zeros of an auxiliary function σ(s) and iterating. No
+nonlinear optimiser, no scipy. Relocation is non-convex, so each order is
+restarted from randomized starting points and the best RMS wins.
 
-``vector_fit`` returns the pole set; ``fit_adaptive`` grows the pole count
-until the **weighted RMS** of the eps residual meets ``tolerance``
-(Lumerical's yardstick). Passivity is penalised inside the order search
-(``make_passive``), matching Lumerical's "make fit passive".
+``vector_fit`` returns the pole set; ``fit_adaptive`` evaluates every order
+0..min(max_poles, N−1) and keeps the global argmin of the weighted RMS of
+the eps residual (``tolerance`` is the report threshold, not an early
+stop). Passivity is reported by default; ``make_passive=True`` enables
+Lumerical's gain penalty.
 """
 from __future__ import annotations
 

@@ -4,8 +4,8 @@
 Public surface:
 
 - Public entry points: ``fit_nk`` (**scalar single-component,
-  numeric-only**: single-component nk → Drude-Lorentz fit numbers,
-  six-key dict) / ``assemble_nk`` (**the only node factory**:
+  numeric-only**: single-component nk → rational-pole fit numbers,
+  stable NKFit shape) / ``assemble_nk`` (**the only node factory**:
   per-component results → a single node) / ``load_nk`` (library
   name → raw n-k data) / ``list_library_materials`` (list of
   library names) / ``mat_from_nk`` (one-call convenience: library
@@ -24,10 +24,11 @@ Public surface:
 - material_node validation = a real protocol
   (``LorentzMatSpec.model_validate``); carries no color / no id
   (that is the id issuer's business).
-- quality holds five scalars; failure taxonomy: non-finite inside
-  the fit window = ValueError + a data-cleaning prescription;
-  hitting the iteration cap = converged=False + an iteration
-  prescription.
+- quality holds the twelve documented keys (``rms`` / ``rms_rel`` /
+  ``tolerance_met`` …); failure taxonomy: non-finite inside the fit
+  window = ValueError + a data-cleaning prescription; an empty
+  window = ValueError; data quantity inside a non-empty window is
+  the caller's call (one sample → constant model).
 - Error messages are always English.
 - Data files = ``genie-sdk/resources/materials/*.yml`` (37 files;
   refractiveindex.info format, CC0) — located relative to
@@ -35,9 +36,8 @@ Public surface:
   external path); parsing semantics: tabulated DATA blocks + both
   formula 1/4 paths, bad rows skipped with a warning without
   truncating, non-finite rows dropped, a lower bound of ≥5 rows.
-- scipy lazy import: imported only at the first real fit; if
-  missing, an ImportError is reported explicitly — no silent
-  degradation.
+- numpy only: the fitter is a hand-written vector fit — no scipy, no
+  nonlinear optimiser, no hidden dependency.
 """
 from __future__ import annotations
 
