@@ -374,7 +374,7 @@ class F:
                 f"data range instead; pass band= to force a window")
         return None, note
 
-    def fit_nk(self, wl, n, k, band=None, tolerance=0.1, max_poles=6,
+    def fit_nk(self, wl, n, k, band=None, tolerance=0.1, max_poles=10,
                imaginary_weight=1.0, passive=None):
         """**Single-component** nk → an ``NKFit`` (band · poles · quality ·
         warnings; the opaque pole payload lives in ``model``).
@@ -383,7 +383,7 @@ class F:
         will simulate, as Lumerical does), falling back to the data range
         when the source band is too sparse. ``tolerance`` is Lumerical's
         weighted-RMS bound on the eps residual (default 0.1); ``max_poles``
-        is the coefficient budget (default 6 — both are Lumerical's material
+        is the coefficient budget (default 10 — tolerance 0.1 is Lumerical's material
         defaults). ``passive=None`` runs the passivity penalty. Iso still
         goes through ``f.assemble_nk``."""
         band, note = self._fit_band(wl, band)
@@ -408,7 +408,7 @@ class F:
         directly, multiple errors out)."""
         return core_material.load_nk(name, component=component)
 
-    def mat_from_nk(self, name, band=None, tolerance=0.1, max_poles=6,
+    def mat_from_nk(self, name, band=None, tolerance=0.1, max_poles=10,
                      imaginary_weight=1.0):
         """Library name → material node in one step (a near-zero-knob
         convenience layer; one line to add into the model:

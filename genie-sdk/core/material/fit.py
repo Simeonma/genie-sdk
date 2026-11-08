@@ -52,11 +52,11 @@ _W_IMAG = 1.0
 #: ``improve_stability`` is on — not inside the relocation loop.
 _BAND_LO = 0.01
 _BAND_HI = 2.0
-#: Lumerical material defaults (`.mdf`, 55 entries): tolerance 0.1, pole cap 6.
+#: Lumerical material defaults (`.mdf`, 55 entries): tolerance 0.1, pole cap 6; our cap is 10 (the 12-point metals need 9-10 pairs).
 #: The search itself starts at **0** (constant model) and only grows when the
 #: tolerance is not met, so the cap is a ceiling, not a target.
 _TOLERANCE = 0.1
-_MAX_COEFFS = 6
+_MAX_COEFFS = 10
 #: Passivity penalty (slot[5], gated by ``make_passive``): gain above
 #: ``_GAIN_EPS`` multiplies the order's error by ``_PENALTY`` so the order
 #: search rejects it (`0x14422ffa8` = 1e-14, `0x14422ffb0` = 1e6).
@@ -441,7 +441,7 @@ def fit_error(eps_inf, poles, wavelengths, n, k):
 
 def fit_adaptive(wavelengths, n, k, *, tolerance=_TOLERANCE,
                  max_poles=_MAX_COEFFS, w_im=_W_IMAG,
-                 make_passive=True, improve_stability=True):
+                 make_passive=False, improve_stability=True):
     """Lumerical's ``PoleFit::fit_auto`` — same knobs, same yardstick.
 
     - orders **0, 1, 2, …** up to ``min(max_poles, (n_samples−1)//2)`` —

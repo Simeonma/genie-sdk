@@ -308,8 +308,8 @@
     const win = window.prompt("拟合波长窗口 nm（lo-hi，如 400-800）：",
                               fitPref("win", "400-800"));
     if (win === null) return;
-    const poles = window.prompt("极点上限 max_poles（0-n 自动选，默认 6）：",
-                                fitPref("poles", "6"));
+    const poles = window.prompt("极点上限 max_poles（0-n 自动选，默认 10）：",
+                                fitPref("poles", "10"));
     if (poles === null) return;
     const imw = window.prompt("虚部权重 imaginary_weight（默认 1.0；k 很小时可调大）：",
                               fitPref("imw", "1.0"));

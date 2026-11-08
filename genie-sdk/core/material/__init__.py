@@ -479,7 +479,7 @@ class NKFit:
                 "n_fit": d.n, "k_fit": d.k}
 
 
-def fit_nk(wl, n, k, band=None, tolerance=0.1, max_poles=6, imaginary_weight=1.0, passive=None):
+def fit_nk(wl, n, k, band=None, tolerance=0.1, max_poles=10, imaginary_weight=1.0, passive=None):
     """Fit **one scalar n-k component** to a rational dispersion model.
 
     The yardstick is **Lumerical's**: ``tolerance`` is the ``PoleFit``
@@ -506,16 +506,20 @@ def fit_nk(wl, n, k, band=None, tolerance=0.1, max_poles=6, imaginary_weight=1.0
         **Ceiling** for the order search (one pole = one second-order section
         = one conjugate pair). The search starts at order 0 (a constant
         model) and grows only while the tolerance is unmet, so this is an
-        upper bound, not a target; default 6 (Lumerical's material default).
+        upper bound, not a target; default 10 (the 12-point metals need 9-10
+        pairs, and the sample count bounds it anyway).
     imaginary_weight : float
         Weight on the **imaginary** residual (Lumerical's "imaginary weight",
         default 1.0). When k is tiny the imaginary part of eps is tiny too;
         raising this makes its fit accuracy count proportionally more.
     passive : bool or None
-        ``None`` (default) = passivity penalty **on** (Lumerical's "make fit
-        passive"): a model with gain > 1e-14 gets its error multiplied by
-        1e6 so the order search rejects it. ``False`` = report passivity
-        only, never penalise.
+        ``None`` (default) = **report only**: passivity lands in
+        ``quality['passive']`` and a warning fires when it is False.
+        ``True`` = enforce Lumerical's "make fit passive" penalty (a model
+        with gain > 1e-14 gets its error multiplied by 1e6 so the order
+        search rejects it).  Off by default because a narrow band often has a
+        slightly non-passive best fit and the penalty would force a much
+        worse one (TiO2 over 120nm-125um: 0.3% free vs 62% penalised).
 
     Returns
     -------
@@ -531,7 +535,7 @@ def fit_nk(wl, n, k, band=None, tolerance=0.1, max_poles=6, imaginary_weight=1.0
         band reversed; unequal column lengths; fewer than 3 samples inside;
         non-finite n/k inside the band (with a data-cleaning prescription).
     """
-    make_passive = True if passive is None else bool(passive)
+    make_passive = False if passive is None else bool(passive)
     wl = np.asarray(wl, dtype=float)
     n = np.asarray(n, dtype=float)
     k = np.asarray(k, dtype=float)
@@ -609,7 +613,7 @@ _COMPONENT_AXES = {"o": ("xx", "yy"), "e": ("zz",),
                    "x": ("xx",), "y": ("yy",), "z": ("zz",)}
 
 
-def _fit_convenience(wl, n, k, band=None, tolerance=0.1, max_poles=6, imaginary_weight=1.0):
+def _fit_convenience(wl, n, k, band=None, tolerance=0.1, max_poles=10, imaginary_weight=1.0):
     """Convenience-layer rule: fit the window the **caller** names at the
     default tolerance and keep the result even if the tolerance is missed —
     the warnings say so, and ``mat_from_nk`` surfaces them.
@@ -637,7 +641,7 @@ def _report(line: str) -> None:
         print(line)
 
 
-def mat_from_nk(name, band=None, tolerance=0.1, max_poles=6, imaginary_weight=1.0):
+def mat_from_nk(name, band=None, tolerance=0.1, max_poles=10, imaginary_weight=1.0):
     """Library name → a material node in **one call** (read library →
     per-component, per-axis ``fit_nk`` → ``assemble_nk``).
 
