@@ -38,6 +38,11 @@ Responsibilities:
 """
 from __future__ import annotations
 
+from genie_protocol._paramname import (
+    PARAM_NAME_RULE, _PARAM_NAME_RE, param_name_error,
+    valid_param_name,
+)
+
 import ast
 import math
 import re
@@ -47,23 +52,9 @@ from collections.abc import Mapping
 __all__ = ["ExprError", "eval_expr", "resolve_parameter_table",
            "valid_param_name", "param_name_error"]
 
-# Parameter-name rule wording (single source — resolve and
-# _wire.SimConfig._check_param_names both reuse this constant).
-PARAM_NAME_RULE = (
-    "must be an identifier (starting with a letter or underscore, "
-    "letters/digits/underscores only, <= 64 chars)")
+# 参数名契约（什么是一个合法参数名 = 线格式契约，两边必须同意）住在
+# genie_protocol._paramname——这里只进口，不另立实现。
 
-
-def param_name_error(k: str) -> str:
-    """The full way-pointing error for an illegal parameter name (the
-    single source of **the entire wording**). Consumers =
-    resolve.check_raw_param_keys (pre-evaluation check) and
-    _wire.SimConfig._check_param_names (a wire-format contract guard — the
-    sole interceptor of **unreferenced** bad names on the sweep expansion
-    path; do not remove)."""
-    return (f"parameter name {k!r} is invalid: {PARAM_NAME_RULE} — "
-            f"it is referenced by expression slots in numeric fields "
-            f"and by sweep axes (parameters[name])")
 
 # Call whitelist: name → (min argument count, max argument count)
 _FUNCTIONS = {
@@ -87,7 +78,6 @@ _UNARY_OPS = {
     ast.USub: lambda a: -a,
 }
 
-_PARAM_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # Unit registry: a single constant, name → SI scale.
 # Semantics = pure numeric conversion ``a[unit] = a × _UNITS[unit]``, no
@@ -397,9 +387,3 @@ def resolve_parameter_table(params: dict) -> dict[str, float]:
             "cycle", "parameter reference chain too deep (possible very "
             "long reference chain)") from None
     return resolved
-
-
-def valid_param_name(name: str) -> bool:
-    """Parameter-name validity (for schema to reuse the same hands: identifier + ≤64 chars)."""
-    return (isinstance(name, str) and len(name) <= 64
-            and _PARAM_NAME_RE.fullmatch(name) is not None)

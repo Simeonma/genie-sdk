@@ -33,10 +33,12 @@ __all__ = ["add_verb", "update_verb", "run_verb", "delete_verb",
 #: explicit ``script=None`` — an unset slot, not a value).
 UNSET = object()
 
-#: Recipe contract whitelist: inside recipe code ``f`` may only read the
-#: four result verbs; everything else (submit / the four model
+#: Recipe contract whitelist: inside recipe code ``genie`` may only read
+#: the four result verbs; everything else (run / solvers / the model
 #: collections / document commands / post verbs) is refused outright.
-_POST_F_OK = ("results", "get_time", "get_freq", "get_index")
+#: ``f`` is refused entirely — the handle was renamed (Q15) and any
+#: surviving ``f`` reference is a stale pre-rename recipe.
+_POST_GENIE_OK = ("results", "get_time", "get_freq", "get_index")
 
 
 def resolve_result(env) -> str:
@@ -58,29 +60,41 @@ def resolve_result(env) -> str:
 
 
 def gate_recipe(code: str, where: str) -> None:
-    """Whitelist gate: attribute references on ``f`` allow only the
-    ``_POST_F_OK`` read verbs; any other attribute / bare ``f`` →
+    """Whitelist gate: attribute references on ``genie`` allow only the
+    ``_POST_GENIE_OK`` read verbs; any other attribute (including solver
+    handles like ``genie.fdtd``) / bare ``genie`` / the retired ``f`` →
     RuntimeError with a one-line message (update refuses to install it,
     run refuses to execute it)."""
     tree = ast.parse(code)
     ok_ids = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Attribute) \
-                and isinstance(node.value, ast.Name) and node.value.id == "f":
-            if node.attr not in _POST_F_OK:
+        if isinstance(node, (ast.Name, ast.Attribute)):
+            name = node.id if isinstance(node, ast.Name) else None
+            if name == "f":
                 raise RuntimeError(
-                    f"{where}: f.{node.attr} is not allowed in a "
-                    f"post_analyze recipe — recipes may only read results "
-                    f"({', '.join('f.' + a for a in _POST_F_OK)}); keep "
-                    f"recipe files pure (read results + post-process)")
-            ok_ids.add(id(node.value))
+                    f"{where}: 'f' is not allowed in a post_analyze "
+                    f"recipe — the handle is called 'genie' (Q15); "
+                    f"recipes may only read results via "
+                    f"{', '.join('genie.' + a for a in _POST_GENIE_OK)}")
+        if isinstance(node, ast.Attribute):
+            base = node.value
+            if isinstance(base, ast.Name) and base.id == "genie":
+                if node.attr not in _POST_GENIE_OK:
+                    raise RuntimeError(
+                        f"{where}: genie.{node.attr} is not allowed in a "
+                        f"post_analyze recipe — recipes may only read "
+                        f"results "
+                        f"({', '.join('genie.' + a for a in _POST_GENIE_OK)}); "
+                        f"keep recipe files pure (read results + "
+                        f"post-process)")
+                ok_ids.add(id(base))
     for node in ast.walk(tree):
-        if isinstance(node, ast.Name) and node.id == "f" \
+        if isinstance(node, ast.Name) and node.id == "genie" \
                 and isinstance(node.ctx, ast.Load) and id(node) not in ok_ids:
             raise RuntimeError(
-                f"{where}: bare 'f' is not allowed in a post_analyze "
+                f"{where}: bare 'genie' is not allowed in a post_analyze "
                 f"recipe — recipes may only read results via "
-                f"{', '.join('f.' + a for a in _POST_F_OK)}")
+                f"{', '.join('genie.' + a for a in _POST_GENIE_OK)}")
 
 
 def check_post_out(out: dict) -> None:

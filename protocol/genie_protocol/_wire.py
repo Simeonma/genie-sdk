@@ -15,27 +15,28 @@ wire format (all pydantic models).
 > package's ``__init__.py`` ``__getattr__`` — ``import
 > genie_protocol.expr`` must not pull in pydantic.
 
-Example wire-format JSON shape::
+Example wire-format JSON shape (2.0.1a1 nested house, Q17)::
 
     {
-      "domain":   {"x_range": [-1e-6, 1e-6], "y_range": [-1e-6, 1e-6],
-                    "z_range": [-1e-6, 1e-6], "total_time": 60e-15, "cfl": 0.9,
-                    "boundary": {"z_min": {"kind": "pml", "layers": 12},
-                                  "z_max": {"kind": "pml", "layers": 12}}},
-      "mesh":     {"dx": 20e-9, "dy": 20e-9, "dz": 20e-9},
-      "materials":[{"name": "sio2", "type": "const", "eps": 2.10}],
-      "geometry": [{"type": "box", "material": "sio2",
-                     "x_range": [-0.5e-6, 0.5e-6], "y_range": [-0.5e-6, 0.5e-6],
-                     "z_range": [-0.1e-6, 0.1e-6], "priority": 1}],
-      "source":   [{"type": "soft_source", "freq": 300e12, "bandwidth": 60e12,
-                     "name": "s0", "center": [0, 0, -0.3e-6],
-                     "polarization": [1, 0, 0]}],
-      "monitor":  [{"type": "time", "name": "pt", "center": [0, 0, 0.2e-6],
-                     "size": [0, 0, 0], "field": "Ex"},
-                    {"type": "freq", "name": "sp", "center": [0, 0, 0.2e-6],
-                     "size": [0, 0, 0], "field": "Ey",
-                     "freq": {"center": 300e12, "bw": 120e12, "n": 200}}],
-      "run":      {"n_gpu": 1}
+      "model": {                       # structure — shared by every solver
+        "materials": [{"name": "sio2", "type": "const", "eps": 2.10}],
+        "geometry":  [{"type": "box", "material": "sio2", "priority": 1,
+                       "x_range": [-0.5e-6, 0.5e-6], "y_range": [-0.5e-6, 0.5e-6],
+                       "z_range": [-0.1e-6, 0.1e-6]}],
+        "parameters": {"L": 2e-6}},
+      "solver": "fdtd",                # solver selection (open set; omit = fdtd)
+      "config": {                      # that solver's envelope
+        "domain":   {"x_range": [-1e-6, 1e-6], "y_range": [-1e-6, 1e-6],
+                      "z_range": [-1e-6, 1e-6], "total_time": 60e-15, "cfl": 0.9,
+                      "boundary": {"z_min": {"kind": "pml", "layers": 12}}},
+        "mesh":     {"dx": 20e-9, "dy": 20e-9, "dz": 20e-9},
+        "source":   [{"type": "soft_source", "freq": 300e12, "bandwidth": 60e12,
+                      "name": "s0", "center": [0, 0, -0.3e-6],
+                      "polarization": [1, 0, 0]}],
+        "monitor":  [{"type": "freq", "name": "sp", "center": [0, 0, 0.2e-6],
+                      "size": [0, 0, 0], "field": "Ey",
+                      "freq": {"center": 300e12, "bw": 120e12, "n": 200}}]},
+      "run": {"n_gpu": 1}              # orchestration-level (top level)
     }
 
 **Executable content of any kind is forbidden**: models accept only
@@ -63,7 +64,7 @@ from pydantic import (
     model_validator,
 )
 
-from .expr import param_name_error, valid_param_name
+from ._paramname import param_name_error, valid_param_name
 
 
 def _walk_finite(v, path: str) -> None:
@@ -843,52 +844,10 @@ class RingZSpec(_StrictModel, _NamedGeo):
         return self
 
 
-class PolygonSweptSpec(_StrictModel, _NamedGeo):
-    """Sheared z-extruded polygon. vertices sentinel semantics are the
-    same as polygon_z (shared norm_vertices_pairs). tilt=(dx_dz, dy_dz):
-    the slope at which the cross-section translates with (z - z_center);
-    each component |v| <= 1000 (same as the local _TILT_SLOPE_MAX — the
-    floating-point tan(90°)=1.6e16 is finite, so the finiteness defense
-    cannot stop it, and a huge tilt makes the structure silently vanish
-    outside the domain). tilt_deg is a local convenience conversion
-    (with the 89.9° guard) and is not part of the wire format."""
-
-    type: Literal["polygon_swept"] = "polygon_swept"
-    material: str = Field(min_length=1)
-    vertices: list[tuple[Optional[float], Optional[float]]] = Field(min_length=3)
-    z_range: Range2
-    tilt: Optional[tuple[float, float]] = None        # None → no shear
-    priority: int = 0
-
-    @field_serializer("vertices")
-    def _ser_vertices_json_swept(self, verts):
-        return _ser_vertices_json(verts)
-
-    _v = field_validator("z_range", mode="after")(_check_range)
-
-    @field_validator("tilt", mode="after")
-    @classmethod
-    def _check_tilt(cls, v):
-        if v is None:
-            return v
-        if not (math.isfinite(v[0]) and math.isfinite(v[1])):
-            raise ValueError("tilt components must be finite")
-        if abs(v[0]) > 1000.0 or abs(v[1]) > 1000.0:
-            raise ValueError(
-                "tilt slope components must satisfy |v| <= 1000 "
-                "(large tilts push the cross-section out of the domain)")
-        return (float(v[0]), float(v[1]))
-
-    @model_validator(mode="after")
-    def _norm_vertices(self):
-        object.__setattr__(
-            self, "vertices", norm_vertices_pairs(self.vertices))
-        return self
-
 
 GeometrySpec = Annotated[
     Union[BoxSpec, SphereSpec, CylinderSpec, NgonZSpec, PolygonZSpec,
-          EllipseZSpec, RingZSpec, PolygonSweptSpec],
+          EllipseZSpec, RingZSpec],
     Field(discriminator="type"),
 ]
 
@@ -1141,23 +1100,29 @@ class RunSpec(_StrictModel):
     n_gpu: Optional[Annotated[int, Field(ge=1, le=MAX_GPU_PER_RUN)]] = None  # optional cap
 
 
-class SimConfig(_StrictModel):
-    domain: DomainSpec
-    mesh: MeshSpec
+# ── 求解器选择面 ───────────────────────────────────────────────────
+#
+# `solver` 是**开放集合**而不是 Literal：求解器是插件，写死枚举等于每加一个
+# 算法升一次协议版本。"声明了但本机没装"属**部署事实**，由使用方按能力集拒绝
+# （内核 400 + available 清单），不归协议——协议只判形状。
+#
+# 图案只约束"像不像一个标识"（小写开头 + 小写/数字/下划线，≤32）：长度下限
+# 之类是口味不是形状，不拦（DISCIPLINE §4 输入校验口径）。
+_SOLVER_NAME = r"^[a-z][a-z0-9_]{0,31}$"
+
+
+class ModelSpec(_StrictModel):
+    """结构段（Q17 嵌套户型）：materials / geometry / parameters——
+    全求解器共享的一份结构（= SDK 的 genie 本体 = 内核 GenSim 场景）。
+    材料外键、重名守卫、参数名图案都随字段搬进这里。"""
+
     materials: list[MaterialSpec] = Field(default_factory=list)
     geometry: list[GeometrySpec] = Field(default_factory=list)
-    source: list[SourceSpec] = Field(min_length=1)
-    monitor: list[MonitorSpec] = Field(default_factory=list)
-    run: RunSpec
     # Global parameters node: keys = identifiers
     # (^[A-Za-z_][A-Za-z0-9_]*$, <=64 chars), values = numbers or
     # expression strings referencing the other parameters (environment =
-    # the other parameters, topologically evaluated at the top level).
-    # Expression evaluation and numeric-slot substitution do not happen
-    # at model time — see resolve_parameters (the single parse point of
-    # the two-stage validation, parse_config); parameter-sweep axes
-    # reference these keys by name (the sweep expander lives in
-    # genie.core.sweep).
+    # the other parameters, topologically evaluated at the top level;
+    # the resolver lives in the SDK, genie.core.param).
     parameters: Optional[dict[str, Union[float, int, str]]] = None
 
     @field_validator("parameters", mode="after")
@@ -1177,22 +1142,10 @@ class SimConfig(_StrictModel):
 
     @model_validator(mode="after")
     def _check(self):
-        # Monitor names unique across the whole list (a cross-type
-        # duplicate would give f.mon['tr'] two answers). The character
-        # whitelist for names lives in _MonitorMixin.
-        names = [m.name for m in self.monitor]
-        if len(names) != len(set(names)):
-            dups = sorted({n for n in names if names.count(n) > 1})
-            raise ValueError(
-                f"duplicate monitor names: {dups} (monitor names must be "
-                f"globally unique across all monitor types)")
         # Duplicate-material-name guard: the material name is the
         # identity referenced by geometry.material — a duplicate means
         # "the later shadows the earlier", and the first material
-        # silently fails at solve time; this guard stops duplicates at
-        # the validation boundary. Material names are required and
-        # non-empty (min_length=1); all of them participate in the
-        # duplicate check.
+        # silently fails at solve time.
         mnames = [m.name for m in self.materials]
         if len(mnames) != len(set(mnames)):
             dups = sorted({n for n in mnames if mnames.count(n) > 1})
@@ -1200,12 +1153,7 @@ class SimConfig(_StrictModel):
                 f"duplicate material names: {dups} — material names are "
                 f"what geometry references; a duplicate silently shadows "
                 f"the earlier definition (rename one of them)")
-        # Geometry display names unique: the name is the identity in
-        # the tree/3D view; allowing duplicates
-        # equals allowing two rows of same-named objects — not finding
-        # them or deleting the wrong one is a real cost. Unnamed (None)
-        # entries do not participate in the duplicate check: multiple
-        # anonymous objects are a legal workflow.
+        # Geometry display names unique (unnamed entries are legal).
         seen = {}
         for i, g in enumerate(self.geometry):
             n = getattr(g, "name", None)
@@ -1217,8 +1165,7 @@ class SimConfig(_StrictModel):
                     f"and {i}) — names identify objects in the tree/3D "
                     f"view and must be unique")
             seen[n] = i
-        # Materials referenced by geometry must exist (the build-time
-        # guard, applied earlier)
+        # Materials referenced by geometry must exist (build-time guard).
         known = {m.name for m in self.materials}
         for g in self.geometry:
             if g.material not in known:
@@ -1226,20 +1173,147 @@ class SimConfig(_StrictModel):
                     f"geometry references undefined material "
                     f"{g.material!r} (expected a name from materials[]: "
                     f"{sorted(known) if known else 'none defined'})")
-        # periodic/bloch must be paired on the same axis (report early on
-        # explicitly set conflicts).
-        # [Mixing periodic+bloch on the same axis is legal — both kinds
-        # belong to the "translation-symmetry" family.]
+        return self
+
+
+class FdtdConfigSpec(_StrictModel):
+    """fdtd 包络段：domain / mesh / source / monitor——**这些属于 fdtd
+    这个求解器，不属于模型**（Q17：fdtd 只是一种 solver；b8 及以前的
+    平铺户型是 fdtd 冒充模型的遗物，2.0.1a1 断代拆除）。"""
+
+    domain: DomainSpec
+    mesh: MeshSpec
+    source: list[SourceSpec] = Field(min_length=1)
+    monitor: list[MonitorSpec] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _check(self):
+        # Monitor names unique across the whole list (a cross-type
+        # duplicate would give the reader two answers).
+        names = [m.name for m in self.monitor]
+        if len(names) != len(set(names)):
+            dups = sorted({n for n in names if names.count(n) > 1})
+            raise ValueError(
+                f"duplicate monitor names: {dups} (monitor names must be "
+                f"globally unique across all monitor types)")
+        # periodic/bloch must be paired on the same axis (mixing the two
+        # on the same axis is legal — same translation-symmetry family).
         b = self.domain.boundary
         pairs = (("x_min", "x_max"), ("y_min", "y_max"), ("z_min", "z_max"))
         for f_lo, f_hi in pairs:
             for a, other in ((f_lo, f_hi), (f_hi, f_lo)):
                 if a in b and b[a].kind in ("periodic", "bloch"):
-                    ok = (other in b and b[other].kind in ("periodic", "bloch"))
+                    ok = (other in b and b[other].kind in ("periodic",
+                                                          "bloch"))
                     if not ok:
                         raise ValueError(
-                            f"boundary {a}={b[a].kind} must be paired with "
-                            f"the opposite face {other} set to periodic/"
-                            f"bloch (same-axis pairs only)"
-                        )
+                            f"boundary {a}={b[a].kind} must be paired "
+                            f"with the opposite face {other} set to "
+                            f"periodic/bloch (same-axis pairs only)")
+        return self
+
+
+class ModeConfigSpec(_StrictModel):
+    """mode 包络段：FDE 截面计算域（原内核 `ModeSection` 逐字段进 wire，
+    Q17——mode 的语言从内核私有 pydantic 升为线格式；内核改重导出）。"""
+
+    axis: Literal["x", "y", "z"]
+    position: float                          # 截面沿传播轴的位置 [m]
+    center_h: float = 0.0                    # 横向窗口中心 [m]
+    center_v: float = 0.0                    # 纵向窗口中心 [m]
+    span_h: float = Field(gt=0.0)            # 横向窗口跨度 [m]
+    span_v: float = Field(gt=0.0)            # 纵向窗口跨度 [m]
+    dh: float = Field(gt=0.0)                # 横向格距 [m]
+    dv: Optional[float] = Field(default=None, gt=0.0)   # 缺省 = dh
+    n_bg: float = Field(default=1.0, gt=0.0)            # 背景折射率
+    wavelength: float = Field(gt=0.0)        # 真空波长 [m]
+    n_modes: int = Field(default=1, ge=1)
+    boundary: Literal["pec", "pmc", "periodic", "pml"] = "pec"
+    n_pml: int = Field(default=8, ge=1)      # boundary=pml 时用
+
+
+#: 求解器名 → 包络段形状（协议给**认识的**求解器定形状；开放集合语义
+#: 不变——未列名的求解器其 config 只要求是 dict，"装没装 / 形状对不对"
+#: 是部署事实，归内核能力表拒绝）。
+_CONFIG_OF = {"fdtd": FdtdConfigSpec, "mode": ModeConfigSpec}
+
+
+class PlanStageSpec(_StrictModel):
+    """计划的一级：谁算、叫什么、吃谁的结果、带谁的包络。
+
+    ``id`` **必填**而不给默认值：默认值在多级计划里会立刻撞成"重复 id"，
+    那是只能靠报错学会的坑；单级计划写一个 id 是诚实的成本。
+    ``config`` 的形状按 ``solver`` 分派（认识的求解器全量验证）。
+    """
+
+    solver: str = Field(pattern=_SOLVER_NAME)
+    id: str = Field(pattern=_SOLVER_NAME)
+    consumes: list[str] = Field(default_factory=list)
+    config: Optional[dict] = None
+
+
+class SimConfig(_StrictModel):
+    """嵌套户型（Q17，2.0.1a1 断代）：结构一段 + 求解器选择面 + 该
+    求解器的包络段 + 顶层 run。b8 及以前的平铺载荷（domain/materials/
+    … 挂顶层）一律 422——那是 fdtd 冒充模型的形状。"""
+
+    model: ModelSpec
+    # 求解器选择面：缺省 None = fdtd（声明式缺省，不是兼容垫片——
+    # 包络段 config 仍必填）。两者二选一——同时给就是两个真源。
+    solver: Optional[str] = Field(default=None, pattern=_SOLVER_NAME)
+    plan: Optional[list[PlanStageSpec]] = None
+    # 包络段：dict 进、按 solver 分派验证后物化为对应 Spec 实例
+    # （认识谁验谁；未列名求解者原样透传——形状归部署侧能力表）。
+    config: Optional[Union[FdtdConfigSpec, ModeConfigSpec, dict]] = None
+    # 编排面（顶层）：n_gpu 是资源旋钮，任何求解器都可能用，
+    # 不属于 fdtd（Q17 拍①）。
+    run: RunSpec = Field(default_factory=RunSpec)
+
+    @model_validator(mode="after")
+    def _check(self):
+        # ── 求解器选择面不变式（沿用 b6 三条）────────────────────
+        # ① 两个真源打架。
+        if self.solver is not None and self.plan is not None:
+            raise ValueError(
+                "solver and plan are mutually exclusive — a plan already "
+                "says which solver runs each stage; give one or the other")
+        # ② 空 plan。
+        if self.plan is not None and not self.plan:
+            raise ValueError("plan must have at least one stage (or omit it)")
+        # ③ id 唯一 + consumes 只指前面出现过的 stage：顺序即依赖；
+        #    每级自带 config 并按 solver 分派验证（Q17 拍②）。
+        if self.plan:
+            seen_ids: list[str] = []
+            for st in self.plan:
+                if st.id in seen_ids:
+                    raise ValueError(
+                        f"duplicate plan stage id {st.id!r} — ids are what "
+                        f"consumes references and must be unique")
+                for ref in st.consumes:
+                    if ref not in seen_ids:
+                        raise ValueError(
+                            f"plan stage {st.id!r} consumes {ref!r} which is "
+                            f"not an earlier stage (order is dependency; "
+                            f"self/forward references are not allowed)")
+                seen_ids.append(st.id)
+                if st.config is None:
+                    raise ValueError(
+                        f"plan stage {st.id!r} needs its solver's envelope "
+                        f"under 'config' (Q17: every stage carries its own)")
+                spec = _CONFIG_OF.get(st.solver)
+                if spec is not None:
+                    spec.model_validate(st.config)   # 422 on shape errors
+            return self
+        # ── 单求解器路：config 必在、按 solver 分派验证并物化 ────
+        solver = self.solver or "fdtd"
+        if self.config is None:
+            raise ValueError(
+                f"config is required — the {solver!r} solver's envelope "
+                f"(domain/mesh/source/monitor for fdtd) belongs under "
+                f"'config', not at the top level (2.0.1a1 nested house)")
+        spec = _CONFIG_OF.get(solver)
+        if spec is not None and not isinstance(self.config, spec):
+            object.__setattr__(self, "config", spec.model_validate(
+                self.config if isinstance(self.config, dict)
+                else self.config.model_dump()))
         return self

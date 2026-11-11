@@ -1,17 +1,23 @@
-"""genie.worker.run — the f verb surface (the manifest file: every public
-action in one place; the machinery lives in chain / post / sweep — the
-material verbs' thin-delegation pattern, generalized).
+"""genie.worker.run — the genie verb surface (the manifest file: every
+public action in one place; the machinery lives in chain / post / sweep —
+the material verbs' thin-delegation pattern, generalized).
 
-- ``f.submit(n_gpu=None)`` (the single-run public verb): promote + validate
-  → submit to ``/gw`` (batch of 1) → stage the ``.gensim`` → wait → inject
+- ``genie.<solver>.run(n_gpu=None)`` (the one public run verb, Q15):
+  runs the model **through one declared solver** — promote + validate →
+  submit to ``/gw`` (batch of 1) → stage the ``.gensim`` → wait → inject
   → the post tail hook → return the job id; failure / cancel raises
-  ``GenieJobError``. Composed from chain's primitives — the same machine
-  the sweep driver imports (Q10: a sweep is a batched submit).
-- ``f.validate()`` (design-time preflight): the same check ``submit`` runs
-  (promote + ``validate_for_ui``), with no submit, no document write and no
-  terminal row; returns the error list instead of raising.
-- The four read verbs (parsing semantics live in core/results; this module
-  only does "pick the member + open the file").
+  ``GenieJobError``. The fdtd default omits the wire ``solver`` field
+  (legacy payloads byte-identical); any other declared name goes into
+  the payload verbatim, never written back to the model (same rule as
+  ``n_gpu``). Composed from chain's primitives — the same machine the
+  sweep driver imports (Q10: a sweep is a batched run).
+- ``genie.<solver>.validate()`` (design-time preflight): the same check
+  ``run`` runs for that solver (promote + ``validate_for_ui``), with no
+  submit, no document write and no terminal row; returns the error list
+  instead of raising. ``genie.validate()`` = the same surface on the
+  fdtd default.
+- The four read verbs (parsing semantics live in core/results; this
+  module only does "pick the member + open the file").
 - The four post verbs (add / update / run / delete) — thin delegates to
   ``worker.post``.
 - The five material verbs — thin delegates to ``core/material``.
@@ -21,8 +27,10 @@ material verbs' thin-delegation pattern, generalized).
   delegates to ``worker.chain`` (silent, zero terminal lines; not on the
   public face).
 
-The five terminal rows (constants) live in chain; they are re-exported
-here because this file is the wording surface.
+``genie.lib`` is the package escape hatch (the handle shadows the module
+name ``genie`` inside exec namespaces; everything the package exports is
+reachable through it). The five terminal rows (constants) live in chain;
+they are re-exported here because this file is the wording surface.
 """
 from __future__ import annotations
 
@@ -33,6 +41,8 @@ import tempfile
 
 import numpy as np
 
+import genie as _genie_pkg
+
 from genie import ipc
 from genie.core import archive
 from genie.core import material as core_material
@@ -41,21 +51,21 @@ from genie.core.material import C0_SI as C0
 from genie.core.model import Model
 from genie.core.model.draft import digest
 from genie.net import TERMINAL_OK, GenieJobError
-from genie_protocol.resolve import validate_for_ui
+from ..core.param import validate_for_ui
 
 from . import chain, plot, post, sweep
 from .chain import (ROW_CANCELED, ROW_DONE, ROW_FAILED, ROW_POST_FAILED,
                     ROW_SUBMIT_ONE)
 from .post import UNSET, resolve_result
 
-__all__ = ["F", "bind", "load_model", "load_recipes", "load_sweeps",
+__all__ = ["Genie", "bind", "load_model", "load_recipes", "load_sweeps",
            "ROW_SUBMIT_ONE", "ROW_DONE", "ROW_FAILED", "ROW_CANCELED",
            "ROW_POST_FAILED"]
 
 
 def load_model(doc_path) -> tuple[Model, dict]:
     """``.gensim`` → (Model, state): the id allocator resumes from max —
-    the single implementation shared by startup restore and ``f._open``.
+    the single implementation shared by startup restore and ``genie._open``.
     Unreadable (missing file / not a .gensim / state missing the four
     fields) → RuntimeError with a one-line message."""
     try:
@@ -69,7 +79,7 @@ def load_model(doc_path) -> tuple[Model, dict]:
 def load_recipes(doc_path) -> dict:
     """``.gensim`` → the named recipe set ``{name: {code, script}}``; no
     document / member absent / unreadable → ``{}`` (the single
-    implementation for startup restore and ``f._open``). Legacy entries
+    implementation for startup restore and ``genie._open``). Legacy entries
     (plain script strings / older {script, files} dicts) are normalized
     into {code, script} entries (missing code = empty — re-import via
     update)."""
@@ -101,50 +111,56 @@ def load_sweeps(doc_path) -> dict:
     return {}
 
 
-class F:
-    """f = core ``Model`` + actions (semantics live in core; binding and
-    action implementations live in worker). All attribute reads/writes
-    delegate to the model; submit / validate / _submit / _wait / _cancel /
-    _save / _open / _dirty + the four read verbs + five material verbs +
-    the four post verbs + the three param_sweep verbs; **there is no
-    cancel** — public cancel is a session-intercepted command, not in
-    worker."""
+class _SolverHandle:
+    """One declared solver seen from the script side: attribute reads and
+    writes delegate to the solver's envelope (domain / mesh / sources /
+    monitors — Q15); the action surface adds ``run`` / ``validate``.
+    Stateless — every access resolves back to the model, so a handle
+    held across a fresh Run naturally follows the new model."""
 
-    __slots__ = ("_model", "_env")
+    __slots__ = ("_model", "_env", "_name")
 
-    def __init__(self, model, env):
+    def __init__(self, model, env, name):
         object.__setattr__(self, "_model", model)
         object.__setattr__(self, "_env", env)
+        object.__setattr__(self, "_name", name)
+
+    def _solver(self):
+        return self._model.envelope(self._name)
 
     def __getattr__(self, name):
-        return getattr(self._model, name)
+        return getattr(self._solver(), name)
 
     def __setattr__(self, name, value):
-        setattr(self._model, name, value)
+        setattr(self._solver(), name, value)
 
     def __repr__(self):
-        return f"<f model={self._model!r}>"
+        return f"<genie.{self._name}>"
 
-    # -- public verb (the only one; single simulation)-----------
+    # -- the one public run verb (Q15) --------------------------------
 
-    def submit(self, *, n_gpu=None):
-        """Run the current model once and block until it finishes.
+    def run(self, *, n_gpu=None):
+        """Run the model **through this solver** once and block until it
+        finishes.
 
-        Promotes the live model to a strict config, validates it,
-        submits it, waits for the terminal state, then writes the
-        result into the document (``results/<job>.h5``) and returns the
-        job id (``str``). Submitting invalidates the previous run's
-        results immediately. Failure or cancellation raises
-        ``GenieJobError`` (wording ``failed`` / ``canceled``).
+        Promotes the live model to a strict config (this solver's
+        envelope + the shared structure), validates it, submits it,
+        waits for the terminal state, then writes the result into the
+        document (``results/<job>.h5``) and returns the job id
+        (``str``). Submitting invalidates the previous run's results
+        immediately. Failure or cancellation raises ``GenieJobError``
+        (wording ``failed`` / ``canceled``).
 
-        ``n_gpu`` mirrors the ``run.n_gpu`` config field; it goes only
-        into the submit payload and is never written back to the model.
-        Batch runs (parameter sweeps) go through
-        ``f.add_param_sweep`` / ``f.run_param_sweep`` — this verb always
-        runs exactly one simulation.
+        ``solver`` goes only into the submit payload and is never
+        written back to the model — the same rule as ``n_gpu``. The
+        fdtd default omits the wire ``solver`` field entirely (legacy
+        payloads byte-identical); any other declared name goes in
+        verbatim. Batch runs (parameter sweeps) go through
+        ``genie.add_param_sweep`` / ``genie.run_param_sweep`` — this
+        verb always runs exactly one simulation.
         """
         env = self._env
-        cfg = self._model.to_config()             # promotion: live model → strict config
+        cfg = self._model.to_config(self._name)  # promotion: model → this solver's config
         chain._validate([cfg])
         jid = chain.submit(env, self._model, cfg, n_gpu=n_gpu)
         env.emit(ipc.out(ROW_SUBMIT_ONE.format(id=jid)))
@@ -158,7 +174,7 @@ class F:
                                   chain.state_for(staged,
                                                   self._model.last_id, [],
                                                   staged_digest))
-            post.run_post(env, jid)               # submit-tail auto-run (only if recipes exist)
+            post.run_post(env, jid)               # run-tail auto-run (only if recipes exist)
             return jid
         if outcome["state"] == "failed":
             env.emit(ipc.out(ROW_FAILED.format(
@@ -167,19 +183,66 @@ class F:
             env.emit(ipc.out(ROW_CANCELED.format(id=jid)))
         raise GenieJobError(jid, outcome["state"], error=outcome.get("error"))
 
-    # -- design-time preflight (the same surface as submit's precheck, no submit) --
+    def validate(self):
+        """Preflight **this solver's** configuration without submitting
+        (see ``Genie.validate`` for the exact surface)."""
+        return validate_for_ui(self._model.to_config(self._name))
+
+
+class Genie:
+    """genie = core ``Model`` + actions (semantics live in core; binding
+    and action implementations live in worker). Attribute reads/writes
+    delegate to the model (structure: materials / geometry / parameters);
+    a declared solver name resolves to its handle (``genie.fdtd`` —
+    auto-vivified default — or any name declared via
+    ``genie.add_solver``); ``genie.lib`` is the package escape hatch.
+    Read / material / post / sweep verbs + the document commands;
+    ``run`` lives on the solver handles; **there is no cancel** —
+    public cancel is a session-intercepted command, not in worker."""
+
+    __slots__ = ("_model", "_env", "lib")
+
+    def __init__(self, model, env):
+        object.__setattr__(self, "_model", model)
+        object.__setattr__(self, "_env", env)
+        # the handle shadows the package name inside exec namespaces;
+        # this is the way back to everything the package exports
+        object.__setattr__(self, "lib", _genie_pkg)
+
+    def __getattr__(self, name):
+        try:
+            return getattr(self._model, name)
+        except AttributeError:
+            pass
+        # solver access: a well-formed but undeclared name raises with
+        # add_solver guidance (as AttributeError, so hasattr() behaves);
+        # the fdtd default auto-vivifies inside envelope()
+        try:
+            self._model.envelope(name)
+        except LookupError as e:
+            raise AttributeError(str(e)) from None
+        return _SolverHandle(self._model, self._env, name)
+
+    def __setattr__(self, name, value):
+        setattr(self._model, name, value)
+
+    def __repr__(self):
+        return f"<genie model={self._model!r}>"
+
+    # -- design-time preflight (the same surface as run's precheck, no submit) --
 
     def validate(self):
-        """Preflight the **current model** without submitting.
+        """Preflight the **fdtd default configuration** without
+        submitting (the common case; per-solver: ``genie.<s>.validate()``).
 
-        Promotes the live model exactly like ``submit`` does and runs the
-        same validation surface (``protocol.validate_for_ui``): parameter
-        key names → expression evaluation (Q13) → structural / value
-        guards. Nothing is sent anywhere, nothing is written to the
+        Promotes the live model exactly like ``run`` does and runs the
+        same validation surface (``protocol.validate_for_ui``):
+        parameter key names → expression evaluation (Q13) → structural /
+        value guards. Nothing is sent anywhere, nothing is written to the
         document, no terminal row is emitted.
 
         Returns a list of ``{"loc": ..., "msg": ...}`` — empty means the
-        model would pass submit's precheck; ``loc`` is the in-config path
+        model would pass run's precheck; ``loc`` is the in-config path
         (e.g. ``materials.0.const.eps``), ``""`` means a whole-config
         error. Design-time only: the resource guard is deployment policy
         and is not part of this surface.
@@ -331,7 +394,7 @@ class F:
         except Exception:                                   # noqa: BLE001
             return None
         lo_hz = hi_hz = None
-        for src in cfg.get("source") or []:
+        for src in (cfg.get("config") or {}).get("source") or []:
             if not isinstance(src, dict):
                 continue
             try:
@@ -383,7 +446,7 @@ class F:
         will simulate, as Lumerical does), falling back to the data range
         when the source band is too sparse. ``max_poles`` is the order-search
         ceiling (default 10); ``imaginary_weight`` weights the imaginary
-        residual (default 1.0). Iso still goes through ``f.assemble_nk``."""
+        residual (default 1.0). Iso still goes through ``genie.assemble_nk``."""
         band, note = self._fit_band(wl, band)
         fit = core_material.fit_nk(wl, n, k, band=band,
                                    max_poles=max_poles,
@@ -411,7 +474,7 @@ class F:
                      imaginary_weight=1.0, make_passive=False):
         """Library name → material node in one step (a near-zero-knob
         convenience layer; one line to add into the model:
-        ``f.mat.add_lorentz(node)``).
+        ``genie.materials.add_lorentz(node)``).
 
         ``band`` is the fit window [m]: **pass it and it is honoured
         verbatim** (too few samples → a clear "widen band" error). Omit it
@@ -426,7 +489,7 @@ class F:
         want = self._source_band()
         if want is None:
             raise ValueError(
-                "f.mat_from_nk needs a wavelength window: no simulation "
+                "genie.mat_from_nk needs a wavelength window: no simulation "
                 "source is set, and fitting the whole data domain is not a "
                 "meaningful default — pass band=(lo, hi) in metres, e.g. "
                 "band=(400e-9, 800e-9)")
@@ -504,7 +567,7 @@ class F:
         env.doc_path = str(path)
         env.post_recipes = load_recipes(str(path))
         env.sweeps = load_sweeps(str(path))
-        env._reinject_f()                   # later statements in the same exec see the new model at once
+        env._reinject_genie()               # later statements in the same exec see the new model at once
         return str(path)
 
     def _dirty(self) -> bool:
@@ -522,7 +585,7 @@ class F:
         return digest(self._model.to_config()) != state.get("digest")
 
 
-def bind(model, env) -> F:
-    """The f composite (exec.py only builds the binding; action
+def bind(model, env) -> Genie:
+    """The genie composite (exec.py only builds the binding; action
     implementations live in this package)."""
-    return F(model, env)
+    return Genie(model, env)

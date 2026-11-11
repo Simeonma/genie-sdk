@@ -131,7 +131,7 @@ function buildToolbar() {
      * 它挂的 addObject 会塞进线格式明确拒收的 from_library 死节点。 */
     const libBtn = document.createElement("button");
     libBtn.className = "tb-btn tb-add";
-    libBtn.title = "库材料：f.mat.add_lorentz(node=f.mat_from_nk(名))";
+    libBtn.title = "库材料：genie.materials.add_lorentz(node=genie.mat_from_nk(名))";
     libBtn.appendChild(previewEl("mat_library"));
     libBtn.appendChild(document.createTextNode("library"));
     libBtn.addEventListener("click", () => GenieApp.addLibraryMaterial());

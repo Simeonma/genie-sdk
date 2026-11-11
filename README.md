@@ -12,7 +12,17 @@ Requires Python ≥ 3.10:
 pip install genie-sdk
 ```
 
-During the prerelease phase you can also install from source:
+`genie-sdk` depends on `genie-protocol` (the wire-format models). Both are
+released together, so install them from the same place — a wheel install
+takes both:
+
+```
+pip install genie-sdk-<ver>-py3-none-any.whl genie_protocol-<ver>-py3-none-any.whl
+```
+
+During the prerelease phase you can also install from source (the source
+tree carries `protocol/` next to the SDK, so a source install resolves it
+locally):
 
 ```
 pip install git+https://github.com/Simeonma/genie-sdk.git
@@ -49,26 +59,27 @@ model directly with Python; exit with `Ctrl+C`. To pick a fixed port use
 Minimal script (paste into the editor and run):
 
 ```python
-f.domain.x_range = (-1e-6, 1e-6)
-f.domain.y_range = (-1e-6, 1e-6)
-f.domain.z_range = (-1e-6, 1e-6)
-f.domain.total_time = 60e-15
-f.mesh.dx = 40e-9
-f.mat.add_lorentz(f.mat_from_nk("Au"))        # material library in one step
-f.geom.add_box("wg")
-f.geom["wg"].material = "Au"
-f.geom["wg"].x_range = (-5e-7, 5e-7)
-f.geom["wg"].y_range = (-5e-7, 5e-7)
-f.geom["wg"].z_range = (-5e-7, 5e-7)
-f.src.add_plane_wave("src")
-f.src["src"].freq = 300e12
-f.src["src"].bandwidth = 60e12
-f.mon.add_freq("tr")
-f.mon["tr"].field = "Ex"
-f.mon["tr"].freq = {"center": 300e12, "bw": 120e12, "n": 200}
+genie.add_solver("fdtd")
+genie.fdtd.domain.x_range = (-1e-6, 1e-6)
+genie.fdtd.domain.y_range = (-1e-6, 1e-6)
+genie.fdtd.domain.z_range = (-1e-6, 1e-6)
+genie.fdtd.domain.total_time = 60e-15
+genie.fdtd.mesh.dx = 40e-9
+genie.materials.add_lorentz(genie.mat_from_nk("Au"))   # material library in one step
+genie.geometry.add_box("wg")
+genie.geometry["wg"].material = "Au"
+genie.geometry["wg"].x_range = (-5e-7, 5e-7)
+genie.geometry["wg"].y_range = (-5e-7, 5e-7)
+genie.geometry["wg"].z_range = (-5e-7, 5e-7)
+genie.fdtd.sources.add_plane_wave("src")
+genie.fdtd.sources["src"].freq = 300e12
+genie.fdtd.sources["src"].bandwidth = 60e12
+genie.fdtd.monitors.add_freq("tr")
+genie.fdtd.monitors["tr"].field = "Ex"
+genie.fdtd.monitors["tr"].freq = {"center": 300e12, "bw": 120e12, "n": 200}
 
-f.submit()          # submit to the cloud; the result is saved back into the local .gensim
-r = f.results()     # read the results (SimData)
+genie.fdtd.run()      # run through the fdtd solver (the default); the result is saved back into the local .gensim
+r = genie.results()   # read the results (SimData)
 ```
 
 ## Parameter sweeps
@@ -77,10 +88,10 @@ Define a named sweep, run it as one batch, read the results as a cube
 (the sweep axes lead the field dimensions; failed points are NaN):
 
 ```python
-f.add_param_sweep("grid", {"x": [2e-6, 3e-6, 4e-6]})
-sw = f.run_param_sweep("grid")     # blocks until the whole batch finishes
-sw.get_freq("tr")                  # fields shaped (3, ...) — one leading axis
-sw.run_post_analyze("Q")           # re-run a post_analyze recipe over all points
+genie.add_param_sweep("grid", {"x": [2e-6, 3e-6, 4e-6]})
+sw = genie.run_param_sweep("grid")   # blocks until the whole batch finishes
+sw.get_freq("tr")                    # fields shaped (3, ...) — one leading axis
+sw.run_post_analyze("Q")             # re-run a post_analyze recipe over all points
 ```
 
 Each point is a plain `.gensim` document under `parameter_sweep_grid/`,

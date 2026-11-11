@@ -4,18 +4,18 @@ format (an independently distributed package, lazy-import shell).
 pydantic v2, zero other runtime dependencies. The trio:
 
 - ``_wire.py``   all Spec models + SimConfig + wire-format constants (pydantic)
-- ``expr.py``    safe-line expression evaluator (pure Python: ast + math + re, zero pydantic)
-- ``resolve.py`` parameter resolution (dict walk-along + expression-slot evaluation + evaluation-result validation)
+- ``_paramname.py`` the parameter-name rule (a wire contract; ``expr``/``resolve``
+  moved to genie-sdk ``core/param`` 2026-11-09 — evaluation is a client-side
+  editing capability, the kernel takes numbers only)
 
-Lazy-import discipline — ``import genie_protocol.expr`` **must not pull up
-pydantic**: this ``__init__`` is only a name table + ``__getattr__``
-(PEP 562); the model bodies are loaded from ``_wire`` only when an
-attribute is first touched; star imports trigger the full load per
+Lazy-import discipline — this ``__init__`` is only a name table +
+``__getattr__`` (PEP 562); the model bodies are loaded from ``_wire`` only
+when an attribute is first touched; star imports trigger the full load per
 ``__all__``.
 """
 from __future__ import annotations
 
-__version__ = "2.0.0b5"
+__version__ = "2.0.1a1"
 
 __all__ = [
     # basic type aliases
@@ -27,14 +27,15 @@ __all__ = [
     "MaterialSpec",
     # Geometry
     "BoxSpec", "SphereSpec", "CylinderSpec", "NgonZSpec", "PolygonZSpec",
-    "EllipseZSpec", "RingZSpec", "PolygonSweptSpec", "GeometrySpec",
+    "EllipseZSpec", "RingZSpec", "GeometrySpec",
     # Source
     "SoftSourceSpec", "PlaneWaveSpec", "GaussianBeamSpec", "SourceSpec",
     # Monitor
     "DownSampleSpec", "ApodizeSpec", "TimeMonSpec", "FreqMonSpec",
     "IndexMonSpec", "MonitorSpec",
-    # Run and the top-level config
-    "RunSpec", "SimConfig",
+    # Run and the top-level config (Q17 nested house)
+    "RunSpec", "ModelSpec", "FdtdConfigSpec", "ModeConfigSpec",
+    "PlanStageSpec", "SimConfig",
     # wire-format constants (resource-guard thresholds such as MAX_CELLS are deployment policy and live outside this package)
     "FACES", "BC_KINDS", "LIBRARY_FIT_DEFAULTS", "MAX_GPU_PER_RUN",
     "norm_vertices_pairs",

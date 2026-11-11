@@ -50,13 +50,13 @@ Rules that bite:
 ## Where the knowledge lives
 
 The manual (`manual/`, shipped with the SDK) is the single source of truth
-for the `f` API — its collections, verbs, and field semantics. Do not
-memorise API from this file; this file only routes.
+for the `genie` API — its collections, solvers, verbs, and field
+semantics. Do not memorise API from this file; this file only routes.
 
 Until the manual ships in your install, ask the live process:
 
-- `run_code("dir(f)")` — the public surface, names only.
-- `run_code("help(f.submit)")` — one verb's signature and docstring.
+- `run_code("dir(genie)")` — the public surface, names only.
+- `run_code("help(genie.fdtd.run)")` — one verb's signature and docstring.
 
-A typical first session: `run_code("dir(f)")` → `edit_script(...)` →
+A typical first session: `run_code("dir(genie)")` → `edit_script(...)` →
 `run_script()` → read the terminal output.

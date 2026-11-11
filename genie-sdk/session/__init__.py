@@ -66,7 +66,7 @@ class Session:
         s = Session(workspace, gw_base_url="http://127.0.0.1:PORT/gw",
                     worker_token=..., doc_path=..., on_cancel=host_dial)
         s.start()                      # spawn + wait for ready
-        s.submit_exec("f.mesh.dx = 20e-9")
+        s.submit_exec("genie.fdtd.mesh.dx = 20e-9")
         epoch, since, evs = s.events()  # consumption entry on the 300ms single tick
         s.close()
 

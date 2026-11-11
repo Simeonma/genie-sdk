@@ -297,7 +297,7 @@ function termExec(code, opts = {}) {
 
 /** 提交当前模型（工具栏 Run）。**不改模型**，也不经终端命名空间。 */
 function runModel() {
-  /* v2 连线层：Run = 提交当前模型（f.submit） */
+  /* v2 连线层：Run = 提交当前模型（genie.fdtd.run） */
   return _execFlow("run", () => GenieApp.runModel());
 }
 
@@ -372,6 +372,9 @@ function _mergeForeignPaths(serverCfg, paths) {
 
 function applyCfgSnapshot(c, resolved, seq, origin, paths) {
   if (!c) return;
+  /* Q17：服务端快照是嵌套户型，先投影成 GUI 平铺视图（两处基准同改） */
+  c = (typeof guiViewOf === "function") ? guiViewOf(c) : c;
+  if (resolved && typeof guiViewOf === "function") resolved = guiViewOf(resolved);
   /* 深拷贝：表单是**原地改** cfg 的，若 _serverCfg 与 cfg 指向同一个
    * 对象，diff 永远是空（这是 patch 通道最容易踩的坑）。 */
   const snap = (typeof structuredClone === "function")

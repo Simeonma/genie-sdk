@@ -30,8 +30,8 @@ from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from genie_protocol.expr import ExprError, valid_param_name
-from genie_protocol.resolve import resolve_parameters_detailed, validate_resolved
+from ..param import ExprError, valid_param_name
+from ..param import resolve_parameters_detailed, validate_resolved
 
 __all__ = ["SweepSpec", "SweepAxisSpec", "SweepExpandError",
            "expand_sweep", "validate_sweep_config"]
@@ -201,7 +201,11 @@ def expand_sweep(base: dict, sweep: SweepSpec) -> list[dict]:
     out = []
     for combo in combos:
         point = copy.deepcopy(base)
-        params = point.setdefault("parameters", {})
+        # Q17 nested house: the parameters table lives under "model"
+        model = point.get("model")
+        model = model if isinstance(model, dict) else {}
+        params = model.setdefault("parameters", {})
+        point["model"] = model
         for (name, _), value in zip(axes, combo):
             params[name] = copy.deepcopy(value)
         out.append(point)
@@ -209,7 +213,9 @@ def expand_sweep(base: dict, sweep: SweepSpec) -> list[dict]:
 
 
 def _check_axis_names(sweep: SweepSpec, base: dict) -> None:
-    known = base.get("parameters") or {}
+    model = base.get("model")
+    known = (model.get("parameters") if isinstance(model, dict)
+             else base.get("parameters")) or {}   # Q17: parameters → model段
     if not isinstance(known, dict):
         # A malformed base such as parameters=5 would otherwise raise a
         # bare TypeError at sorted(known), escaping the SweepExpandError

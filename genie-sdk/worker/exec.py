@@ -1,4 +1,4 @@
-"""genie.worker.exec — execution plane: namespaces / the f composite / output capture.
+"""genie.worker.exec — execution plane: namespaces / the genie composite / output capture.
 
 - REPL: exec runs in place in the current namespace (a mid-way failure
   **keeps everything before it**);
@@ -8,7 +8,7 @@
   nothing moves, but commits and staging that already happened inside
   fresh are **not rolled back** (external side effects are not rolled
   back with the namespace);
-- ``f`` is re-injected on every exec (bound to run's action plane — this
+- ``genie`` is re-injected on every exec (bound to run's action plane — this
   module only builds the binding; the action implementations live in
   run.py);
 - stdout is the IPC channel: hijacked during exec (captured into out);
@@ -41,17 +41,17 @@ class ExecContext:
         self.gw_base_url = gw_base_url
         self.worker_token = worker_token
         self.doc_path = doc_path
-        self.inflight: set = set()          # in-flight jobs of this f (used by _cancel(None))
+        self.inflight: set = set()          # in-flight jobs of this genie (used by _cancel(None))
         self.post_recipes: dict = {}        # named recipes {name: {code, script}}
         self.sweeps: dict = {}              # named sweep definitions {name: {parameters, mode, n_gpu, on_failure}}
         self.ns: dict = {}
         self._active_ns: "dict | None" = None   # the ns currently being exec'd (fresh = a local copy)
-        self._reinject_f()
+        self._reinject_genie()
 
-    # -- f / net ------------------------------------------------------
+    # -- genie / net ---------------------------------------------------
 
-    def _reinject_f(self) -> None:
-        self.ns["f"] = bind(self.model, self)
+    def _reinject_genie(self) -> None:
+        self.ns["genie"] = bind(self.model, self)
 
     def current_ns(self) -> dict:
         """The namespace currently being exec'd (fresh = a local copy;
@@ -80,7 +80,7 @@ class ExecContext:
         stdout hijack; result (ok, err)."""
         ns = dict(self.ns) if fresh else self.ns
         model = Model() if fresh else self.model
-        ns["f"] = bind(model, self)          # f is re-injected on every exec
+        ns["genie"] = bind(model, self)     # genie is re-injected on every exec
 
         saved_out, saved_err = sys.stdout, sys.stderr
         buf_out, buf_err = io.StringIO(), io.StringIO()
@@ -98,7 +98,7 @@ class ExecContext:
         if fresh:                            # only on success: wholesale replace + atomic swap of the model
             self.ns = ns
             self.model = model
-        self._reinject_f()
+        self._reinject_genie()
 
         text = buf_out.getvalue()
         if echo and text:                    # echo=False: stdout captured, then discarded

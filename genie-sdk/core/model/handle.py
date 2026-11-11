@@ -1,23 +1,47 @@
-"""genie.core.model.handle -- Model (the core-side f body) + collection
-views + short references + the id allocator.
+"""genie.core.model.handle -- Model (the core-side body: shared structure
++ declared solver envelopes) + collection views + short references + the
+id allocator (Q15).
 
-Model grows no actions: no submit / _submit / _wait / _cancel /
-networking / persistence at all -- the action surface lives in
-worker/run (locked by tests). Short references do not cache item
-objects -- every attribute access resolves back to the draft by id,
-so they naturally become invalid once the item is removed.
+Model grows no actions: no run / submit / _wait / _cancel / networking /
+persistence at all -- the action surface lives in worker/run (locked by
+tests). Short references do not cache item objects -- every attribute
+access resolves back to the draft by id, so they naturally become
+invalid once the item is removed.
+
+Q15 layering (the API language mirrors the optics repo):
+
+- **structure** (shared by every solver, one copy per model):
+  ``materials`` / ``geometry`` / ``parameters``;
+- **solver envelopes** (one per declared solver): ``domain`` / ``mesh`` /
+  ``sources`` / ``monitors`` -- these belong to the *solver*, not to the
+  model;
+- solvers are declared explicitly (``add_solver``); the default solver
+  ``"fdtd"`` auto-vivifies on access (it is the wire default --
+  ``solver=None`` -- and the GUI edits it before any script line could
+  declare it);
+- ``to_config(solver)`` assembles one wire-shaped SimConfig per run:
+  shared structure copied in + that solver's envelope + the ``solver``
+  field (omitted for the fdtd default -- legacy payloads stay
+  byte-identical; protocol b8 frozen).
 """
 from __future__ import annotations
 
-from typing import Any
+import re
 
 from genie_protocol import _wire
+from genie_protocol._wire import _SOLVER_NAME
 
 from .draft import DRAFT_OF, to_wire
 
 DomainDraft = DRAFT_OF[_wire.DomainSpec]
 MeshDraft = DRAFT_OF[_wire.MeshSpec]
 RunDraft = DRAFT_OF[_wire.RunSpec]
+
+#: the solver whose runs omit the wire ``solver`` field (the wire default;
+#: legacy payloads byte-identical) and whose envelope auto-vivifies.
+DEFAULT_SOLVER = "fdtd"
+
+_SOLVER_RE = re.compile(_SOLVER_NAME)
 
 _GEO: dict = {
     "box": DRAFT_OF[_wire.BoxSpec],
@@ -27,7 +51,6 @@ _GEO: dict = {
     "polygon_z": DRAFT_OF[_wire.PolygonZSpec],
     "ellipse_z": DRAFT_OF[_wire.EllipseZSpec],
     "ring_z": DRAFT_OF[_wire.RingZSpec],
-    "polygon_swept": DRAFT_OF[_wire.PolygonSweptSpec],
 }
 _MAT: dict = {
     "const": DRAFT_OF[_wire.ConstMatSpec],
@@ -75,11 +98,10 @@ class _Allocator:
 
 
 class _Ref:
-    """Short reference: resolves the address once at
-    construction (name→id); afterwards every attribute access
-    resolves back to the draft by id -- unaffected by renames,
-    raises "not found" after removal. Not a variable that must be
-    kept."""
+    """Short reference: resolves the address once at construction
+    (name→id); afterwards every attribute access resolves back to the
+    draft by id -- unaffected by renames, raises "not found" after
+    removal. Not a variable that must be kept."""
 
     __slots__ = ("_view", "_id")
 
@@ -157,7 +179,7 @@ class _CollectionView:
             if not isinstance(node, dict):
                 raise TypeError(
                     f"add_{kind}: node must be a dict (a material node "
-                    f"from f.mat_from_nk / f.assemble_nk), got "
+                    f"from genie.mat_from_nk / genie.assemble_nk), got "
                     f"{type(node).__name__}")
             if node.get("type") != kind:
                 raise ValueError(
@@ -190,7 +212,6 @@ class _CollectionView:
     def add_polygon_z(self, name=None):      return self._add("polygon_z", name)
     def add_ellipse_z(self, name=None):      return self._add("ellipse_z", name)
     def add_ring_z(self, name=None):         return self._add("ring_z", name)
-    def add_polygon_swept(self, name=None):  return self._add("polygon_swept", name)
 
     def add_const(self, name=None, node=None):  return self._add("const", name, node)
     def add_lorentz(self, name=None, node=None): return self._add("lorentz", name, node)
@@ -205,51 +226,143 @@ class _CollectionView:
     def add_index(self, name=None):          return self._add("index", name)
 
 
+class Solver:
+    """One declared solver's envelope: ``domain`` / ``mesh`` (singletons,
+    direct assignment) + ``sources`` / ``monitors`` (collections). The
+    envelope belongs to the solver, not to the model (Q15); structure
+    (materials / geometry / parameters) lives on the Model and is shared
+    by every solver."""
+
+    __slots__ = ("name", "domain", "mesh", "sources", "monitors",
+                 "_source", "_monitor")
+
+    def __init__(self, owner: "Model", name: str) -> None:
+        object.__setattr__(self, "name", name)
+        object.__setattr__(self, "domain", DomainDraft())
+        object.__setattr__(self, "mesh", MeshDraft())
+        self._source: list = []
+        self._monitor: list = []
+        object.__setattr__(self, "sources",
+                           _CollectionView(owner, "sources",
+                                           self._source, _SRC))
+        object.__setattr__(self, "monitors",
+                           _CollectionView(owner, "monitors",
+                                           self._monitor, _MON))
+
+    def __setattr__(self, name, value):
+        # name / domain / mesh are plain assignment (domain / mesh swap on
+        # document open); the collection views must not be overwritten
+        if name in ("sources", "monitors"):
+            raise AttributeError(
+                f"{self.name}.sources/monitors are collection views and "
+                f"cannot be overwritten")
+        object.__setattr__(self, name, value)
+
+    def __repr__(self):
+        return f"<solver {self.name!r}>"
+
+
 class Model:
-    """The core-side f body (semantics live in core, values live in
-    worker).
+    """The core-side body: shared structure + declared solver envelopes
+    (semantics live in core, values live in worker).
 
     - Field values enter only via ``=``; commands take only an address;
-    - domain / mesh by direct singleton assignment; geom / mat / src /
-      mon as collection views;
-    - parameters as key-value pairs; dict fields such as boundary
-      accept whole-value or per-key assignment;
-    - promotion ``to_config()`` must go through ``validate_for_ui``
-      (the single validation surface);
-    - **no submit / _submit / _wait / _cancel / networking /
-      persistence** (the action surface lives in worker/run).
+    - structure: ``materials`` / ``geometry`` collections +
+      ``parameters`` key-value pairs, shared by every solver;
+    - solvers: ``add_solver(name)`` declares; the fdtd default
+      auto-vivifies on access (``envelope``);
+    - promotion ``to_config(solver)`` must go through
+      ``validate_for_ui`` (the single validation surface);
+    - **no run / submit / networking / persistence** (the action surface
+      lives in worker/run).
     """
 
     def __init__(self) -> None:
         self._alloc = _Allocator()
-        self.domain = DomainDraft()
-        self.mesh = MeshDraft()
         self.parameters: dict = {}
         self._run = RunDraft()
         self._geometry: list = []
         self._materials: list = []
-        self._source: list = []
-        self._monitor: list = []
-        self.geom = _CollectionView(self, "geom", self._geometry, _GEO)
-        self.mat = _CollectionView(self, "mat", self._materials, _MAT)
-        self.src = _CollectionView(self, "src", self._source, _SRC)
-        self.mon = _CollectionView(self, "mon", self._monitor, _MON)
+        self.geometry = _CollectionView(self, "geometry", self._geometry, _GEO)
+        self.materials = _CollectionView(self, "materials", self._materials, _MAT)
+        self._solvers: dict[str, Solver] = {}
 
-    def to_config(self) -> dict:
-        """Promotion: draft → a dict in the SimConfig shape (Nones
-        stripped). The caller must then go through
+    # -- solvers ------------------------------------------------------
+
+    def add_solver(self, name) -> Solver:
+        """Declare a solver (its envelope starts empty). The name follows
+        the wire ``_SOLVER_NAME`` pattern (same ruler as the protocol --
+        no second regex here). Duplicate declaration is an error (it
+        would silently discard the existing envelope)."""
+        if not isinstance(name, str) or not _SOLVER_RE.fullmatch(name):
+            raise ValueError(
+                f"bad solver name {name!r} — expected a lower-case "
+                f"identifier like 'fdtd' / 'mode' (same pattern as the "
+                f"wire format)")
+        if name in self._solvers:
+            raise ValueError(
+                f"solver {name!r} is already declared — envelopes hold "
+                f"solver state, re-declaring would discard it "
+                f"(use the existing genie.{name})")
+        s = Solver(self, name)
+        self._solvers[name] = s
+        return s
+
+    def envelope(self, name) -> Solver:
+        """The declared solver's envelope. The fdtd **default**
+        auto-vivifies (it is the wire ``solver=None`` default; the GUI
+        edits it before any script line could declare it); every other
+        name must be declared first — a one-line error pointing at
+        ``add_solver`` (this also catches typos: ``genie.fdtc`` fails
+        here instead of silently building an empty run)."""
+        if name == DEFAULT_SOLVER and name not in self._solvers:
+            s = Solver(self, name)
+            self._solvers[name] = s
+            return s
+        try:
+            return self._solvers[name]
+        except KeyError:
+            if isinstance(name, str) and _SOLVER_RE.fullmatch(name):
+                raise LookupError(
+                    f"solver {name!r} is not declared — call "
+                    f"genie.add_solver({name!r}) first") from None
+            raise AttributeError(
+                f"model has no attribute {name!r}") from None
+
+    @property
+    def solvers(self) -> tuple:
+        """The declared solver names (insertion order; read-only)."""
+        return tuple(self._solvers)
+
+    # -- promotion ------------------------------------------------------
+
+    def to_config(self, solver: str | None = None) -> dict:
+        """Promotion: draft → a dict in the **Q17 nested** SimConfig shape
+        (Nones stripped) for one run of ``solver`` (default = the fdtd
+        default, whose payload omits the wire ``solver`` field): structure
+        under ``model``, that solver's envelope under ``config``, ``run``
+        at the top level. The caller must then go through
         ``genie_protocol.resolve.validate_for_ui`` (the single
         validation surface)."""
-        return {
-            "domain": to_wire(self.domain),
-            "mesh": to_wire(self.mesh),
-            "materials": [to_wire(i) for i in self._materials],
-            "geometry": [to_wire(i) for i in self._geometry],
-            "source": [to_wire(i) for i in self._source],
-            "monitor": [to_wire(i) for i in self._monitor],
+        name = solver if solver is not None else DEFAULT_SOLVER
+        s = self.envelope(name)
+        cfg = {
+            "model": {
+                "materials": [to_wire(i) for i in self._materials],
+                "geometry": [to_wire(i) for i in self._geometry],
+                "parameters": dict(self.parameters),
+            },
+            "config": {
+                "domain": to_wire(s.domain),
+                "mesh": to_wire(s.mesh),
+                "source": [to_wire(i) for i in s._source],
+                "monitor": [to_wire(i) for i in s._monitor],
+            },
             "run": to_wire(self._run),
-            "parameters": dict(self.parameters),
         }
+        if solver is not None and solver != DEFAULT_SOLVER:
+            cfg["solver"] = solver
+        return cfg
 
     @property
     def last_id(self) -> int:
@@ -261,28 +374,41 @@ class Model:
 
     @classmethod
     def from_config(cls, cfg: dict, *, next_id: int | None = None) -> "Model":
-        """Open a document: wire-format dict → Model. The id allocator
-        takes max(next_id, highest item id) (next_id is the
-        value recorded in state.json, preventing reuse after the
-        highest id is removed)."""
+        """Open a document: **Q17 nested** wire-format dict → Model. The
+        single config is restored as the fdtd default solver's envelope
+        (v1 documents hold one config; the multi-solver slot layout is
+        deferred, Q15 挂账①). Flat legacy documents (b8 and earlier,
+        domain/materials/… at the top level) fail loudly — the 2.0.1a1
+        breaking cut, no migration shim. The id allocator takes
+        max(next_id, highest item id) (next_id is the value recorded in
+        state.json, preventing reuse after the highest id is removed)."""
+        if "model" not in cfg or "config" not in cfg:
+            raise ValueError(
+                "not a 2.0.1a1 nested document (no 'model'/'config' "
+                "section) — pre-2.0.1a1 flat documents are not openable "
+                "after the Q17 breaking cut; rebuild the model or use an "
+                "older SDK to convert")
+        model = cfg.get("model") or {}
+        conf = cfg.get("config") or {}
         m = cls()
-        m.domain = DomainDraft.model_validate(cfg.get("domain") or {})
-        m.mesh = MeshDraft.model_validate(cfg.get("mesh") or {})
+        s = m.add_solver(DEFAULT_SOLVER)
+        s.domain = DomainDraft.model_validate(conf.get("domain") or {})
+        s.mesh = MeshDraft.model_validate(conf.get("mesh") or {})
         m._run = RunDraft.model_validate(cfg.get("run") or {})
-        m.parameters = dict(cfg.get("parameters") or {})
-        for kinds, items, key in (
-                (_GEO, m._geometry, "geometry"),
-                (_MAT, m._materials, "materials"),
-                (_SRC, m._source, "source"),
-                (_MON, m._monitor, "monitor")):
-            for raw in cfg.get(key) or []:
+        m.parameters = dict(model.get("parameters") or {})
+        for kinds, items, src, key in (
+                (_GEO, m._geometry, model, "geometry"),
+                (_MAT, m._materials, model, "materials"),
+                (_SRC, s._source, conf, "source"),
+                (_MON, s._monitor, conf, "monitor")):
+            for raw in src.get(key) or []:
                 kind = raw.get("type")
                 if kind not in kinds:
                     raise ValueError(f"{key}: unknown item type {kind!r}")
                 items.append(kinds[kind].model_validate(raw))
         highest = max(
             [next_id or 0]
-            + [it.id for it in (m._geometry + m._materials + m._source
-                                + m._monitor) if it.id is not None])
+            + [it.id for it in (m._geometry + m._materials + s._source
+                                + s._monitor) if it.id is not None])
         m._alloc.raise_to(highest)
         return m

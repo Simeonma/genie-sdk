@@ -12,14 +12,18 @@ system assign; no scanning.
 
 **Form delta generation lives here**: the browser sends only a structured
 thin intent (collection / kind / id /
-field / value) → ``form_delta`` produces one line of Python (values are
+field / value) → ``form_delta`` produces one line of the Q15 API
+language (values are
 always ``repr`` literals, never concatenated strings; **field types are
 asked of protocol — field-type reflection against the source of truth, no
 second copied table**: collection→SimConfig field, kind→discriminated
 union member, tuple annotation→JSON list collapsed into a tuple) → the
 session dispatches ``exec(echo=False)`` (terminal does not echo).
+Envelope collections (domain / mesh / sources / monitors) are generated
+against the fdtd default solver (the GUI is fdtd-bound v1; structure
+collections live on the ``genie`` handle).
 Add-structure / remove-structure intents grow with the GUI shell's real
-needs (``f.geom.add_box('name')`` followed by field-by-field
+needs (``genie.geometry.add_box('name')`` followed by field-by-field
 assignment).
 """
 from __future__ import annotations
@@ -97,10 +101,23 @@ def remove_plate(path) -> None:
 _F_ATTR = {"domain": "domain", "mesh": "mesh", "geom": "geometry",
            "mat": "materials", "src": "source", "mon": "monitor"}
 
+#: Q17 nested house: which wire section each GUI collection reflects
+#: against (structure → ModelSpec, fdtd envelope → FdtdConfigSpec).
+_SECTION_OF = {"geom": _wire.ModelSpec, "mat": _wire.ModelSpec,
+               "domain": _wire.FdtdConfigSpec, "mesh": _wire.FdtdConfigSpec,
+               "src": _wire.FdtdConfigSpec, "mon": _wire.FdtdConfigSpec}
+
+#: GUI collection key → the new-syntax line prefix (Q15): structure
+#: collections live on the handle, the envelope collections on the fdtd
+#: default solver (the GUI is fdtd-bound v1).
+_F_PREFIX = {"domain": "genie.fdtd.domain", "mesh": "genie.fdtd.mesh",
+             "geom": "genie.geometry", "mat": "genie.materials",
+             "src": "genie.fdtd.sources", "mon": "genie.fdtd.monitors"}
+
 
 def _resolve_spec(coll: str, kind):
     """collection (+kind) → the protocol's Spec class (all via reflection against the source of truth)."""
-    ann = _wire.SimConfig.model_fields[_F_ATTR[coll]].annotation
+    ann = _SECTION_OF[coll].model_fields[_F_ATTR[coll]].annotation
     if get_origin(ann) is list:                 # collection field: list[Annotated[...]]
         ann = get_args(ann)[0]
     args = get_args(ann)
@@ -141,8 +158,8 @@ def form_delta(intent: dict) -> str:
         raise ValueError(f"unknown field {field!r} on {coll}")
     value = _coerce(spec.model_fields[field].annotation, intent.get("value"))
     if intent.get("id") is None:
-        return f"f.{coll}.{field} = {value!r}"
-    return f"f.{coll}[{int(intent['id'])}].{field} = {value!r}"
+        return f"{_F_PREFIX[coll]}.{field} = {value!r}"
+    return f"{_F_PREFIX[coll]}[{int(intent['id'])}].{field} = {value!r}"
 
 
 def _is_union(origin) -> bool:
@@ -223,7 +240,7 @@ def form_fields(collection: str, kind=None) -> list[dict]:
 
 #: Which add_* shells the GUI may create per collection. Materials are
 #: narrowed to the two online wire shapes: ``from_library`` is a dead node
-#: the line format rejects (the library flow goes through f.mat_from_nk
+#: the line format rejects (the library flow goes through genie.mat_from_nk
 #: instead); geometry / source / monitor kinds are reflected below.
 _MAT_ADD_KINDS = ("const", "lorentz")
 
@@ -234,13 +251,13 @@ def form_intent(intent: dict) -> str:
     default ``set`` (one field assignment — delegated to form_delta)."""
     op = intent.get("op") or "set"
     if op == "param":
-        # 参数表：f.parameters[<name>] = value / 删除（value=null 或 remove）
+        # 参数表：genie.parameters[<name>] = value / 删除（value=null 或 remove）
         name = intent.get("name")
         if not isinstance(name, str) or not name.isidentifier():
             raise ValueError(f"bad parameter name: {name!r}")
         if intent.get("remove") or intent.get("value") is None:
-            return f"f.parameters.pop({name!r}, None)"
-        return f"f.parameters[{name!r}] = {intent.get('value')!r}"
+            return f"genie.parameters.pop({name!r}, None)"
+        return f"genie.parameters[{name!r}] = {intent.get('value')!r}"
     coll = intent.get("collection")
     if coll not in _F_ATTR:
         raise ValueError(f"bad form intent: {intent!r}")
@@ -256,15 +273,15 @@ def form_intent(intent: dict) -> str:
             _resolve_spec(coll, kind)                        # unknown kind → ValueError
         name = intent.get("name")
         if name is None:
-            return f"f.{coll}.add_{kind}()"
+            return f"{_F_PREFIX[coll]}.add_{kind}()"
         if not isinstance(name, str) or not name:
             raise ValueError(f"bad add name: {name!r}")
-        return f"f.{coll}.add_{kind}({name!r})"
+        return f"{_F_PREFIX[coll]}.add_{kind}({name!r})"
     if op == "remove":
         iid = intent.get("id")
         if iid is None:
             raise ValueError("remove needs an item id")
-        return f"f.{coll}.remove({int(iid)})"
+        return f"{_F_PREFIX[coll]}.remove({int(iid)})"
     return form_delta(intent)
 
 

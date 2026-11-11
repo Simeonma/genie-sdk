@@ -121,7 +121,7 @@ def _draftify_inner(ann: Any) -> Any:
     if ann in DRAFT_OF:
         return DRAFT_OF[ann]
     if ann in (float, int):
-        # COMSOL-style substitution entry: the name lives in f.parameters, the
+        # COMSOL-style substitution entry: the name lives in genie.parameters, the
         # slot holds the expression. Resolution stays in protocol.resolve.
         return Union[ann, str]
     origin = get_origin(ann)

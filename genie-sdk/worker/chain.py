@@ -1,5 +1,5 @@
 """genie.worker.chain — the submission chain: the one machine both
-``f.submit`` and the sweep driver share (Q10: "a sweep is a batched
+``genie.fdtd.run`` and the sweep driver share (Q10: "a sweep is a batched
 submit" is expressed by this shared module — the import graph says it).
 
 Contents (moved verbatim from run.py, zero behavior change):
@@ -28,7 +28,7 @@ from genie import ipc
 from genie.core import archive
 from genie.core.model.draft import digest
 from genie.net import (TERMINAL_BAD, TERMINAL_OK, GenieConfigError)
-from genie_protocol.resolve import resolve_parameters, validate_for_ui
+from ..core.param import resolve_parameters, validate_for_ui
 
 __all__ = ["submit", "wait", "as_completed", "cancel", "stage",
            "state_for"]

@@ -94,7 +94,7 @@ function renderParamsPane() {
   const note = document.createElement("div");
   note.className = "pane-note";
   note.textContent = "参数表 · 值里直接写单位（0.5[um] / 0.5um），右列是换算"
-    + "后的 SI 值；表达式槽/sweep 轴引用这些名字（与脚本 f.parameters 同源）";
+    + "后的 SI 值；表达式槽/sweep 轴引用这些名字（与脚本 genie.parameters 同源）";
   body.appendChild(note);
   if (!(cfg.parameters && typeof cfg.parameters === "object")) cfg.parameters = {};
   const params = cfg.parameters;
@@ -164,7 +164,7 @@ function renderParamsPane() {
     del.textContent = "✕";
     del.title = "删除参数 " + k;
     del.addEventListener("click", () => {
-      /* v2 连线层：参数删除 = f.parameters.pop(k)（薄意图 op=param/remove）。 */
+      /* v2 连线层：参数删除 = genie.parameters.pop(k)（薄意图 op=param/remove）。 */
       GenieApp.formIntents([{ path: "parameters." + k, value: null }])
         .then(() => {
           delete params[k];

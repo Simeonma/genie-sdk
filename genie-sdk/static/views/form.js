@@ -972,7 +972,7 @@ const FormPanel = {
     const list = this.cfg.materials || (this.cfg.materials = []);
     if (!list.length) {
       body.appendChild(this._paneEmpty("materials", "还没有材料",
-        "从工具条 MATERIALS 添加，或在脚本里 f.mat.add_const()"));
+        "从工具条 MATERIALS 添加，或在脚本里 genie.materials.add_const()"));
       return;
     }
     this._items(list).forEach(([mt, i]) => {
@@ -1204,7 +1204,7 @@ const FormPanel = {
     const list = this.cfg.geometry || (this.cfg.geometry = []);
     if (!list.length) {
       body.appendChild(this._paneEmpty("structure", "还没有几何体",
-        "从工具条 STRUCTURES 选一个形状添加，或在脚本里 f.geom.add_box()"));
+        "从工具条 STRUCTURES 选一个形状添加，或在脚本里 genie.geometry.add_box()"));
       return;
     }
     this._items(list).forEach(([g, i]) => {
@@ -1352,7 +1352,7 @@ const FormPanel = {
     const list = this.cfg.source || (this.cfg.source = []);
     if (!list.length) {
       body.appendChild(this._paneEmpty("soft_source", "还没有源",
-        "到 FDTD 页的 SOURCES 添加，或在脚本里 f.src.add_plane_wave()"));
+        "到 FDTD 页的 SOURCES 添加，或在脚本里 genie.fdtd.sources.add_plane_wave()"));
       return;
     }
     const FIELDS = {
@@ -1507,7 +1507,7 @@ const FormPanel = {
     const list = this.cfg.monitor || (this.cfg.monitor = []);
     if (!list.length) {
       body.appendChild(this._paneEmpty("mon_time", "还没有监视器",
-        "到 FDTD 页的 MONITORS 添加，或在脚本里 f.mon.add_freq()"));
+        "到 FDTD 页的 MONITORS 添加，或在脚本里 genie.fdtd.monitors.add_freq()"));
       return;
     }
     this._items(list).forEach(([m, i]) => {

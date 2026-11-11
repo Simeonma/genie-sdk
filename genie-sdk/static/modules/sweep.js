@@ -162,7 +162,7 @@ async function sweepRun() {
   sweepState.status = "提交扫描…";
   sweepUpdateControls();
   try {
-    /* v2 连线层：按钮 = worker 里 f.add_param_sweep(...) + f.run_param_sweep(...)
+    /* v2 连线层：按钮 = worker 里 genie.add_param_sweep(...) + genie.run_param_sweep(...)
      * 一句 exec（linspace/logspace 在层里展开成值列表；进度走同一环投影）。 */
     await GenieApp.runSweep({
       axes,

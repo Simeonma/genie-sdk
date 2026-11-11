@@ -102,6 +102,8 @@ async function flushPendingCfgPush() {
  * （不会再多发一坨 patch），只有这一次 replace。 */
 async function replaceModel(model, source) {
   if (!model || typeof model !== "object") return false;
+  /* Q17：嵌套户型先投影成 GUI 平铺视图（同 applyCfgSnapshot） */
+  if (typeof guiViewOf === "function") model = guiViewOf(model);
   cfg = model;
   /* 深拷贝：cfg 会被表单原地改，_serverCfg 必须是"服务端那份"的独立副本 */
   _serverCfg = (typeof structuredClone === "function")

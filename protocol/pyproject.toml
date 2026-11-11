@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "genie-protocol"
-version = "2.0.0b5"
+version = "2.0.1a1"
 description = "GENIE wire-format protocol layer - SimConfig models, expression evaluator, resolver, estimator (single source shared by SDK client, gateway and compute kernel)"
 requires-python = ">=3.10"
 dependencies = [
@@ -31,6 +31,28 @@ dependencies = [
     #   Breaking: a shorthand pole that carried the *other* strength field
     #   (lorentz with omega_p / drude with omega_0) was silently ignored and
     #   now fails loudly.
+    # 2.0.0b6 (2026-11-09, unreleased): solver-selection surface —
+    #   `solver` (open set: a lower-case identifier, deliberately NOT a Literal
+    #   so adding an algorithm does not bump the protocol) and `plan`
+    #   (list[PlanStageSpec]: solver/id/consumes) on SimConfig, with three
+    #   shape invariants (mutually exclusive, non-empty, ids unique +
+    #   consumes only earlier stages). Both default to None → every existing
+    #   payload validates byte-identically. "solver declared but not installed
+    #   here" is a deployment fact, rejected by the consumer (kernel: 400 +
+    #   available list), not by the protocol.
+    # 2.0.1a1 (2026-11-11, BREAKING — Q17 nested house): SimConfig
+    #   restructured to {model: {materials, geometry, parameters},
+    #   solver|plan, config: <solver envelope>, run: {n_gpu}}. domain/mesh/
+    #   source/monitor belong to the fdtd solver (FdtdConfigSpec) — the
+    #   flat legacy payload is fdtd posing as the model and is now 422.
+    #   ModeConfigSpec (ex kernel-private ModeSection) enters the wire;
+    #   plan stages carry their own config ({solver, id, consumes,
+    #   config}); n_gpu moved to the top-level run (orchestration, any
+    #   solver may use it). Model-section guards (dup materials/geometry,
+    #   material refs) moved into ModelSpec; monitor-name uniqueness and
+    #   boundary pairing into FdtdConfigSpec. Solver set stays open —
+    #   unknown solvers' config passes through as a dict (deployment
+    #   fact).
     "pydantic>=2,<3",
 ]
 license = "Apache-2.0"

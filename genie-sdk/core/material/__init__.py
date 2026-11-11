@@ -399,7 +399,7 @@ def assemble_nk(fits, name=None):
         if not isinstance(r, NKFit):
             raise ValueError(
                 f"assemble_nk: component {key!r} must be an NKFit from "
-                f"f.fit_nk(...), got {type(r).__name__}")
+                f"genie.fit_nk(...), got {type(r).__name__}")
 
     eps_inf = [fits[c].model["eps_inf"] for c in _DIAG]
     poles = []
@@ -640,7 +640,7 @@ def mat_from_nk(name, band=None, max_poles=10, imaginary_weight=1.0,
     forwarded. The
     per-component quality is not surfaced — for control use the primitive
     layer (``load_nk`` / ``fit_nk`` / ``assemble_nk``). **Does not touch the model** (adding
-    to a model is one line, ``f.mat.add_lorentz(node)``); the node
+    to a model is one line, ``genie.materials.add_lorentz(node)``); the node
     name defaults to the library name. An iso material is fitted
     once and mounted on all three axes; compound materials are
     split per axis via

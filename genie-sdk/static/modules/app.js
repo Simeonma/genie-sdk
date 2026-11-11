@@ -271,7 +271,7 @@
   }
 
   function runModel() {
-    exec("f.submit()", { fresh: false, echo: true }).catch((e) => {
+    exec("genie.fdtd.run()", { fresh: false, echo: true }).catch((e) => {
       if (typeof termAppend === "function") termAppend("✗ " + e.message + "\n", "term-err");
     });
   }
@@ -283,8 +283,8 @@
     termExec(code, { fresh: true, mark: "script" });
   }
 
-  /* ── 库材料：按钮 = worker 里一句 f 命令 ───────────────────────
-   * f.mat_from_nk(名, band=(lo,hi), max_poles=n, imaginary_weight=w) 从材料
+  /* ── 库材料：按钮 = worker 里一句 genie 命令 ────────────────────
+   * genie.mat_from_nk(名, band=(lo,hi), max_poles=n, imaginary_weight=w) 从材料
    * 库读 nk、在**用户给的波长窗口**里拟合成整节点（max_poles 是 0-n 自动
    * 选的上限，缺省 6；没有源带又不给窗口时 worker 明报）；窗口/上限/权重
    * 记在 localStorage 里，下次点按钮直接带出来。 */
@@ -334,12 +334,12 @@
     if (/^\s*y(?:es)?\s*$/i.test(passive || "")) {
       parts.push("make_passive=True");
     }
-    termExec("f.mat.add_lorentz(node=f.mat_from_nk(" + parts.join(", ") + "))");
+    termExec("genie.materials.add_lorentz(node=genie.mat_from_nk(" + parts.join(", ") + "))");
   }
 
-  /* ── 扫参：按钮 = worker 里 f.add_param_sweep(...) + f.run_param_sweep(...)
+  /* ── 扫参：按钮 = worker 里 genie.add_param_sweep(...) + genie.run_param_sweep(...)
    * v1 面板给的是「轴 + linspace/logspace/值列表」；这里在前端展开成
-   * v2 的 parameters 字典（参数名 → 值列表），再拼两行 f 命令一次 exec。 */
+   * v2 的 parameters 字典（参数名 → 值列表），再拼两行 genie 命令一次 exec。 */
   const S_SWEEP = { name: "", total: 0 };
 
   function _linspace(a, b, n) {
@@ -375,9 +375,9 @@
     const name = String(spec.name || ("gui_" + Date.now().toString(36)));
     const onFailure = spec.onFailure === "abort" ? "abort" : "continue";
     const code =
-      "f.add_param_sweep(" + JSON.stringify(name) + ", " + JSON.stringify(params) +
+      "genie.add_param_sweep(" + JSON.stringify(name) + ", " + JSON.stringify(params) +
       ", mode='product', on_failure='" + onFailure + "')\n" +
-      "f.run_param_sweep(" + JSON.stringify(name) + ")";
+      "genie.run_param_sweep(" + JSON.stringify(name) + ")";
     S_SWEEP.name = name;
     S_SWEEP.total = total;
     if (typeof renderTermInput === "function") {
@@ -395,7 +395,12 @@
   const COLL_OF = { materials: "mat", geometry: "geom", source: "src", monitor: "mon" };
 
   function serverItems(head) {
-    const arr = (typeof _serverCfg !== "undefined" && _serverCfg && _serverCfg[head]) || [];
+    /* Q17 嵌套户型：materials/geometry 住 cfg.model，source/monitor 住
+     * cfg.config（fdtd 缺省）；GUI fdtd 绑定不变。 */
+    const c = (typeof _serverCfg !== "undefined" && _serverCfg) || {};
+    const arr = (c.model && c.model[head]) != null ? c.model[head]
+      : ((c.config && c.config[head]) != null ? c.config[head]
+         : c[head]);
     return Array.isArray(arr) ? arr : [];
   }
 
@@ -405,7 +410,7 @@
       const parts = String(op.path || "").split(".");
       const head = parts[0];
       if (head === "parameters") {
-        /* 参数表 → f.parameters[<k>] = v / pop(k)（扫参轴引用的就是这些键） */
+        /* 参数表 → genie.parameters[<k>] = v / pop(k)（扫参轴引用的就是这些键） */
         if (parts.length === 2 && parts[1]) {
           if (op.value === null) intents.push({ op: "param", name: parts[1], remove: true });
           else intents.push({ op: "param", name: parts[1], value: op.value });
@@ -502,6 +507,18 @@
       }).catch(() => {});
     }, 600);
   });
+
+  /* Q17 嵌套户型 → GUI 平铺视图的一次性投影（视图层零改动）：
+   * worker 的 cfg 快照现在是 {model:{materials,geometry,parameters},
+   * config:{domain,mesh,source,monitor}, run}；表单/树/3D/检查器仍按
+   * 平铺键读写本地 cfg。投影保留 model/config 原键（serverItems 的
+   * diff 基准两态都能读），顶层平铺键从两段浅抄。 */
+  window.guiViewOf = function (c) {
+    if (!c || typeof c !== "object") return c;
+    if (!c.model && !c.config) return c;
+    const m = c.model || {}, k = c.config || {};
+    return Object.assign({}, c, m, k);
+  };
 
   window.GenieApp = {
     status, login, logout,

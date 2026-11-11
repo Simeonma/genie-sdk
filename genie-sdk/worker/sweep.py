@@ -1,9 +1,9 @@
 """genie.worker.sweep — the parameter-sweep driver: the three verbs
-(``f.add_param_sweep`` / ``f.run_param_sweep`` / ``f.delete_param_sweep``)
-plus the run loop. A sweep point is **a job** (the same word, the same
-machine as ``f.submit``): the per-point record ``{parameters, cfg, doc,
-job_id}`` is an index line's in-memory mirror — no brand name, no second
-execution semantics.
+(``genie.add_param_sweep`` / ``genie.run_param_sweep`` /
+``genie.delete_param_sweep``) plus the run loop. A sweep point is
+**a job** (the same word, the same machine as ``genie.fdtd.run``): the
+per-point record ``{parameters, cfg, doc, job_id}`` is an index line's
+in-memory mirror — no brand name, no second execution semantics.
 
 The loop is the submit chain, batched (Q10):
 
@@ -24,11 +24,11 @@ The loop is the submit chain, batched (Q10):
 6. return the ``WorkerSweep`` handle.
 
 One exec, blocks until the whole batch is terminal (busy-rejects
-everything else; ``f.cancel`` stays the only out-of-band door — canceled
+everything else; ``genie._cancel`` stays the only out-of-band door — canceled
 jobs ride the bad-point path). Zero terminal lines: progress rides the
 wait loop's rollup (one card for the whole batch); ``on_failure``
 ``abort`` cancels the still-live jobs at the first bad point and raises
-``GenieJobError`` (the same exception / wording as ``f.submit``); the
+``GenieJobError`` (the same exception / wording as ``genie.fdtd.run``); the
 account stays on disk.
 
 Definitions are data, not code — ``add`` takes the whole definition in

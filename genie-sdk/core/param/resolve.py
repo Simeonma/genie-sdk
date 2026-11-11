@@ -17,7 +17,7 @@ from pydantic import BaseModel, ValidationError
 from .expr import (PARAM_NAME_RULE, ExprError, eval_expr,
                    param_name_error, resolve_parameter_table,
                    valid_param_name)
-from ._wire import SimConfig
+from genie_protocol import SimConfig  # 公开名（__all__ 在册）
 
 __all__ = ["unwrap_annotation", "discriminator_name", "select_union_member",
            "resolve_parameters", "resolve_parameters_detailed",
@@ -168,19 +168,50 @@ def resolve_parameters_detailed(raw: dict) -> tuple[dict, dict]:
     """The internal form of resolve_parameters: additionally returns
     {path-segment tuple: original expression text} (used by the second
     stage of the two-stage validation to point guard errors at "the
-    evaluation result of expression t")."""
+    evaluation result of expression t").
+
+    Q17 nested house: the parameters table lives at
+    ``model.parameters``; the solver ``config`` (and every plan stage's
+    ``config``) is a union without a discriminator, so the generic
+    annotation walk cannot pick a member — the wire's own dispatch rule
+    (``_CONFIG_OF[solver]``, omit = fdtd) is applied here first, then
+    the generic walk handles the rest (already-resolved dicts pass
+    through untouched — idempotency anchor holds).
+    """
+    from genie_protocol._wire import _CONFIG_OF
+
     out = copy.deepcopy(raw)
     expr_at: dict = {}
-    raw_params = out.get("parameters")
+    model = out.get("model")
+    model = model if isinstance(model, dict) else {}
+    raw_params = model.get("parameters")
     if raw_params:
         try:
             table = resolve_parameter_table(raw_params)
         except ExprError as e:
             raise ExprError(
                 e.kind, f"parameters table evaluation failed: {e.msg}") from e
-        out["parameters"] = dict(table)
+        model["parameters"] = dict(table)
+        out["model"] = model
     else:
         table = {}
+    # config / plan-stage configs: explicit dispatch (no discriminator
+    # on the wire union), expressions resolved in place.
+    if out.get("plan") is None:
+        solver = out.get("solver") or "fdtd"
+        spec = _CONFIG_OF.get(solver)
+        if spec is not None and isinstance(out.get("config"), dict):
+            out["config"] = _resolve_value(spec, out["config"],
+                                           ["config"], table, expr_at)
+    else:
+        for i, st in enumerate(out["plan"]):
+            if not isinstance(st, dict):
+                continue
+            spec = _CONFIG_OF.get(st.get("solver"))
+            if spec is not None and isinstance(st.get("config"), dict):
+                st["config"] = _resolve_value(
+                    spec, st["config"], ["plan", i, "config"],
+                    table, expr_at)
     _resolve_value(SimConfig, out, [], table, expr_at)
     return out, expr_at
 
@@ -208,7 +239,8 @@ def resolve_parameters(raw: dict) -> dict:
 
 def check_raw_param_keys(data: dict) -> None:
     """Upfront check of parameter key names (intercept before evaluation — an expression with a bad name is not worth evaluating)."""
-    params = data.get("parameters")
+    model = data.get("model")
+    params = model.get("parameters") if isinstance(model, dict) else None
     if not params:
         return
     for k in params:
