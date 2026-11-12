@@ -413,13 +413,22 @@ class RefineSpec(_RangeModel):
 
     @model_validator(mode="after")
     def _check(self):
+        # Q22 站长令 2026-11-12：per-axis factor=1 = 该轴不细化（波导横向
+        # 细化、传播向保持原网格）——放宽到 >=1，至少一轴 >=2（全 1 =
+        # 无意义 zone）。内核守卫同轮放宽（fdtd._grid._mesh.refine）。
         if self.factor is None:
             raise ValueError(
-                "refine requires factor (an int or [fx, fy, fz], each >= 2)")
+                "refine requires factor (an int or [fx, fy, fz], "
+                "each >= 1 with at least one >= 2)")
         fs = [self.factor] * 3 if isinstance(self.factor, int) else list(self.factor)
-        if len(fs) != 3 or any(not isinstance(f, int) or f < 2 for f in fs):
+        if len(fs) != 3 or any(not isinstance(f, int) or f < 1 for f in fs):
             raise ValueError(
-                "factor must be an int >= 2 or a list of 3 ints each >= 2")
+                "factor must be an int >= 1 or a list of 3 ints each >= 1 "
+                "(factor=1 on an axis = no refinement along it)")
+        if all(f == 1 for f in fs):
+            raise ValueError(
+                "refine factor must have at least one axis >= 2 "
+                "(all-1 zone refines nothing — drop it instead)")
         return self
 
 
@@ -1234,6 +1243,27 @@ class ModeDomainSpec(_StrictModel):
         return self
 
 
+class ModeRefineSpec(_StrictModel):
+    """mode 包络段·局部加密 zone（Q23 站长拍 2026-11-12：mode 自动
+    refine；coords 定位 = fdtd 协同/专家逃生口，主入口是 refine）。
+
+    2D 截面 zone：横轴 range + 每轴 factor（Q22 语义——**每轴 >= 1**，
+    factor=1 = 该轴不细化；zone 级至少一轴 >= 2）。传播轴的 range/
+    factor 槽存在但组合层 422（截面不沿传播轴网格化）。生成器 =
+    fdtd `_grow_refined_grid` 同款算法（mode 侧复述 + 对锁测试）。"""
+
+    x_range: Optional[Range2] = None
+    y_range: Optional[Range2] = None
+    z_range: Optional[Range2] = None
+    fx: Optional[int] = Field(default=None, ge=1)
+    fy: Optional[int] = Field(default=None, ge=1)
+    fz: Optional[int] = Field(default=None, ge=1)
+    growth_rate: float = Field(default=1.2, ge=1.0)
+
+    _v = field_validator("x_range", "y_range", "z_range",
+                         mode="after")(_check_opt_range)
+
+
 class ModeMeshSpec(_StrictModel):
     """mode 包络段·网格（Q18 拍②）：每轴**间距或坐标向量二选一**；
     第二轴间距缺省 = 第一轴间距（同 MeshSpec 的缺省模式）；坐标向量
@@ -1246,6 +1276,10 @@ class ModeMeshSpec(_StrictModel):
     x_coords: Optional[list[float]] = None
     y_coords: Optional[list[float]] = None
     z_coords: Optional[list[float]] = None
+    #: 局部加密 zone（Q23）；coords 与 zone 同轴并存 = 两个真相（422，
+    #: 组合层守卫）。coords 的定位是 fdtd 协同（mode source 注入截面
+    #: 网格）+ 专家逃生口——用户面主入口是 refine。
+    refine: list[ModeRefineSpec] = Field(default_factory=list)
 
     def _axis_mesh(self, a: str):
         """单轴网格口径 → ("spacing", v) | ("coords", v) | None。"""
@@ -1333,6 +1367,35 @@ class ModeConfigSpec(_StrictModel):
                 f"mesh: axis {t2!r} needs its own d{t2} or {t2}_coords "
                 f"(only a spacing can be inherited from {t1}, not "
                 f"coordinates)")
+        # Q23 refine 守卫：传播轴槽禁；coords 与 zone 同轴 = 两个真相；
+        # factor 须有 range；zone 级至少一轴 factor >= 2。
+        for zi, z in enumerate(self.mesh.refine):
+            for a in ("x", "y", "z"):
+                rng = getattr(z, f"{a}_range")
+                fac = getattr(z, f"f{a}")
+                if a == ax and (rng is not None or fac is not None):
+                    raise ValueError(
+                        f"mesh.refine[{zi}]: axis {a!r} is the propagation "
+                        f"axis — a mode cross-section is not meshed along "
+                        f"it (transverse axes: {t1}/{t2})")
+                if fac is not None and rng is None:
+                    raise ValueError(
+                        f"mesh.refine[{zi}]: f{a} given without {a}_range "
+                        f"— a zone needs the range it refines")
+                if rng is not None and fac is None:
+                    raise ValueError(
+                        f"mesh.refine[{zi}]: {a}_range given without f{a} "
+                        f"— give f{a}=1 explicitly if the axis is not "
+                        f"refined (Q22: factor=1 = no refinement)")
+                if rng is not None and getattr(self.mesh, f"{a}_coords") is not None:
+                    raise ValueError(
+                        f"mesh.refine[{zi}]: {a}_range and mesh.{a}_coords "
+                        f"are two truths for one axis grid — coords carry "
+                        f"the whole axis, refine cannot apply on top")
+            if all((getattr(z, f"f{a}") or 1) == 1 for a in (t1, t2)):
+                raise ValueError(
+                    f"mesh.refine[{zi}]: all factors are 1 — the zone "
+                    f"refines nothing (drop it or raise one axis >= 2)")
         # boundary：键 = 横截面四缘；kind 限 pec/pmc/periodic/pml
         # （bloch 是 fdtd 的斜入射概念）；n_background 是 fdtd 侧的
         # 边界背景——mode 的背景在 domain.n_bg（一条事实一个主人）。

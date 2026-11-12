@@ -15,7 +15,7 @@ when an attribute is first touched; star imports trigger the full load per
 """
 from __future__ import annotations
 
-__version__ = "2.0.1a4"
+__version__ = "2.0.1a6"
 
 __all__ = [
     # basic type aliases

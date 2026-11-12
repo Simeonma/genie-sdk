@@ -6,4 +6,4 @@ model entry points**.
 """
 
 #: Kept in sync with the root pyproject.toml in both places (release discipline).
-__version__ = "2.0.1a4"
+__version__ = "2.0.1a6"
