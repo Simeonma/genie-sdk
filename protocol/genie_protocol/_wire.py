@@ -683,10 +683,22 @@ class _NamedGeo(_Identified):
     name: str = Field(min_length=1)
 
 
+# ── 几何旋转（任务 4，2026-11-12 站长拍板：欧拉角）──────────────────
+# 全部几何原语可选 ``rotation: Vec3``（度，缺省 (0,0,0) = 不转，加法式，
+# 旧载荷逐字合法）。约定（**唯一真相点**；model.geometry.contains /
+# fdtd._rasterization._shapes 复述 + 对锁锚）：
+#   rotation = (α, β, γ)：绕**全局固定轴** x → y → z 依次外旋，
+#   R = Rz(γ)·Ry(β)·Rx(α)；隶属判断 = contains(本体形状, Rᵀ·(p − 参考
+#   中心))。参考中心：有 ``center`` 字段的形状 = 其 center；box = 三轴
+#   区间中点；polygon_z = 顶点包围盒 xy 中心 + z 区间中点。sphere 绕
+#   自身中心旋转恒等（填了合法、无效果——文档写明即可）。
+
+
 class BoxSpec(_RangeModel, _NamedGeo):
     type: Literal["box"] = "box"
     material: str = Field(min_length=1)
     priority: int = 0
+    rotation: Vec3 = (0.0, 0.0, 0.0)      # 欧拉角（度），见上方约定
 
 
 class SphereSpec(_StrictModel, _NamedGeo):
@@ -695,6 +707,7 @@ class SphereSpec(_StrictModel, _NamedGeo):
     center: Vec3 = (0.0, 0.0, 0.0)
     radius: float = Field(gt=0)
     priority: int = 0
+    rotation: Vec3 = (0.0, 0.0, 0.0)      # 绕自身中心旋转恒等（合法无效果）
 
 
 class CylinderSpec(_StrictModel, _NamedGeo):
@@ -704,6 +717,7 @@ class CylinderSpec(_StrictModel, _NamedGeo):
     radius: float = Field(gt=0)
     height: float = Field(gt=0)
     priority: int = 0
+    rotation: Vec3 = (0.0, 0.0, 0.0)      # 欧拉角（度），见 BoxSpec 前约定
 
 
 class NgonZSpec(_StrictModel, _NamedGeo):
@@ -718,6 +732,7 @@ class NgonZSpec(_StrictModel, _NamedGeo):
     circumradius: float = Field(gt=0)
     height: float = Field(gt=0)
     priority: int = 0
+    rotation: Vec3 = (0.0, 0.0, 0.0)      # 欧拉角（度），见 BoxSpec 前约定
 
 
 def norm_vertices_pairs(vertices):
@@ -775,6 +790,8 @@ class PolygonZSpec(_StrictModel, _NamedGeo):
     vertices: list[tuple[Optional[float], Optional[float]]] = Field(min_length=3)
     z_range: Range2
     priority: int = 0
+    rotation: Vec3 = (0.0, 0.0, 0.0)      # 参考中心 = 顶点包围盒 xy 中心
+                                           # + z 区间中点（见 BoxSpec 前约定）
 
     @field_serializer("vertices")
     def _ser_vertices_json_(self, verts):
@@ -803,6 +820,7 @@ class EllipseZSpec(_StrictModel, _NamedGeo):
     ry: float = Field(gt=0)
     height: float = Field(gt=0)
     priority: int = 0
+    rotation: Vec3 = (0.0, 0.0, 0.0)      # 欧拉角（度），见 BoxSpec 前约定
 
 
 class RingZSpec(_StrictModel, _NamedGeo):
@@ -819,6 +837,7 @@ class RingZSpec(_StrictModel, _NamedGeo):
     outer_radius: float = Field(gt=0)
     height: float = Field(gt=0)
     priority: int = 0
+    rotation: Vec3 = (0.0, 0.0, 0.0)      # 欧拉角（度），见 BoxSpec 前约定
 
     @model_validator(mode="after")
     def _check_radii(self):
