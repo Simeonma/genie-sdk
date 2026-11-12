@@ -173,7 +173,7 @@ Vec3 = tuple[float, float, float]
 # all three axes) | 3-element = diagonal with independent axes | 3×3 =
 # full tensor (row-major nested list[list[float]]; symmetric
 # off-diagonal = reciprocal medium). Pole parameters (PoleSpec) are pure
-# scalars: iso (no α/β) | rank-1 (+α/β direction).
+# scalars: iso (no axis) | axis-mounted ('x'|'y'|'z').
 NumOrTensor = Union[float, tuple[float, float, float], list[list[float]]]
 
 
@@ -281,29 +281,6 @@ def _check_pos(v):
     if not v > 0:
         raise ValueError(f"must be > 0, got {v!r}")
     return v
-
-
-def _check_dir(v):
-    """alpha/beta direction vector guard (mirrors kernel `_pole._unit`):
-    every element finite, norm > 0 (≈0 → 422 "zero vector"), automatic
-    normalization (normalized when |norm−1| > 1e-12; once normalized the
-    kernel no longer warns about the unit vector)."""
-    if v is None:
-        return v
-    for x in v:
-        if not math.isfinite(x):
-            raise ValueError(
-                f"direction vector elements must be finite, got {x!r}")
-    norm = math.hypot(v[0], v[1], v[2])   # hypot prevents overflow —
-    # a hand-written sum of squares overflows to inf at 1e200 scale, and
-    # normalization then yields a silent (0,0,0) zero vector
-    if norm < 1e-15:
-        raise ValueError(
-            f"direction vector must be non-zero (norm≈0 is a zero vector), "
-            f"got {v!r}")
-    if abs(norm - 1.0) > 1e-12:
-        return (v[0] / norm, v[1] / norm, v[2] / norm)
-    return (float(v[0]), float(v[1]), float(v[2]))
 
 
 def _check_num(v):
@@ -478,35 +455,39 @@ class _Identified:
 
 
 class PoleSpec(_StrictModel):
-    """Dispersion pole = one rational scalar function times a rank-1
-    tensor weight::
+    """Dispersion pole = one rational scalar function mounted on ONE axis::
 
-        χ(s) = num(s) / (s² + b1·s + b0)     D += χ(s)·β⊗α·F
+        χ_axis(s) = num(s) / (s² + b1·s + b0)
 
     Three forms, **one physics** — ``lorentz`` / ``drude`` are special
     cases of ``rational``, and the kernel realises all three through the
     same state space (Q14: no second recurrence):
 
-    - **iso**: all parameters scalar, no alpha/beta → expanded to all
-      three axes by local `_iso_expand` (existing semantics unchanged);
-    - **rank-1**: all parameters scalar + `alpha` (required) ± `beta`
-      (default = alpha) → one pole mounted on α⊗β (lorentz
-      ωp²=Δε·ω₀²; drude ωp²=ω_p²);
+    - **iso**: all parameters scalar, no ``axis`` → expanded to one pole
+      on each of the three axes by local `_iso_expand` (isotropic
+      medium; existing semantics unchanged);
+    - **axis** (diagonal anisotropy): all parameters scalar +
+      ``axis='x'|'y'|'z'`` → one pole mounted on that axis only
+      (lorentz ωp²=Δε·ω₀²; drude ωp²=ω_p²). Different pole sets per
+      axis = biaxial media;
     - **rational**: `num=(a0,a1,a2)` (coefficients of 1, s, s²) +
       `den=(b0,b1)` (denominator s²+b1·s+b0, i.e. b0=ω₀², b1=γ) — and
       nothing else; `omega_0`/`omega_p`/`gamma`/`delta_eps` belong to the
       shorthand forms and are rejected here rather than silently ignored.
 
-    **Completeness** (why this is the general form and not a feature
-    list): any tensor-valued rational dispersion is a sum of rank-1
-    weights (SVD of each residue matrix), and any higher-order
-    denominator factorises into real second-order factors — so
-    "scalar rational × rank-1 weight, second-order denominator" is
-    closed. `a2` is the **feedthrough** (instantaneous) term: it needs no
-    state, and it is applied through the raster-time effective
-    permittivity (Q14 ③), *not* folded into the wire `eps_inf` — so it
-    neither requires α=β nor breaks reciprocity rules of `eps_inf`, and
-    instantaneous non-reciprocal media become expressible.
+    **Why axes only** (2026-11-11 定案): the pole↔field coupling is a
+    real linear map, and the only form verified stable on the staggered
+    grid is the axis-mounted one. Off-axis (oblique) couplings pump
+    energy through the half-cell Yee misalignment; complex couplings
+    (the old β=conj(α) idea) violate χ(−ω)=conj χ(ω) and act as a
+    phase-conjugating (parametric) medium that pumps broadband fields.
+    Neither is expressible any more. Rotatory / chiral / gyrotropic
+    response belongs INSIDE the oscillator (two-component state with an
+    odd-in-ω coupling) — future work, not a pole-to-field map.
+
+    `a2` is the **feedthrough** (instantaneous) term: it needs no state,
+    and it is applied through the raster-time effective permittivity
+    (Q14 ③), *not* folded into the wire `eps_inf`.
 
     Gains / guards mirror the kernel exactly: gain = negative oscillator
     strength (a0 < 0 / ωp² < 0, bounded); b1 < 0 (= γ < 0) is not a gain
@@ -524,11 +505,9 @@ class PoleSpec(_StrictModel):
     delta_eps: float = 1.0
     num: Optional[Vec3] = None        # rational only: (a0, a1, a2) — 1, s, s²
     den: Optional[Range2] = None      # rational only: (b0, b1) — s² + b1·s + b0
-    alpha: Optional[Vec3] = None      # rank-1 drive direction (unit vector, auto-normalized)
-    beta: Optional[Vec3] = None       # rank-1 coupling direction (default = alpha)
+    axis: Optional[Literal["x", "y", "z"]] = None   # None = iso (all three axes)
 
     _v = field_validator("omega_0", "omega_p", mode="after")(_check_pos)
-    _d = field_validator("alpha", "beta", mode="after")(_check_dir)
     _n = field_validator("num", mode="after")(_check_num)
     _q = field_validator("den", mode="after")(_check_den)
 
@@ -573,10 +552,6 @@ class PoleSpec(_StrictModel):
                     raise ValueError(
                         "drude pole takes omega_p, not omega_0 (kind="
                         "'lorentz' is the ω₀>0 form)")
-        # rank-1 guard: beta without alpha → 422 (alpha is required)
-        if self.beta is not None and self.alpha is None:
-            raise ValueError(
-                "rank-1 pole requires alpha (beta without alpha is invalid)")
         return self
 
 
@@ -615,8 +590,8 @@ class LorentzMatSpec(_Identified, _StrictModel):
     diagonal | 3×3 tensor) but **any finite sign** is accepted: a negative
     high-frequency constant is an ordinary rational model (metals fit to
     one), so there is no positivity gate here. Per-pole forms of
-    poles/mu_poles are described in PoleSpec (iso | rank-1, purely scalar
-    parameters ± α/β direction). color: same as ConstMatSpec.color
+    poles/mu_poles are described in PoleSpec (iso | axis-mounted, purely
+    scalar parameters + optional axis). color: same as ConstMatSpec.color
     (display only)."""
 
     type: Literal["lorentz"] = "lorentz"
@@ -1213,23 +1188,171 @@ class FdtdConfigSpec(_StrictModel):
         return self
 
 
-class ModeConfigSpec(_StrictModel):
-    """mode 包络段：FDE 截面计算域（原内核 `ModeSection` 逐字段进 wire，
-    Q17——mode 的语言从内核私有 pydantic 升为线格式；内核改重导出）。"""
+#: 传播轴 → (横截面轴1, 横截面轴2)（Q18 拍②：窗口/网格用**真轴名**，
+#: h/v 视图相对词退役；轴1 = 字母序在前的横轴——mesh「第二轴缺省 =
+#: 第一轴」的锚）。mode 的域是 2D 截面：传播轴没有 range / 网格字段。
+_TRANSVERSE = {"x": ("y", "z"), "y": ("x", "z"), "z": ("x", "y")}
 
-    axis: Literal["x", "y", "z"]
-    position: float                          # 截面沿传播轴的位置 [m]
-    center_h: float = 0.0                    # 横向窗口中心 [m]
-    center_v: float = 0.0                    # 纵向窗口中心 [m]
-    span_h: float = Field(gt=0.0)            # 横向窗口跨度 [m]
-    span_v: float = Field(gt=0.0)            # 纵向窗口跨度 [m]
-    dh: float = Field(gt=0.0)                # 横向格距 [m]
-    dv: Optional[float] = Field(default=None, gt=0.0)   # 缺省 = dh
-    n_bg: float = Field(default=1.0, gt=0.0)            # 背景折射率
-    wavelength: float = Field(gt=0.0)        # 真空波长 [m]
+
+def _check_opt_range(v):
+    """Optional 版 range 守卫：None 直通（mode 域的 range 按轴可选，
+    横截面两轴必填、传播轴禁止——存在性守卫在 ModeDomainSpec._check）。"""
+    return None if v is None else _check_range(v)
+
+
+class ModeDomainSpec(_StrictModel):
+    """mode 包络段·域（Q18 拍②/③，2.0.1a3 断代；Q20 v2.1）：截面放置
+    + 两根**横截面真轴**的窗口 range 元组 + 背景。center/span 拼写退役
+    （与 fdtd 同一 range 心智）；range 元组槽位吃表达式串（Q13 同一
+    求值面）。**Q20：横轴 range 可省**——mesh 给了该轴 coords 时窗口由
+    坐标向量 min/max 派生（都给 = 两个真相，在 ModeConfigSpec 组合层
+    422——单段物化时没有对方判据，存在性守卫跟着事实走）。"""
+
+    axis: Literal["x", "y", "z"]              # 传播轴（截面法向）
+    position: float                           # 截面沿传播轴的位置 [m]
+    x_range: Optional[Range2] = None
+    y_range: Optional[Range2] = None
+    z_range: Optional[Range2] = None
+    n_bg: float = Field(default=1.0, gt=0.0)  # 背景折射率
+
+    _v = field_validator("x_range", "y_range", "z_range",
+                         mode="after")(_check_opt_range)
+
+    @model_validator(mode="after")
+    def _check(self):
+        # 传播轴 range 禁止：那是 fdtd 的 3D 域概念，mode 是 2D 问题
+        # （写了就 422，不给"静默忽略"留门）。
+        # 横轴 range 的"必填/可省"守卫住 ModeConfigSpec（要看 mesh 有没有
+        # coords——Q20）。
+        prop = getattr(self, self.axis + "_range")
+        if prop is not None:
+            t1, t2 = _TRANSVERSE[self.axis]
+            raise ValueError(
+                f"domain.{self.axis}_range is the propagation axis — a "
+                f"mode cross-section has no extent along it (give the "
+                f"two transverse ranges {t1}_range / {t2}_range)")
+        return self
+
+
+class ModeMeshSpec(_StrictModel):
+    """mode 包络段·网格（Q18 拍②）：每轴**间距或坐标向量二选一**；
+    第二轴间距缺省 = 第一轴间距（同 MeshSpec 的缺省模式）；坐标向量
+    （严格递增、≥2 点）由**内核 mode 段**换算成标准网格输入——wire 只
+    承运用户自然输入，不预折叠。传播轴的任何网格字段禁止出现。"""
+
+    dx: Optional[float] = Field(default=None, gt=0.0)
+    dy: Optional[float] = Field(default=None, gt=0.0)
+    dz: Optional[float] = Field(default=None, gt=0.0)
+    x_coords: Optional[list[float]] = None
+    y_coords: Optional[list[float]] = None
+    z_coords: Optional[list[float]] = None
+
+    def _axis_mesh(self, a: str):
+        """单轴网格口径 → ("spacing", v) | ("coords", v) | None。"""
+        if getattr(self, f"d{a}") is not None:
+            return ("spacing", getattr(self, f"d{a}"))
+        if getattr(self, f"{a}_coords") is not None:
+            return ("coords", getattr(self, f"{a}_coords"))
+        return None
+
+    @model_validator(mode="after")
+    def _check(self):
+        for a in ("x", "y", "z"):
+            d, c = getattr(self, f"d{a}"), getattr(self, f"{a}_coords")
+            if d is not None and c is not None:
+                raise ValueError(
+                    f"mesh: axis {a!r} has both d{a} and {a}_coords — "
+                    f"spacing and coordinates are two truths for one "
+                    f"grid, give exactly one")
+            if c is not None:
+                if len(c) < 2:
+                    raise ValueError(
+                        f"mesh.{a}_coords needs >= 2 points, got {len(c)}")
+                if any(c[i + 1] <= c[i] for i in range(len(c) - 1)):
+                    raise ValueError(
+                        f"mesh.{a}_coords must be strictly increasing")
+        return self
+
+
+class ModeConfigSpec(_StrictModel):
+    """mode 包络段 v2（Q18，2.0.1a3 断代）：``domain / mesh / boundary``
+    三段 + 顶层 ``wavelength / n_modes``。不造假对称——**无 source /
+    monitor 段**（本征问题不吃激励）；boundary 复用 fdtd 的
+    ``BoundarySpec``（per-edge，键 = 横截面四缘真轴名；``n_pml`` 退役
+    → ``layers``）。2.0.1a1 的平铺 13 字段形（center/span_h/dh/…）作废。"""
+
+    domain: ModeDomainSpec
+    mesh: ModeMeshSpec
+    boundary: dict[str, BoundarySpec] = Field(default_factory=dict)
+    wavelength: float = Field(gt=0.0)         # 真空波长 [m]
     n_modes: int = Field(default=1, ge=1)
-    boundary: Literal["pec", "pmc", "periodic", "pml"] = "pec"
-    n_pml: int = Field(default=8, ge=1)      # boundary=pml 时用
+    #: 搜索折射率（Q20，直通内核 ``ModeSpec.neff_guess``：shift-invert
+    #: 中心 + 结果按 |neff−它| 排序）。缺省 None = 截面最大横向折射率
+    #: （内核现缺省行为，零变化）——与 ``domain.n_bg`` 语义不同：一个
+    #: 说"在哪个折射率附近找模"（数值），一个说"世界是什么介质"（物理）。
+    n_ref: Optional[float] = Field(default=None, gt=0.0)
+
+    @model_validator(mode="after")
+    def _check(self):
+        # mesh 的传播轴守卫放在这里（ModeMeshSpec 单独物化时不带 axis，
+        # 没有判据；组合进 config 才有真值——存在性守卫跟着事实走）。
+        ax = self.domain.axis
+        t1, t2 = _TRANSVERSE[ax]
+        for a in ("x", "y", "z"):
+            if a == ax and self.mesh._axis_mesh(a) is not None:
+                raise ValueError(
+                    f"mesh: axis {a!r} is the propagation axis — a mode "
+                    f"cross-section is not meshed along it (transverse "
+                    f"axes: {t1}/{t2})")
+        # Q20：横轴 range × coords——每根横轴恰有一个真相：
+        #   coords 在手 → range 可省（窗口由坐标 min/max 派生）；
+        #   两者都给 → 422（两个真相不许并存，与间距/coords 二选一
+        #   同款铁律）；coords 也没有 → range 必填（间距离散它）。
+        for a in (t1, t2):
+            rng = getattr(self.domain, f"{a}_range")
+            coords = getattr(self.mesh, f"{a}_coords")
+            if rng is not None and coords is not None:
+                raise ValueError(
+                    f"domain.{a}_range and mesh.{a}_coords are two truths "
+                    f"for one axis window — give exactly one (coords imply "
+                    f"the extent)")
+            if rng is None and coords is None:
+                raise ValueError(
+                    f"domain.{a}_range is required unless mesh.{a}_coords "
+                    f"is given (axis={ax!r} → transverse axes {t1}/{t2})")
+        # 轴1（字母序在前的横轴）必须给 spacing 或 coords；轴2 缺省 =
+        # 轴1 的**间距**（向量不可继承——两轴长度各自独立）。
+        m1 = self.mesh._axis_mesh(t1)
+        m2 = self.mesh._axis_mesh(t2)
+        if m1 is None:
+            raise ValueError(
+                f"mesh: axis {t1!r} needs d{t1} or {t1}_coords (nothing "
+                f"given); d{t2} alone cannot seed the first axis")
+        if m2 is None and m1[0] != "spacing":
+            raise ValueError(
+                f"mesh: axis {t2!r} needs its own d{t2} or {t2}_coords "
+                f"(only a spacing can be inherited from {t1}, not "
+                f"coordinates)")
+        # boundary：键 = 横截面四缘；kind 限 pec/pmc/periodic/pml
+        # （bloch 是 fdtd 的斜入射概念）；n_background 是 fdtd 侧的
+        # 边界背景——mode 的背景在 domain.n_bg（一条事实一个主人）。
+        edges = {f"{a}_{s}" for a in (t1, t2) for s in ("min", "max")}
+        for face, b in self.boundary.items():
+            if face not in edges:
+                raise ValueError(
+                    f"boundary face {face!r} is not a cross-section edge "
+                    f"(expected one of {sorted(edges)}; propagation-axis "
+                    f"faces belong to fdtd, not mode)")
+            if b.kind == "bloch":
+                raise ValueError(
+                    f"boundary {face}: kind 'bloch' is not available on "
+                    f"the mode solver (pec/pmc/periodic/pml)")
+            if b.n_background is not None:
+                raise ValueError(
+                    f"boundary {face}: n_background is an fdtd knob — "
+                    f"mode's background is domain.n_bg (one fact, one "
+                    f"owner)")
+        return self
 
 
 #: 求解器名 → 包络段形状（协议给**认识的**求解器定形状；开放集合语义

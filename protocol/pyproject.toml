@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "genie-protocol"
-version = "2.0.1a1"
+version = "2.0.1a4"
 description = "GENIE wire-format protocol layer - SimConfig models, expression evaluator, resolver, estimator (single source shared by SDK client, gateway and compute kernel)"
 requires-python = ">=3.10"
 dependencies = [
@@ -53,6 +53,22 @@ dependencies = [
     #   boundary pairing into FdtdConfigSpec. Solver set stays open —
     #   unknown solvers' config passes through as a dict (deployment
     #   fact).
+    # 2.0.1a4 (2026-11-12, additive — Q20 mode wire v2.1: n_ref on
+    #   ModeConfigSpec (search index, default None = max transverse index);
+    #   transverse domain range optional when mesh coords given (both = 422).
+    # 2.0.1a3 (2026-11-12, BREAKING for mode — Q18 mode language
+    #   structuring): ModeConfigSpec reshaped from the flat 13-field
+    #   kernel carry-over into domain/mesh/boundary sections + top-level
+    #   wavelength/n_modes. Window/mesh speak REAL axis names (transverse
+    #   pair required by `axis`, propagation-axis fields rejected);
+    #   center/span_h/v and dh/dv retire. Mesh takes per-axis spacing OR
+    #   coordinate vectors (strictly increasing, >=2 points; both on one
+    #   axis = two truths = 422) — the kernel converts vectors to its
+    #   standard grid input. boundary reuses fdtd's BoundarySpec (per-edge
+    #   dict on the four cross-section edges; bloch and n_background
+    #   rejected; n_pml retires into layers, default 8 -> 12 visible).
+    #   No source/monitor sections (eigenproblems take no excitations).
+    #   Kernel write side + mode-results h5 ride the mode-M1 batch.
     "pydantic>=2,<3",
 ]
 license = "Apache-2.0"

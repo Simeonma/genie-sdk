@@ -39,8 +39,13 @@ _VF_STARTS = 12
 _VF_SEED = 20261108
 #: Relocation runs to convergence (Δerr < 1e-12); 200 is only a termination
 #: guard for pathological cases, not a quality knob.
-_VF_MAX_ITER = 200
-_VF_EPS = 1e-12
+_VF_MAX_ITER = 20
+_VF_EPS = 1e-6
+#: Lumerical's ε∞ floor (`0x230`, default 1.0): n-k library data always
+#: satisfies ε∞ ≥ 1, so a constant fitted below it is a fitting artefact
+#: (Ag/Cu were landing at −135 with huge cancelling residues).  Their branch
+#: drops the constant column, pins it here, and refits once (`0x238 = 0`).
+_EPSINF_FLOOR = 1.0
 #: Weight on the imaginary equations ("imaginary weight", `PoleFit` field 0x1f8).
 #: Lumerical's material default is 1.0 for all shipped materials (`.mdf`, 55/55).
 _W_IMAG = 1.0
@@ -294,13 +299,20 @@ def _den_poly(p):
     return np.poly1d([1.0, -2.0 * float(p.real), float(abs(p) ** 2)])
 
 
-def _residues(s, f, pairs, w_im=_W_IMAG):
-    """Fixed pairs → (eps_inf, [(a0, a1), ...]) — linear least squares."""
+def _residues(s, f, pairs, w_im=_W_IMAG, fixed_const=None):
+    """Fixed pairs → (eps_inf, [(a0, a1), ...]) — linear least squares.
+
+    ``fixed_const`` pins the constant at that value instead of fitting it: the
+    constant column is dropped and the target becomes ``f − fixed_const``
+    (Lumerical's "drop the constant term / ε∞ floor" branch, `0x230/0x238`).
+    """
     P = len(pairs)
     dens = [_pair_den(s, p) for p in pairs]
     N = s.size
-    A = np.zeros((2 * N, 2 * P + 1))
+    ncol = 2 * P + (0 if fixed_const is not None else 1)
+    A = np.zeros((2 * N, ncol))
     rhs = np.zeros(2 * N)
+    target = f if fixed_const is None else f - fixed_const
     for k in range(P):
         B1 = 1.0 / dens[k]
         Bs = s / dens[k]
@@ -308,15 +320,18 @@ def _residues(s, f, pairs, w_im=_W_IMAG):
         A[:N, 2 * k + 1] = Bs.real
         A[N:, 2 * k] = B1.imag
         A[N:, 2 * k + 1] = Bs.imag
-    A[:N, 2 * P] = 1.0            # eps_inf is REAL: no imaginary row entry
-    rhs[:N] = f.real
-    rhs[N:] = f.imag
+    if fixed_const is None:
+        A[:N, 2 * P] = 1.0            # eps_inf is REAL: no imaginary row entry
+    rhs[:N] = target.real
+    rhs[N:] = target.imag
     if w_im != 1.0:
         A[N:] *= w_im
         rhs[N:] *= w_im
     x, *_ = np.linalg.lstsq(A, rhs, rcond=None)
     coefs = [(float(x[2 * k]), float(x[2 * k + 1])) for k in range(P)]
-    return float(x[2 * P]), coefs
+    if fixed_const is None:
+        return float(x[2 * P]), coefs
+    return float(fixed_const), coefs
 
 
 def _weighted_rms(s, f, eps_inf, pairs, coefs, w_im=_W_IMAG):
@@ -357,18 +372,22 @@ def _gain_violation(eps_inf, sections, omega, f):
     return float(np.max(np.maximum(0.0, -eps.imag[lossy])))
 
 
-def vector_fit(s, f, pairs, w_im=_W_IMAG):
+def vector_fit(s, f, pairs, w_im=_W_IMAG, const_floor=None):
     """Pole relocation + residues in **normalized frequency**.
 
     1/(s−p) with s, p ~ 1e15 makes the LSQ matrix condition ~1e30 (SVD stops
     converging), so everything is solved with s' = s/s0 and converted back
     (poles ×s0). Returns (eps_inf, section list, weighted RMS error).
 
-    The relocation runs to convergence (``|Δerr| < _VF_EPS``, i.e. 1e-12);
-    ``_VF_MAX_ITER`` is only a termination guard, and the best iterate is
-    kept.  There is no pole clamp: a clamp is a heuristic that can throw away
-    valid poles, and the LSQ solve is already conditioned by the frequency
-    normalization.
+    The relocation runs to ``|Δerr| < _VF_EPS``; ``_VF_MAX_ITER`` is only a
+    termination guard, and the best iterate is kept.
+
+    ``const_floor`` implements Lumerical's ε∞ floor (`0x230/0x238`): if the
+    fitted constant lands **below** the floor, the constant column is dropped,
+    it is pinned at the floor, and the relocation is redone — the returned
+    ``eps_inf`` is then exactly the floor. n-k library data always satisfies
+    ε∞ ≥ 1, so a fit that dives below it is a fitting artefact (Ag/Cu were
+    landing at −135), not physics.
     """
     s = np.asarray(s, dtype=complex)
     f = np.asarray(f, dtype=complex)
@@ -384,9 +403,29 @@ def vector_fit(s, f, pairs, w_im=_W_IMAG):
         if best is None or err < best[0]:
             best = (err, eps_inf, list(pairs), coefs)
         if prev is not None and abs(err - prev) < _VF_EPS:
-            break                       # converged (|Δerr| < 1e-12)
+            break                       # converged (|Δerr| < _VF_EPS)
         prev = err
     err, eps_inf, pairs, coefs = best
+
+    if const_floor is not None and eps_inf < const_floor:
+        # Lumerical: drop the constant term, pin it at the floor, redo.
+        floor = float(const_floor)
+        best = None
+        prev = None
+        for _ in range(max(1, int(_VF_MAX_ITER))):
+            pairs = _vf_step(sn, f - floor, pairs, w_im, with_const=False)
+            _, coefs = _residues(sn, f, pairs, w_im, fixed_const=floor)
+            err = _weighted_rms(sn, f, floor, pairs, coefs, w_im)
+            if best is None or err < best[0]:
+                best = (err, list(pairs), coefs)
+            if prev is not None and abs(err - prev) < _VF_EPS:
+                break
+            prev = err
+        if best is None:
+            raise ValueError("eps_inf floor refit produced no iterate")
+        err, pairs, coefs = best
+        eps_inf = floor
+
     sections = []
     for p, (a0, a1) in zip(pairs, coefs):
         p = p * s0
@@ -468,7 +507,8 @@ def fit_adaptive(wavelengths, n, k, *, tolerance=_TOLERANCE,
             for alpha, grid in starts:
                 poles0 = _starting_poles(w_lo, w_hi, order, alpha, grid)
                 try:
-                    eps_inf, sections, rms = vector_fit(s, f, poles0, w_im)
+                    eps_inf, sections, rms = vector_fit(s, f, poles0, w_im,
+                                                        const_floor=_EPSINF_FLOOR)
                 except (ValueError, np.linalg.LinAlgError):
                     continue
                 if not np.isfinite(eps_inf) or not np.all(np.isfinite(sections)):
@@ -488,6 +528,12 @@ def fit_adaptive(wavelengths, n, k, *, tolerance=_TOLERANCE,
                 target_met=err < tolerance)
             if best is None or err < best.error:
                 best = fit
+            if err < tolerance:
+                # Lumerical's order loop stops as soon as the tolerance is met
+                # (e180:182, err < 0x220 = 0.1) and then keeps the argmin of
+                # the orders evaluated so far — growing further only refines a
+                # fit that already passed.
+                break
         return best
 
     best = _search()

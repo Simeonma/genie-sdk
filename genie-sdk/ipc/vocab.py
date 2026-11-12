@@ -16,7 +16,8 @@ __all__ = [
     # words
     "OP_EXEC", "EV_READY", "EV_OUT", "EV_CFG", "EV_DONE",
     "OUT_KIND_PLOT", "OUT_KIND_ERROR", "OUT_KIND_PROGRESS",
-    "OUT_KIND_META", "OUT_KIND_SERIES", "OUT_KINDS",
+    "OUT_KIND_META", "OUT_KIND_SERIES", "OUT_KIND_MATFIT", "OUT_KIND_MATLIB",
+    "OUT_KINDS",
     # constructors (one per message)
     "exec", "ready", "out", "cfg", "done",
 ]
@@ -47,8 +48,19 @@ OUT_KIND_META = "meta"
 # canvas). Full arrays (no downsampling — station decision 2026-11-06):
 # data = {ok, mon, field, dim, x, y[, z], x_label[, y_label], peak, tag}
 OUT_KIND_SERIES = "series"
+# Material fit preview (emitter = f.fit_preview; consumer = the GUI's
+# material-fit dialog). Read-only: it fits a library name and reports the
+# curves, it does not touch the model:
+# data = {name, band:[lo,hi], n_poles, summary, quality, warnings,
+#         wl:[], n:[], k:[],               ← raw data inside the band
+#         wl_fit:[], n_fit:[], k_fit:[]}   ← the fit on a dense grid
+OUT_KIND_MATFIT = "matfit"
+# Material-library name list (emitter = f.material_library; consumer = the
+# GUI's material dialog picker). Data = {materials: [name, ...]}.
+OUT_KIND_MATLIB = "matlib"
 OUT_KINDS = frozenset({OUT_KIND_PLOT, OUT_KIND_ERROR, OUT_KIND_PROGRESS,
-                       OUT_KIND_META, OUT_KIND_SERIES})
+                       OUT_KIND_META, OUT_KIND_SERIES, OUT_KIND_MATFIT,
+                       OUT_KIND_MATLIB})
 
 
 # ── op (host → worker; built by session)──────────────────────────────

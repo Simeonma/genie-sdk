@@ -1010,16 +1010,16 @@ const FormPanel = {
         /* 单 pole 渲染（含两级折叠：可收起整卡） */
         const poleItem = (listKey, pl, j) => {
           const P = `materials.${i}.${listKey}.${j}`;
-          const isR1 = isArr(pl.alpha);
-          const isLegacy = !isR1 && (isArr(pl.omega_0) || isArr(pl.omega_p));
-          const shape = isR1 ? "r1" : (isLegacy ? "legacy" : "iso");
+          const isAx = typeof pl.axis === "string";
+          const isLegacy = !isAx && (isArr(pl.omega_0) || isArr(pl.omega_p));
+          const shape = isAx ? "axis" : (isLegacy ? "legacy" : "iso");
           const row = document.createDocumentFragment();
 
           if (!isLegacy) {
             const sr = this._el("div", "frow");
             sr.appendChild(this._el("label", "flabel", "形态"));
             const pills = this._el("span", "mode-pills");
-            for (const [m, t] of [["iso", "各向同性"], ["r1", "rank-1"]]) {
+            for (const [m, t] of [["iso", "各向同性"], ["axis", "轴向"]]) {
               const bb = this._el("button", "mode-pill" + (shape === m ? " on" : ""), t);
               bb.type = "button";
               bb.addEventListener("click", () => {
@@ -1027,12 +1027,12 @@ const FormPanel = {
                 const pick = sc(cur.omega_0) ?? sc(cur.omega_p) ?? 1e15;
                 const g = sc(cur.gamma) ?? 1e13;
                 const d = sc(cur.delta_eps) ?? 1;
-                const next = m === "r1"
+                const next = m === "axis"
                   ? (cur.kind === "drude"
                       ? { kind: cur.kind, omega_p: pick, gamma: g,
-                          alpha: [0, 0, 1], beta: [0, 0, 1] }
+                          axis: "z" }
                       : { kind: cur.kind, omega_0: pick, gamma: g,
-                          delta_eps: d, alpha: [0, 0, 1], beta: [0, 0, 1] })
+                          delta_eps: d, axis: "z" })
                   : (cur.kind === "drude"
                       ? { kind: cur.kind, omega_p: pick, gamma: g }
                       : { kind: cur.kind, omega_0: pick, gamma: g,
@@ -1048,9 +1048,7 @@ const FormPanel = {
 
           const kindSel = this._select(P + ".kind", pl.kind, ["lorentz", "drude"]);
           kindSel.addEventListener("change", () => {
-            const keep = isR1
-              ? { alpha: pl.alpha.slice(), beta: (pl.beta ? pl.beta.slice() : pl.alpha.slice()) }
-              : {};
+            const keep = isAx ? { axis: pl.axis } : {};
             mt[listKey][j] = kindSel.value === "drude"
               ? Object.assign({ kind: "drude", omega_p: 1e16,
                                 gamma: pl.gamma ?? 1e13 }, keep)
@@ -1074,18 +1072,17 @@ const FormPanel = {
           row.appendChild(this._row("γ",
             this._input(P + ".gamma", pl.gamma, pk, "ang")));
 
-          if (shape === "r1") {
-            row.appendChild(this._vec("α (x,y,z)", P + ".alpha",
-              pl.alpha || [0, 0, 1], 3));
-            row.appendChild(this._vec("β (x,y,z)", P + ".beta",
-              pl.beta || pl.alpha || [0, 0, 1], 3));
+          if (shape === "axis") {
+            row.appendChild(this._row("轴",
+              this._select(P + ".axis", pl.axis, ["x", "y", "z"])));
             row.appendChild(this._el("div", "note",
-              "rank-1 = VectorPole(α,β)：β 缺省=α（互易单轴）；α≠β 为非对称耦合，" +
-              "引擎按 α·F / β·P 原样消费；分量自动归一。"));
+              "轴向 pole：挂在单个坐标轴（对角各向异性），每轴可各自一组 pole。" +
+              "各向同性 = 不选轴（自动展开到三根轴）。斜向/复数耦合已移除——" +
+              "它们在宽带时域会泵能（相位共轭 / 半格错位）。")));
           } else if (shape === "legacy") {
             row.appendChild(this._el("div", "note",
               "旧「三轴」速记（3 元参数，内核 1.4.0 已移除）。拆成多个" +
-              "各向同性/rank-1 pole 自行叠加："));
+              "各向同性/轴向 pole 自行叠加："));
             const split = this._el("button", "mini");
             /* ▸ 为装饰性前缀（P2-3）：语义由文字「拆成…」承载 → aria-hidden 包裹 */
             const sg = this._el("span");
@@ -1179,7 +1176,7 @@ const FormPanel = {
         mt.poles.forEach((pl, j) => peList.appendChild(poleItem("poles", pl, j)));
         bE.body.appendChild(peList);
         if (!mt.poles.length) bE.body.appendChild(this._el("div", "note",
-          "暂无 ε 极点 —— 独立参数的多个 pole 请自行叠加（各向同性 / rank-1）"));
+          "暂无 ε 极点 —— 独立参数的多个 pole 请自行叠加（各向同性 / 轴向）"));
         bE.body.appendChild(addPoleBtn("poles"));
 
         const bM = this._msec("mat" + i + ":mu", "μ · 磁导率（含色散）", true);

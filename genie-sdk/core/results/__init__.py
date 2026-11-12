@@ -26,7 +26,8 @@ import h5py
 import numpy as np
 
 __all__ = ["H5_FORMAT_PREFIX", "SimData", "TimeResult", "FreqResult",
-           "IndexResult", "ensure_supported_format", "read_monitor",
+           "IndexResult", "ModeResult", "ensure_supported_format",
+           "read_monitor", "read_modes", "modes_manifest",
            "open_result"]
 
 #: Result-file format contract prefix (the kernel driver writes root attrs ``format`` =
@@ -71,6 +72,20 @@ def monitors_manifest(h5) -> dict:
     except ValueError:
         pass
     return {}
+
+
+def modes_manifest(h5) -> dict:
+    """Root attrs ``modes`` → dict（Q18 拍①：模式列表的正源——
+    ``n / wavelength / sorted_by / 两轴名``；排序/模式识别口径归内核 M1，
+    锁在 manifest，不进 wire）。坏 JSON / 缺 attrs → {}（数据面照读，
+    同 monitors manifest 的宽口径）。"""
+    raw = h5.attrs.get("modes", "")
+    raw = _decode_str(raw) if isinstance(raw, (bytes, np.bytes_)) else raw
+    try:
+        parsed = json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _domain_of(group) -> str:
@@ -181,6 +196,72 @@ class IndexResult(_DataBase):
         return [k for k in ("eps", "mu") if self.fields.get(k) is not None]
 
 
+class _ModeView:
+    """单模视图（Q18 拍①）：``.neff``（标量）+ ``.fields`` {分量: (N1, N2)}
+    ——整模列表切掉第 0 维；零计算零物理，纯切片。"""
+
+    def __init__(self, neff, fields: dict) -> None:
+        self.neff = neff
+        self.fields = fields
+
+    def keys(self) -> list[str]:
+        return list(self.fields)
+
+    def __contains__(self, key: str) -> bool:
+        return key in self.fields
+
+    def __getitem__(self, key: str) -> np.ndarray:
+        return self.fields[key]
+
+    def __repr__(self):
+        inner = ", ".join(
+            f"{k}: {v.shape}" + (" complex" if np.iscomplexobj(v) else "")
+            for k, v in self.fields.items())
+        return f"<ModeView neff={self.neff}: {inner or '(empty)'}>"
+
+
+class ModeResult:
+    """FDE 本征模结果（Q18 拍①）：``.neff (n,)``、``.fields`` {分量:
+    (n, N1, N2)}、``.coords`` {轴: (N,)}、``.wavelength``、
+    ``.sorted_by``（manifest 口径，缺 = None 不猜）、``.modes[i]`` 单模
+    视图。与三个监视器 Result 同族：零计算零物理——只承运原始数组。"""
+
+    def __init__(self, neff: np.ndarray, fields: dict, coords: dict,
+                 wavelength=None, sorted_by=None) -> None:
+        self.neff = neff
+        self.fields = fields
+        self.coords = coords
+        self.wavelength = wavelength
+        self.sorted_by = sorted_by
+        self.n_modes = int(np.size(neff))
+
+    @property
+    def modes(self) -> list[_ModeView]:
+        return [_ModeView(self.neff[i],
+                          {k: v[i] for k, v in self.fields.items()})
+                for i in range(self.n_modes)]
+
+    def comps(self) -> list[str]:
+        return list(self.fields)
+
+    def keys(self) -> list[str]:
+        return self.comps()
+
+    def __getitem__(self, key: str) -> np.ndarray:
+        """``r['Ey']`` ≡ ``r.fields['Ey']``（分量寻址；单模用 ``.modes[i]``）。"""
+        return self.fields[key]
+
+    def __contains__(self, key: str) -> bool:
+        return key in self.fields
+
+    def __repr__(self):
+        inner = ", ".join(
+            f"{k}: {v.shape}" + (" complex" if np.iscomplexobj(v) else "")
+            for k, v in self.fields.items())
+        return (f"<ModeResult n={self.n_modes} "
+                f"wavelength={self.wavelength!r}: {inner or '(empty)'}>")
+
+
 # ── h5 → object parsing (single canonical path)──────────────────────────────────
 
 def read_monitor(h5, domain: str, name: str | None = None):
@@ -232,6 +313,37 @@ def read_monitor(h5, domain: str, name: str | None = None):
         return FreqResult(name, axes.pop("freqs"), fields,
                           shape_hint=hint, **axes)
     return IndexResult(name, fields, shape_hint=hint, **axes)
+
+
+def read_modes(h5) -> ModeResult:
+    """mode 结果组 ``modes`` → ModeResult（Q18 拍①；h5→对象唯一路径的
+    mode 段）。组内：``neff (n,)`` 必在；x/y/z = 两轴坐标（真轴名）；
+    其余 = 场分量 ``(n, N1, N2)``。``wavelength`` / 排序口径来自根 attrs
+    ``modes`` manifest（缺 = None，不猜）。**内核 mode-M1 写侧按此镜像。**"""
+    ensure_supported_format(h5)
+    if "modes" not in h5.keys():
+        raise RuntimeError(
+            f"no 'modes' group in this result h5 (groups: "
+            f"{', '.join(h5.keys()) or 'none'}) — mode results carry an "
+            f"eigenmode list, not monitors")
+    grp = h5["modes"]
+    coords: dict = {}
+    fields: dict = {}
+    neff = None
+    for key in grp.keys():        # 轴名/neff 之外的键都是场分量
+        arr = np.asarray(grp[key][()])
+        if key in _AXES:
+            coords[key] = arr
+        elif key == "neff":
+            neff = arr
+        else:
+            fields[key] = arr
+    if neff is None:
+        raise RuntimeError("modes group has no 'neff' dataset")
+    man = modes_manifest(h5)
+    return ModeResult(neff, fields, coords,
+                      wavelength=man.get("wavelength"),
+                      sorted_by=man.get("sorted_by"))
 
 
 # ── SimData (lazy wrapper over h5)───────────────────────────────────────────
@@ -335,6 +447,11 @@ class SimData:
 
     def get_index(self, name: str | None = None) -> IndexResult:
         return read_monitor(self._f, "i", name)
+
+    def get_modes(self) -> ModeResult:
+        """mode 结果 → ModeResult（Q18 拍①；与 get_time/get_freq/
+        get_index 同一条 eager 解析路径）。"""
+        return read_modes(self._f)
 
     def __getattr__(self, name: str):           # monitor-name direct access; underscore guard
         if name.startswith("_"):

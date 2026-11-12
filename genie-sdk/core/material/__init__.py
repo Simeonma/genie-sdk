@@ -11,16 +11,16 @@ Public surface:
   library names) / ``mat_from_nk`` (one-call convenience: library
   name → a material node).
 - fit_nk fits one component at a time — generality comes from
-  **composition** (isotropic / anisotropic / full tensor = fit each
-  tensor element separately, then assemble); the return type is
-  always one stable shape; the **only material-node factory =
-  assemble_nk** (fit produces no material_node / takes no name); iso
-  likewise always goes through assemble — three diagonals sharing
-  one fit = three same-parameter axial rank-1 poles (an explicit
-  three-way expression of isotropy; the kernel likewise expands
-  alpha-less iso three ways via _iso_expand — the two paths are
-  physically equivalent); each off-diagonal takes one upper-triangle
-  name and a **mirrored mount** to preserve symmetry.
+  **composition** (isotropic / diagonal anisotropic = fit each diagonal
+  element separately, then assemble); the return type is always one
+  stable shape; the **only material-node factory = assemble_nk** (fit
+  produces no material_node / takes no name); iso likewise always goes
+  through assemble — three diagonals sharing one fit = three
+  same-parameter axis poles (an explicit three-way expression of
+  isotropy; the kernel likewise expands axis-less iso three ways via
+  _iso_expand — the two paths are physically equivalent);
+  **off-diagonal dispersive elements are rejected** (2026-11-11 定案:
+  斜向/复数极点耦合在宽带时域泵能，已从线格式删除).
 - material_node validation = a real protocol
   (``LorentzMatSpec.model_validate``); carries no color / no id
   (that is the id issuer's business).
@@ -332,16 +332,15 @@ def load_nk(name, component=None):
     return _to_m(comps[component])
 
 
-# Tensor assembly (general assembly). rank-1 semantics = the native
-# form of the kernel ADE VectorPole (``D += β·P``, ``P ∝ α·F``): a
-# diagonal mount is α=e_i (beta omitted = the line-format default
-# duplicates α); an off-diagonal is a **mirrored mount** (α=e_i,β=e_j
-# paired with α=e_j,β=e_i) — a single α≠β dyad is asymmetric, and
-# only the pairwise sum is a symmetric tensor element, so reciprocal
-# media (symmetric ε) are guaranteed by construction.
+# Tensor assembly (general assembly). Pole coupling = **axis mount**
+# (``axis='x'|'y'|'z'``, the only form the wire format still carries):
+# a diagonal element mounts its poles on that element's axis. The old
+# off-diagonal mirrored mount (α=e_i,β=e_j pairs) was removed with the
+# rank-1 coupling itself — oblique and complex couplings pump energy in
+# the broadband time domain (phase conjugation / half-cell Yee
+# misalignment), so off-diagonal dispersive keys are rejected loudly.
 _ELEM_AXES = {"xx": (0, 0), "yy": (1, 1), "zz": (2, 2),
               "xy": (0, 1), "xz": (0, 2), "yz": (1, 2)}
-_EYE = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
 _DIAG = ("xx", "yy", "zz")
 _OFFDIAG = ("xy", "xz", "yz")
 
@@ -353,43 +352,50 @@ def assemble_nk(fits, name=None):
     Parameters
     ----------
     fits : dict
-        Keys = the **six upper-triangle tensor-element names**
-        (``xx`` / ``yy`` / ``zz`` / ``xy`` / ``xz`` / ``yz``); values =
-        ``fit_nk`` result dicts. All three diagonals are required —
-        isotropic media go through here too (pass the same fit on the
-        three diagonals). Each off-diagonal needs only one
-        upper-triangle name; the mirrored mount (α/β in symmetric
-        pairs) keeps the tensor symmetric by construction.
+        Keys = the **three diagonal tensor-element names**
+        (``xx`` / ``yy`` / ``zz``); values = ``fit_nk`` result dicts. All
+        three diagonals are required — isotropic media go through here
+        too (pass the same fit on the three diagonals). Poles mount on
+        their own axis (``axis='x'|'y'|'z'``).
     name : str | None
         Node name (defaults to ``"assembled"``).
 
     Returns
     -------
     dict
-        A lorentz node (diagonal-only → ``eps_inf`` as a diagonal
-        triplet; with off-diagonals → a full 3×3 tensor); already
+        A lorentz node with a diagonal ``eps_inf`` triplet; already
         validated by ``LorentzMatSpec``.
 
     Raises
     ------
     ValueError
-        ``fits`` is not a non-empty dict; unknown key names (the
-        lower triangle yx/zx/zy is not accepted — mirroring for
-        symmetric materials is automatic); a missing diagonal; a
-        non-assemblable component (not converged, named explicitly in
-        the message).  ``eps_inf`` may be any real value (negative
+        ``fits`` is not a non-empty dict; unknown key names; a missing
+        diagonal; a non-assemblable component (not converged, named
+        explicitly in the message); **off-diagonal keys (xy/xz/yz) are
+        rejected** — dispersive coupling is axis-only (2026-11-11
+        定案: 斜向 rank-1 与复轴耦合在宽带时域都会泵能，已从线格式
+        删除; 非对角常数 ε 走 const 材料的张量路径).
+        ``eps_inf`` may be any real value (negative
         constants are valid rational models).
     """
     if not isinstance(fits, dict) or not fits:
         raise ValueError(
             "assemble_nk(fits) requires a non-empty dict of fit_nk "
-            "results keyed by tensor element (xx/yy/zz/xy/xz/yz)")
+            "results keyed by tensor element (xx/yy/zz)")
     for key in fits:
+        if key in _OFFDIAG:
+            raise ValueError(
+                f"assemble_nk: off-diagonal element {key!r} is no "
+                "longer supported — dispersive coupling is axis-only "
+                "(oblique/complex pole couplings pump energy in the "
+                "broadband time domain and were removed from the wire "
+                "format). Fit the diagonal xx/yy/zz separately; a "
+                "constant off-diagonal goes through the const "
+                "material tensor path.")
         if key not in _ELEM_AXES:
             raise ValueError(
                 f"assemble_nk: unknown element key {key!r} — use "
-                f"upper-triangle names xx/yy/zz/xy/xz/yz (off-diagonals "
-                f"are mirrored automatically for symmetric materials)")
+                f"diagonal names xx/yy/zz")
     for need in _DIAG:
         if need not in fits:
             raise ValueError(
@@ -403,30 +409,13 @@ def assemble_nk(fits, name=None):
 
     eps_inf = [fits[c].model["eps_inf"] for c in _DIAG]
     poles = []
-    for c in _DIAG:                      # diagonal mount: α=e_i, beta defaults to α
+    for c, axis_name in zip(_DIAG, ("x", "y", "z")):
         for p in fits[c].model["poles"]:
             q = dict(p)
-            q["alpha"] = list(_EYE[_ELEM_AXES[c][0]])
+            q.pop("alpha", None)        # 旧载荷可能带着：坍缩后无此字段
+            q.pop("beta", None)
+            q["axis"] = axis_name       # 轴装（对角各向异性）
             poles.append(q)
-    off = [c for c in _OFFDIAG if c in fits]
-    for c in off:                        # off-diagonal: mirrored mount in pairs (symmetric)
-        i, j = _ELEM_AXES[c]
-        for p in fits[c].model["poles"]:
-            fwd = dict(p)
-            fwd["alpha"] = list(_EYE[i])
-            fwd["beta"] = list(_EYE[j])
-            bwd = dict(p)
-            bwd["alpha"] = list(_EYE[j])
-            bwd["beta"] = list(_EYE[i])
-            poles.append(fwd)
-            poles.append(bwd)
-    if off:
-        m = [[eps_inf[0], 0.0, 0.0], [0.0, eps_inf[1], 0.0],
-             [0.0, 0.0, eps_inf[2]]]
-        for c in off:
-            i, j = _ELEM_AXES[c]
-            m[i][j] = m[j][i] = fits[c].model["eps_inf"]
-        eps_inf = m
     node = {"type": "lorentz", "name": name or "assembled",
             "eps_inf": eps_inf, "poles": poles}
     _wire.LorentzMatSpec.model_validate(node)   # explicit verb: failed validation raises immediately
@@ -441,7 +430,7 @@ def assemble_nk(fits, name=None):
 class NKFit:
     """One component's fit result — **what the user gets**.
 
-    Read ``quality`` (relative error, passivity, coverage), ``summary()``
+    Read ``quality`` (weighted ε RMS, passivity, coverage), ``summary()``
     and ``curve()``. ``model`` is the opaque pole payload that
     ``assemble_nk`` and the document consume; its coefficients are the wire
     form, deliberately not a human-facing result (Q14: 用户不读系数).
@@ -454,13 +443,24 @@ class NKFit:
     model: dict
 
     def summary(self) -> str:
-        """One line: band · poles · error · passive · coverage."""
+        """One line: band · poles · ε-RMS · passive · coverage.
+
+        The single error number is the **weighted ε RMS relative to the data
+        norm** — exactly what the order search minimises (Lumerical's
+        ``PoleFit`` yardstick). ``rel_err_n`` / ``rel_err_k`` stay in
+        ``quality`` as diagnostics only: they are re-derived from sqrt(eps)
+        after the fit and never enter the objective, so quoting them as "the
+        fit error" misleads (a metal can show 0.2% in n and 24% in k while
+        the ε residual is unchanged).
+        """
         q = self.quality
         state = "passive" if q.get("passive") else "NOT passive"
+        rms_rel = q.get("rms_rel")
+        if rms_rel is None:
+            rms_rel = q.get("rms", 0.0)
         return (f"{self.band[0] * 1e9:.0f}-{self.band[1] * 1e9:.0f}nm | "
                 f"{self.n_poles} pole(s) | "
-                f"err {100.0 * q['rel_err_n']:.2f}% (n) / "
-                f"{100.0 * q['rel_err_k']:.2f}% (k) | {state} | "
+                f"rms {100.0 * rms_rel:.3g}% | {state} | "
                 f"coverage {q['coverage']:.0%}")
 
     def curve(self, wl=None):
@@ -479,7 +479,7 @@ class NKFit:
                 "n_fit": d.n, "k_fit": d.k}
 
 
-def fit_nk(wl, n, k, band=None, max_poles=10, imaginary_weight=1.0,
+def fit_nk(wl, n, k, band=None, max_poles=10, imaginary_weight=1.0, tolerance=0.1,
            make_passive=False):
     """Fit **one scalar n-k component** to a rational dispersion model.
 
@@ -575,7 +575,7 @@ def fit_nk(wl, n, k, band=None, max_poles=10, imaginary_weight=1.0,
                 f"rows; JSON null becomes NaN here) or use library "
                 f"data via f.load_nk; non-finite values cannot be "
                 f"fitted")
-    fit = fit_adaptive(wl[mask], n[mask], k[mask], tolerance=_TOLERANCE,
+    fit = fit_adaptive(wl[mask], n[mask], k[mask], tolerance=tolerance,
                        max_poles=max_poles, w_im=imaginary_weight,
                        make_passive=make_passive)
     omega_win = 2.0 * np.pi * C0_SI / wl[mask]
@@ -602,10 +602,11 @@ _COMPONENT_AXES = {"o": ("xx", "yy"), "e": ("zz",),
 
 
 def _fit_convenience(wl, n, k, band=None, max_poles=10, imaginary_weight=1.0,
-                     make_passive=False):
+                     make_passive=False, tolerance=0.1):
     """Convenience-layer rule: fit the window the **caller** names at the
-    default tolerance and keep the result even if the tolerance is missed —
-    the warnings say so, and ``mat_from_nk`` surfaces them.
+    requested ``tolerance`` (default 0.1, Lumerical's ``0x220``) and keep the
+    result even if the tolerance is missed — the warnings say so, and
+    ``mat_from_nk`` surfaces them.
 
     ``band=None`` means "the whole data range" *at this layer*; the worker
     verb passes the **simulation source band** (the Lumerical rule: fit
@@ -613,7 +614,8 @@ def _fit_convenience(wl, n, k, band=None, max_poles=10, imaginary_weight=1.0,
     source band holds too few samples to constrain a fit.
     """
     return fit_nk(wl, n, k, band=band, max_poles=max_poles,
-                  imaginary_weight=imaginary_weight, make_passive=make_passive)
+                  imaginary_weight=imaginary_weight, make_passive=make_passive,
+                  tolerance=tolerance)
 
 
 def _report(line: str) -> None:
@@ -631,7 +633,7 @@ def _report(line: str) -> None:
 
 
 def mat_from_nk(name, band=None, max_poles=10, imaginary_weight=1.0,
-                make_passive=False):
+                make_passive=False, tolerance=0.1):
     """Library name → a material node in **one call** (read library →
     per-component, per-axis ``fit_nk`` → ``assemble_nk``).
 
@@ -671,7 +673,7 @@ def mat_from_nk(name, band=None, max_poles=10, imaginary_weight=1.0,
         fit = _fit_convenience(wl, n, k, band=band,
                                max_poles=max_poles,
                                imaginary_weight=imaginary_weight,
-                               make_passive=make_passive)
+                               make_passive=make_passive, tolerance=tolerance)
         _report(f"{name} (iso)  {fit.summary()}")
         return assemble_nk({"xx": fit, "yy": fit, "zz": fit}, name=name)
     by_axis: dict = {}
@@ -684,7 +686,7 @@ def mat_from_nk(name, band=None, max_poles=10, imaginary_weight=1.0,
         fit = _fit_convenience(wl, n, k, band=band,
                                max_poles=max_poles,
                                imaginary_weight=imaginary_weight,
-                               make_passive=make_passive)
+                               make_passive=make_passive, tolerance=tolerance)
         _report(f"{name} ({comp})  {fit.summary()}")
         for ax in _COMPONENT_AXES[comp]:
             by_axis[ax] = fit

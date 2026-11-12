@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "genie-sdk"
-version = "2.0.1a1"
+version = "2.0.1a4"
 description = "GENIE SDK v2 — build photonic FDTD simulations in Python, submit them to cloud GPUs, and keep results plus custom post_analyze in one portable .gensim document; local Studio included"
 # PEP 639 SPDX form requires setuptools>=77; LICENSE ships with the repo and the wheel.
 license = "Apache-2.0"
@@ -14,7 +14,7 @@ dependencies = [
     # Wire-format models. 独立分发包 genie-protocol（与 SDK 同批出轮子），
     # 不再内嵌: 内嵌会让同一份 genie_protocol/ 在两颗轮子里各有一份，
     # 装包顺序决定最终加载哪份协议，且没有任何报错。版本与 protocol/ 同步。
-    "genie-protocol==2.0.1a1",
+    "genie-protocol==2.0.1a4",
     "pydantic>=2,<3",
     "numpy>=1.24",
     # Result reading (genie-results-h5/1: the SimData behind f.results() / post_analyze)

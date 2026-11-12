@@ -8,13 +8,16 @@ tests). Short references do not cache item objects -- every attribute
 access resolves back to the draft by id, so they naturally become
 invalid once the item is removed.
 
-Q15 layering (the API language mirrors the optics repo):
+Q15 layering (the API language mirrors the optics repo), Q18 per-solver
+envelope shapes:
 
 - **structure** (shared by every solver, one copy per model):
   ``materials`` / ``geometry`` / ``parameters``;
-- **solver envelopes** (one per declared solver): ``domain`` / ``mesh`` /
-  ``sources`` / ``monitors`` -- these belong to the *solver*, not to the
-  model;
+- **solver envelopes** (one per declared solver, each in its own
+  vocabulary): fdtd speaks ``domain`` / ``mesh`` / ``sources`` /
+  ``monitors`` (Q15); mode speaks ``domain`` / ``mesh`` / ``boundary``
+  + top-level ``wavelength`` / ``n_modes`` (Q18 — no fake symmetry: an
+  eigenproblem takes no excitations, hence no sources/monitors);
 - solvers are declared explicitly (``add_solver``); the default solver
   ``"fdtd"`` auto-vivifies on access (it is the wire default --
   ``solver=None`` -- and the GUI edits it before any script line could
@@ -36,6 +39,9 @@ from .draft import DRAFT_OF, to_wire
 DomainDraft = DRAFT_OF[_wire.DomainSpec]
 MeshDraft = DRAFT_OF[_wire.MeshSpec]
 RunDraft = DRAFT_OF[_wire.RunSpec]
+ModeDomainDraft = DRAFT_OF[_wire.ModeDomainSpec]
+ModeMeshDraft = DRAFT_OF[_wire.ModeMeshSpec]
+ModeConfigDraft = DRAFT_OF[_wire.ModeConfigSpec]
 
 #: the solver whose runs omit the wire ``solver`` field (the wire default;
 #: legacy payloads byte-identical) and whose envelope auto-vivifies.
@@ -262,6 +268,56 @@ class Solver:
         return f"<solver {self.name!r}>"
 
 
+class ModeEnvelope:
+    """mode 求解器的包络（Q18）：``domain`` / ``mesh`` / ``boundary`` 三段
+    + 顶层 ``wavelength`` / ``n_modes``——**无 sources / monitors**（本征
+    问题不吃激励，不造假对称）。整段是一枚 ModeConfigDraft（反射生成、
+    赋值点拦类型/形状错，值只经 ``=``）；提升时的存在性守卫（横截面两
+    轴必填、波长必填）在 validate_for_ui，draft 阶段留未填态。"""
+
+    __slots__ = ("name", "_cfg")
+
+    #: 包络字段（= ModeConfigSpec v2.1 的顶层；读写都路由进 config draft）。
+    #: n_ref（Q20）：搜索折射率，缺省 None = 截面最大折射率（内核缺省）。
+    _FIELDS = ("domain", "mesh", "boundary", "wavelength", "n_modes",
+               "n_ref")
+
+    def __init__(self, owner: "Model", name: str) -> None:
+        # owner 形参与 Solver 同构（包络不回指模型——结构在 Model 上共享）
+        object.__setattr__(self, "name", name)
+        cfg = ModeConfigDraft()
+        cfg.domain = ModeDomainDraft()      # 急建单件：genie.mode.domain.axis 直达
+        cfg.mesh = ModeMeshDraft()
+        cfg.boundary = {}
+        object.__setattr__(self, "_cfg", cfg)
+
+    def __setattr__(self, name, value):
+        if name in ("name", "_cfg"):
+            object.__setattr__(self, name, value)
+        elif name in self._FIELDS:
+            setattr(self._cfg, name, value)   # draft 在赋值点拦类型/形状错
+        else:
+            raise AttributeError(
+                f"mode envelope has no attribute {name!r} (envelope "
+                f"fields: {', '.join(self._FIELDS)})")
+
+    def __getattr__(self, name):
+        if name in self._FIELDS:
+            return getattr(self._cfg, name)
+        raise AttributeError(
+            f"mode envelope has no attribute {name!r} (envelope "
+            f"fields: {', '.join(self._FIELDS)})")
+
+    def __repr__(self):
+        return f"<solver {self.name!r} (mode)>"
+
+
+#: 求解器名 → 包络类（Q18：认识的求解者各拿各的形状；未列名的沿用 fdtd
+#: 形通用包络 Solver——开放集合，wire 对未列名求解器的 config 原样透传
+#: dict，与 protocol._CONFIG_OF 的「认识谁验谁」同一条线）。
+_ENVELOPE_OF = {"mode": ModeEnvelope}
+
+
 class Model:
     """The core-side body: shared structure + declared solver envelopes
     (semantics live in core, values live in worker).
@@ -304,7 +360,7 @@ class Model:
                 f"solver {name!r} is already declared — envelopes hold "
                 f"solver state, re-declaring would discard it "
                 f"(use the existing genie.{name})")
-        s = Solver(self, name)
+        s = _ENVELOPE_OF.get(name, Solver)(self, name)
         self._solvers[name] = s
         return s
 
@@ -316,7 +372,7 @@ class Model:
         ``add_solver`` (this also catches typos: ``genie.fdtc`` fails
         here instead of silently building an empty run)."""
         if name == DEFAULT_SOLVER and name not in self._solvers:
-            s = Solver(self, name)
+            s = _ENVELOPE_OF.get(name, Solver)(self, name)
             self._solvers[name] = s
             return s
         try:
@@ -340,24 +396,31 @@ class Model:
         """Promotion: draft → a dict in the **Q17 nested** SimConfig shape
         (Nones stripped) for one run of ``solver`` (default = the fdtd
         default, whose payload omits the wire ``solver`` field): structure
-        under ``model``, that solver's envelope under ``config``, ``run``
-        at the top level. The caller must then go through
+        under ``model``, that solver's envelope under ``config`` (shape
+        follows the solver — fdtd: domain/mesh/source/monitor; mode: Q18
+        v2 sections), ``run`` at the top level. The caller must then go through
         ``genie_protocol.resolve.validate_for_ui`` (the single
         validation surface)."""
         name = solver if solver is not None else DEFAULT_SOLVER
         s = self.envelope(name)
+        if isinstance(s, ModeEnvelope):
+            # mode：包络段 = config draft 整体（Q18 v2 分段）；未填字段
+            # 自然缺省，缺必填在提升面（validate_for_ui）422。
+            conf: dict = to_wire(s._cfg)
+        else:
+            conf = {
+                "domain": to_wire(s.domain),
+                "mesh": to_wire(s.mesh),
+                "source": [to_wire(i) for i in s._source],
+                "monitor": [to_wire(i) for i in s._monitor],
+            }
         cfg = {
             "model": {
                 "materials": [to_wire(i) for i in self._materials],
                 "geometry": [to_wire(i) for i in self._geometry],
                 "parameters": dict(self.parameters),
             },
-            "config": {
-                "domain": to_wire(s.domain),
-                "mesh": to_wire(s.mesh),
-                "source": [to_wire(i) for i in s._source],
-                "monitor": [to_wire(i) for i in s._monitor],
-            },
+            "config": conf,
             "run": to_wire(self._run),
         }
         if solver is not None and solver != DEFAULT_SOLVER:
@@ -375,13 +438,15 @@ class Model:
     @classmethod
     def from_config(cls, cfg: dict, *, next_id: int | None = None) -> "Model":
         """Open a document: **Q17 nested** wire-format dict → Model. The
-        single config is restored as the fdtd default solver's envelope
-        (v1 documents hold one config; the multi-solver slot layout is
-        deferred, Q15 挂账①). Flat legacy documents (b8 and earlier,
-        domain/materials/… at the top level) fail loudly — the 2.0.1a1
-        breaking cut, no migration shim. The id allocator takes
-        max(next_id, highest item id) (next_id is the value recorded in
-        state.json, preventing reuse after the highest id is removed)."""
+        single config is restored as its own solver's envelope — fdtd
+        default or mode (Q18; a solver without an SDK envelope fails
+        loudly: restoring it as fdtd would silently mis-shape it). The
+        multi-solver slot layout stays deferred (Q15 挂账①). Flat legacy
+        documents (b8 and earlier, domain/materials/… at the top level)
+        fail loudly — the 2.0.1a1 breaking cut, no migration shim. The id
+        allocator takes max(next_id, highest item id) (next_id is the
+        value recorded in state.json, preventing reuse after the highest
+        id is removed)."""
         if "model" not in cfg or "config" not in cfg:
             raise ValueError(
                 "not a 2.0.1a1 nested document (no 'model'/'config' "
@@ -390,17 +455,30 @@ class Model:
                 "older SDK to convert")
         model = cfg.get("model") or {}
         conf = cfg.get("config") or {}
+        solver_name = cfg.get("solver") or DEFAULT_SOLVER
+        if solver_name != DEFAULT_SOLVER and solver_name not in _ENVELOPE_OF:
+            raise ValueError(
+                f"solver {solver_name!r} has no SDK envelope (known: "
+                f"{DEFAULT_SOLVER}, {', '.join(sorted(_ENVELOPE_OF))}) — "
+                f"the wire passes it through, but this SDK cannot edit "
+                f"that envelope shape")
         m = cls()
-        s = m.add_solver(DEFAULT_SOLVER)
-        s.domain = DomainDraft.model_validate(conf.get("domain") or {})
-        s.mesh = MeshDraft.model_validate(conf.get("mesh") or {})
+        s = m.add_solver(solver_name)
+        src_items: list = []
+        mon_items: list = []
+        if solver_name == DEFAULT_SOLVER:
+            s.domain = DomainDraft.model_validate(conf.get("domain") or {})
+            s.mesh = MeshDraft.model_validate(conf.get("mesh") or {})
+            src_items, mon_items = s._source, s._monitor
+        else:
+            s._cfg = ModeConfigDraft.model_validate(conf)
         m._run = RunDraft.model_validate(cfg.get("run") or {})
         m.parameters = dict(model.get("parameters") or {})
         for kinds, items, src, key in (
                 (_GEO, m._geometry, model, "geometry"),
                 (_MAT, m._materials, model, "materials"),
-                (_SRC, s._source, conf, "source"),
-                (_MON, s._monitor, conf, "monitor")):
+                (_SRC, src_items, conf, "source"),
+                (_MON, mon_items, conf, "monitor")):
             for raw in src.get(key) or []:
                 kind = raw.get("type")
                 if kind not in kinds:
@@ -408,7 +486,7 @@ class Model:
                 items.append(kinds[kind].model_validate(raw))
         highest = max(
             [next_id or 0]
-            + [it.id for it in (m._geometry + m._materials + s._source
-                                + s._monitor) if it.id is not None])
+            + [it.id for it in (m._geometry + m._materials + src_items
+                                + mon_items) if it.id is not None])
         m._alloc.raise_to(highest)
         return m

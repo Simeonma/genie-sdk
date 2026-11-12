@@ -9,15 +9,18 @@ the material verbs' thin-delegation pattern, generalized).
   ``GenieJobError``. The fdtd default omits the wire ``solver`` field
   (legacy payloads byte-identical); any other declared name goes into
   the payload verbatim, never written back to the model (same rule as
-  ``n_gpu``). Composed from chain's primitives — the same machine the
+  `
+_gpu``). Composed from chain's primitives — the same machine the
   sweep driver imports (Q10: a sweep is a batched run).
 - ``genie.<solver>.validate()`` (design-time preflight): the same check
   ``run`` runs for that solver (promote + ``validate_for_ui``), with no
   submit, no document write and no terminal row; returns the error list
   instead of raising. ``genie.validate()`` = the same surface on the
   fdtd default.
-- The four read verbs (parsing semantics live in core/results; this
-  module only does "pick the member + open the file").
+- The read verbs (parsing semantics live in core/results; this
+  module only does "pick the member + open the file"): the monitor three
+  (get_time/get_freq/get_index) + ``mode_results`` (Q18 拍① — the mode
+  eigenmode list, same eager path).
 - The four post verbs (add / update / run / delete) — thin delegates to
   ``worker.post``.
 - The five material verbs — thin delegates to ``core/material``.
@@ -152,7 +155,8 @@ class _SolverHandle:
         (wording ``failed`` / ``canceled``).
 
         ``solver`` goes only into the submit payload and is never
-        written back to the model — the same rule as ``n_gpu``. The
+        written back to the model — the same rule as `
+_gpu``. The
         fdtd default omits the wire ``solver`` field entirely (legacy
         payloads byte-identical); any other declared name goes in
         verbatim. Batch runs (parameter sweeps) go through
@@ -249,7 +253,7 @@ class Genie:
         """
         return validate_for_ui(self._model.to_config())
 
-    # -- the four read verbs (parsing semantics live in core/results, zero terminal lines)---------
+    # -- the read verbs (parsing semantics live in core/results, zero terminal lines)---------
 
     def results(self):
         """The current results → lazy SimData wrapper (``data.<mon>.<field>``
@@ -279,6 +283,12 @@ class Genie:
         domain's single group taken directly, multiple groups named
         explicitly)."""
         return self._read_monitor("i", name)
+
+    def mode_results(self):
+        """Mode solver results → ModeResult (Q18 拍①; eager parsing —
+        ``.neff`` / ``.fields{分量}`` / ``.coords`` / ``.modes[i]``; the
+        eigenmode list, not monitors; zero terminal lines)."""
+        return self._read_current(lambda data: data.get_modes())
 
     # -- the two result-view verbs (Q4.5 public read verbs; emit structured
     # out events for the GUI, zero terminal lines). -------------------------
@@ -321,6 +331,24 @@ class Genie:
                 return data.get_time(name) if domain == "t" else \
                     data.get_freq(name) if domain == "f" else \
                     data.get_index(name)
+            finally:
+                data.close()
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def _read_current(self, pick):
+        """The scratch-dance shared by the eager read verbs (Q18: the
+        monitor three + mode_results): extract the current member → open
+        behind the format guard → ``pick(data)`` → close + clean. The
+        lazy ``results()`` owns its scratch and is deliberately separate."""
+        env = self._env
+        jid = resolve_result(env)
+        scratch = tempfile.mkdtemp(prefix="genie-results.")
+        try:
+            path = archive.extract_result(env.doc_path, scratch, jid)
+            data = core_results.open_result(path, job_id=jid)
+            try:
+                return pick(data)
             finally:
                 data.close()
         finally:
@@ -438,7 +466,7 @@ class Genie:
         return None, note
 
     def fit_nk(self, wl, n, k, band=None, max_poles=10,
-               imaginary_weight=1.0, make_passive=False):
+               imaginary_weight=1.0, make_passive=False, tolerance=0.1):
         """**Single-component** nk → an ``NKFit`` (band · poles · quality ·
         warnings; the opaque pole payload lives in ``model``).
 
@@ -451,7 +479,8 @@ class Genie:
         fit = core_material.fit_nk(wl, n, k, band=band,
                                    max_poles=max_poles,
                                    imaginary_weight=imaginary_weight,
-                                   make_passive=make_passive)
+                                   make_passive=make_passive,
+                                   tolerance=tolerance)
         if note is not None:
             fit = dataclasses.replace(fit, warnings=tuple(fit.warnings)
                                       + (note,))
@@ -508,6 +537,55 @@ class Genie:
                                          max_poles=max_poles,
                                          imaginary_weight=imaginary_weight,
                                          make_passive=make_passive)
+
+    def fit_preview(self, name, band=None, max_poles=10, make_passive=False,
+                    tolerance=0.1):
+        """Library name → fit **preview** (emits ``out(kind="matfit")`` and
+        returns the same payload).
+
+        Read-only: it fits and reports the curves, it does **not** touch the
+        model (the GUI's material dialog draws them; ``mat_from_nk`` still
+        owns "put it in the model"). ``band`` [m] omitted → the fit follows
+        the simulation source band, exactly like ``mat_from_nk``.
+        """
+        wl, n, k = core_material.load_nk(name)
+        fit = self.fit_nk(wl, n, k, band=band, max_poles=max_poles,
+                          make_passive=make_passive, tolerance=tolerance)
+        raw = fit.curve()                       # data points inside the band
+        grid = np.linspace(fit.band[0], fit.band[1], 200)
+        smooth = fit.curve(wl=grid)             # the fit on a dense grid
+        payload = {
+            "name": str(name),
+            "band": [float(fit.band[0]), float(fit.band[1])],
+            "n_poles": int(fit.n_poles),
+            "tolerance": float(tolerance),
+            "summary": fit.summary(),
+            "quality": {k2: (float(v) if isinstance(v, (int, float)) else v)
+                        for k2, v in fit.quality.items()},
+            "warnings": [str(w) for w in fit.warnings],
+            "wl": [float(x) for x in raw["wl"]],
+            "n": [float(x) for x in raw["n"]],
+            "k": [float(x) for x in raw["k"]],
+            "wl_fit": [float(x) for x in smooth["wl"]],
+            "n_fit": [float(x) for x in smooth["n_fit"]],
+            "k_fit": [float(x) for x in smooth["k_fit"]],
+        }
+        self._env.emit(ipc.out(f"material fit {name}",
+                               kind=ipc.OUT_KIND_MATFIT, data=payload))
+        return payload
+
+    def material_library(self):
+        """Local library names for the GUI picker → emits
+        ``out(kind="matlib")`` and returns the same list (script / agent).
+
+        Lives on the worker (not a host route): the host is barred from
+        importing ``genie.core`` (test_host_purity), and the library is the
+        one source of truth for names.
+        """
+        names = list(core_material.list_library_materials())
+        self._env.emit(ipc.out("material library", kind=ipc.OUT_KIND_MATLIB,
+                               data={"materials": names}))
+        return names
 
     def list_library_materials(self):
         """Local library material names (sorted)."""

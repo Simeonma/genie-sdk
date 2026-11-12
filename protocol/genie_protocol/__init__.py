@@ -15,7 +15,7 @@ when an attribute is first touched; star imports trigger the full load per
 """
 from __future__ import annotations
 
-__version__ = "2.0.1a1"
+__version__ = "2.0.1a4"
 
 __all__ = [
     # basic type aliases
@@ -34,7 +34,8 @@ __all__ = [
     "DownSampleSpec", "ApodizeSpec", "TimeMonSpec", "FreqMonSpec",
     "IndexMonSpec", "MonitorSpec",
     # Run and the top-level config (Q17 nested house)
-    "RunSpec", "ModelSpec", "FdtdConfigSpec", "ModeConfigSpec",
+    "RunSpec", "ModelSpec", "FdtdConfigSpec",
+    "ModeDomainSpec", "ModeMeshSpec", "ModeConfigSpec",
     "PlanStageSpec", "SimConfig",
     # wire-format constants (resource-guard thresholds such as MAX_CELLS are deployment policy and live outside this package)
     "FACES", "BC_KINDS", "LIBRARY_FIT_DEFAULTS", "MAX_GPU_PER_RUN",
