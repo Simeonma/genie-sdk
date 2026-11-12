@@ -1,4 +1,4 @@
-﻿"""genie — SDK package root.
+"""genie — SDK package root.
 
 The public surface is the pre-injected ``genie`` handle only (Q15): the
 worker pre-injects it on every exec; the root package **does not export
