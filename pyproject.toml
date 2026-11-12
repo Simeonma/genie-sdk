@@ -1,29 +1,29 @@
-[build-system]
+﻿[build-system]
 requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "genie-sdk"
-version = "2.0.1a6"
-description = "GENIE SDK v2 — build photonic FDTD simulations in Python, submit them to cloud GPUs, and keep results plus custom post_analyze in one portable .gensim document; local Studio included"
+version = "2.0.1a7"
+description = "GENIE SDK v2 鈥?build photonic FDTD simulations in Python, submit them to cloud GPUs, and keep results plus custom post_analyze in one portable .gensim document; local Studio included"
 # PEP 639 SPDX form requires setuptools>=77; LICENSE ships with the repo and the wheel.
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = [
-    # Wire-format models. 独立分发包 genie-protocol（与 SDK 同批出轮子），
-    # 不再内嵌: 内嵌会让同一份 genie_protocol/ 在两颗轮子里各有一份，
-    # 装包顺序决定最终加载哪份协议，且没有任何报错。版本与 protocol/ 同步。
-    "genie-protocol==2.0.1a6",
+    # Wire-format models. 鐙珛鍒嗗彂鍖?genie-protocol锛堜笌 SDK 鍚屾壒鍑鸿疆瀛愶級锛?
+    # 涓嶅啀鍐呭祵: 鍐呭祵浼氳鍚屼竴浠?genie_protocol/ 鍦ㄤ袱棰楄疆瀛愰噷鍚勬湁涓€浠斤紝
+    # 瑁呭寘椤哄簭鍐冲畾鏈€缁堝姞杞藉摢浠藉崗璁紝涓旀病鏈変换浣曟姤閿欍€傜増鏈笌 protocol/ 鍚屾銆?
+    "genie-protocol==2.0.1a7",
     "pydantic>=2,<3",
     "numpy>=1.24",
     # Result reading (genie-results-h5/1: the SimData behind f.results() / post_analyze)
     "h5py>=3.0",
-    # Material fitting (curve_fit for fit_nk — lazy import, but a hard prerequisite)
+    # Material fitting (curve_fit for fit_nk 鈥?lazy import, but a hard prerequisite)
     "scipy>=1.10",
-    # Agent adapter (genie.agent — the MCP server behind `genie mcp`). A main
+    # Agent adapter (genie.agent 鈥?the MCP server behind `genie mcp`). A main
     # dependency on purpose, no extra: an extra's failure mode is silent (the
-    # SDK installs, the agent then reports "not found") — Q6.6.
+    # SDK installs, the agent then reports "not found") 鈥?Q6.6.
     "mcp>=2",
 ]
 
@@ -32,8 +32,8 @@ genie = "genie.host.cli:main"
 
 # Packaging whitelist (the explicit v2 package list guards against accidental
 # inclusion); package-dir: the source directory genie-sdk maps to the import
-# name genie (distribution name genie-sdk ≠ import name genie). protocol 不在
-# 本清单里——它是独立分发包（dependencies 钉版本），轮子里不带副本。
+# name genie (distribution name genie-sdk 鈮?import name genie). protocol 涓嶅湪
+# 鏈竻鍗曢噷鈥斺€斿畠鏄嫭绔嬪垎鍙戝寘锛坉ependencies 閽夌増鏈級锛岃疆瀛愰噷涓嶅甫鍓湰銆?
 [tool.setuptools]
 packages = ["genie", "genie.core", "genie.core.model", "genie.core.archive",
             "genie.core.material", "genie.core.results",
@@ -45,9 +45,9 @@ package-dir = { genie = "genie-sdk" }
 # Package data: the n-k material library yml files (the source of truth for
 # fit_nk / mat_from_nk), the Studio GUI shell served by host/app.py
 # (_STATIC_ROOT = genie/static), and the agent skill text (genie/agent/SKILL.md
-# — the adapter ships with its skill so an agent runtime can read it offline).
+# 鈥?the adapter ships with its skill so an agent runtime can read it offline).
 # Without the static patterns the wheel ships no GUI and `genie studio` answers
-# 404 on `/` — the release gate in tools/publish.py now blocks that.
+# 404 on `/` 鈥?the release gate in tools/publish.py now blocks that.
 # static/MODMAP.md is internal and stays out.
 [tool.setuptools.package-data]
 genie = ["resources/materials/*.yml",

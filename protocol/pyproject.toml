@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "genie-protocol"
-version = "2.0.1a6"
+version = "2.0.1a7"
 description = "GENIE wire-format protocol layer - SimConfig models, expression evaluator, resolver, estimator (single source shared by SDK client, gateway and compute kernel)"
 requires-python = ">=3.10"
 dependencies = [
@@ -53,6 +53,16 @@ dependencies = [
     #   boundary pairing into FdtdConfigSpec. Solver set stays open —
     #   unknown solvers' config passes through as a dict (deployment
     #   fact).
+    # 2.0.1a7 (2026-11-13, additive — geometry rotation, task 4): all
+    #   seven geometry specs take an optional `rotation: Vec3` (Euler
+    #   angles in degrees, default (0,0,0) = unrotated; convention:
+    #   R = Rz(gamma)·Ry(beta)·Rx(alpha), extrinsic about the fixed
+    #   global axes x→y→z; membership = contains(body, Rᵀ·(p − reference
+    #   centre)); reference centre = the shape's `center` field / box
+    #   range midpoints / polygon bbox centre + z-range midpoint; sphere
+    #   rotation about its own centre is the identity). Legacy payloads
+    #   validate verbatim; kernels consume it via the point-membership
+    #   single source (model.geometry.contains / fdtd _shapes mirror).
     # 2.0.1a6 (2026-11-12, additive — Q23 mode refine: ModeRefineSpec
     #   (2D zone, per-axis factor >= 1, at least one >= 2); coords repositioned
     #   as fdtd-coordination/expert escape (user entry = refine).
