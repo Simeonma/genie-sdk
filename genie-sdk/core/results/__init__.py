@@ -315,18 +315,9 @@ def read_monitor(h5, domain: str, name: str | None = None):
     return IndexResult(name, fields, shape_hint=hint, **axes)
 
 
-def read_modes(h5) -> ModeResult:
-    """mode 结果组 ``modes`` → ModeResult（Q18 拍①；h5→对象唯一路径的
-    mode 段）。组内：``neff (n,)`` 必在；x/y/z = 两轴坐标（真轴名）；
-    其余 = 场分量 ``(n, N1, N2)``。``wavelength`` / 排序口径来自根 attrs
-    ``modes`` manifest（缺 = None，不猜）。**内核 mode-M1 写侧按此镜像。**"""
-    ensure_supported_format(h5)
-    if "modes" not in h5.keys():
-        raise RuntimeError(
-            f"no 'modes' group in this result h5 (groups: "
-            f"{', '.join(h5.keys()) or 'none'}) — mode results carry an "
-            f"eigenmode list, not monitors")
-    grp = h5["modes"]
+def _read_mode_group(grp):
+    """一个 mode 组（单 λ 的 ``modes`` 或扫描的 ``modes/lam_###``）→
+    ``(neff, fields, coords)``：轴名 = 坐标、``neff`` 必在、其余场分量。"""
     coords: dict = {}
     fields: dict = {}
     neff = None
@@ -340,10 +331,93 @@ def read_modes(h5) -> ModeResult:
             fields[key] = arr
     if neff is None:
         raise RuntimeError("modes group has no 'neff' dataset")
+    return neff, fields, coords
+
+
+def read_modes(h5) -> ModeResult:
+    """mode 结果组 ``modes`` → ModeResult（Q18 拍①；h5→对象唯一路径的
+    mode 段）。组内：``neff (n,)`` 必在；x/y/z = 两轴坐标（真轴名）；
+    其余 = 场分量 ``(n, N1, N2)``。``wavelength`` / 排序口径来自根 attrs
+    ``modes`` manifest（缺 = None，不猜）。**内核写侧按 tests/result_h5.py
+    镜像。多 λ 扫描件（manifest 带 ``wavelengths``）明报走
+    ``read_mode_sweep``。**"""
+    ensure_supported_format(h5)
+    if "modes" not in h5.keys():
+        raise RuntimeError(
+            f"no 'modes' group in this result h5 (groups: "
+            f"{', '.join(h5.keys()) or 'none'}) — mode results carry an "
+            f"eigenmode list, not monitors")
     man = modes_manifest(h5)
+    if man.get("wavelengths"):
+        raise RuntimeError(
+            "this is a multi-wavelength sweep result (manifest carries a "
+            "'wavelengths' list) — use get_mode_sweep()/read_mode_sweep()")
+    neff, fields, coords = _read_mode_group(h5["modes"])
     return ModeResult(neff, fields, coords,
                       wavelength=man.get("wavelength"),
                       sorted_by=man.get("sorted_by"))
+
+
+class ModeSweepResult:
+    """多 λ 扫描结果（A 线，2026-11-13）：``wavelengths``（升序）+ 每 λ
+    一枚 ModeResult（**ragged 如实**——死支消失、新支排组末尾，各组 n
+    可不同）。``sorted_by = "branch_cont"``：输出序 = 重叠配对的分支连续
+    序——λ 间不保证按 neff 对齐，跨支画色散曲线前先认分支（同支在各 λ
+    组内序号相同）。"""
+
+    def __init__(self, wavelengths, results, sorted_by=None) -> None:
+        self.wavelengths = [float(w) for w in wavelengths]
+        self.results = list(results)
+        self.sorted_by = sorted_by
+
+    @property
+    def n_lambdas(self) -> int:
+        return len(self.wavelengths)
+
+    def __len__(self) -> int:
+        return len(self.results)
+
+    def __iter__(self):
+        return iter(self.results)
+
+    def __getitem__(self, i: int) -> ModeResult:
+        return self.results[i]
+
+    def __repr__(self) -> str:
+        ns = [r.n_modes for r in self.results]
+        return (f"<ModeSweepResult n_lambdas={self.n_lambdas} "
+                f"modes_per_lambda={ns} sorted_by={self.sorted_by!r}>")
+
+
+def read_mode_sweep(h5) -> ModeSweepResult:
+    """多 λ 扫描件 → ModeSweepResult：manifest ``wavelengths``（正源，
+    组序 = λ 升序）+ ``modes/lam_###`` 每 λ 一组（组名 = 定宽索引）。
+    每枚 ModeResult 的 ``wavelength`` = 对应 λ。"""
+    ensure_supported_format(h5)
+    man = modes_manifest(h5)
+    wls = man.get("wavelengths")
+    if not wls:
+        raise RuntimeError(
+            "modes manifest carries no 'wavelengths' list — this is a "
+            "single-λ result, use get_modes()/read_modes()")
+    if "modes" not in h5.keys():
+        raise RuntimeError(
+            f"no 'modes' group in this result h5 (groups: "
+            f"{', '.join(h5.keys()) or 'none'})")
+    root = h5["modes"]
+    sorted_by = man.get("sorted_by")
+    results = []
+    for i, wl in enumerate(wls):
+        key = f"lam_{i:03d}"
+        if key not in root.keys():
+            raise RuntimeError(
+                f"modes group has no '{key}' subgroup (manifest lists "
+                f"{len(wls)} wavelengths) — corrupt sweep result")
+        neff, fields, coords = _read_mode_group(root[key])
+        results.append(ModeResult(neff, fields, coords,
+                                  wavelength=float(wl),
+                                  sorted_by=sorted_by))
+    return ModeSweepResult(wls, results, sorted_by)
 
 
 # ── SimData (lazy wrapper over h5)───────────────────────────────────────────
@@ -450,8 +524,14 @@ class SimData:
 
     def get_modes(self) -> ModeResult:
         """mode 结果 → ModeResult（Q18 拍①；与 get_time/get_freq/
-        get_index 同一条 eager 解析路径）。"""
+        get_index 同一条 eager 解析路径）。多 λ 扫描件明报，走
+        ``get_mode_sweep``。"""
         return read_modes(self._f)
+
+    def get_mode_sweep(self) -> ModeSweepResult:
+        """多 λ 扫描件 → ModeSweepResult（A 线，2026-11-13：每 λ 一枚
+        ModeResult，ragged 如实，序 = 分支连续序）。"""
+        return read_mode_sweep(self._f)
 
     def __getattr__(self, name: str):           # monitor-name direct access; underscore guard
         if name.startswith("_"):

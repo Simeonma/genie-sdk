@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "genie-protocol"
-version = "2.0.1a7"
+version = "2.0.1a8"
 description = "GENIE wire-format protocol layer - SimConfig models, expression evaluator, resolver, estimator (single source shared by SDK client, gateway and compute kernel)"
 requires-python = ">=3.10"
 dependencies = [
@@ -53,6 +53,18 @@ dependencies = [
     #   boundary pairing into FdtdConfigSpec. Solver set stays open —
     #   unknown solvers' config passes through as a dict (deployment
     #   fact).
+    # 2.0.1a8 (2026-11-13, additive — multi-wavelength mode sweep): the
+    #   ModeConfigSpec top-level `wavelength` widens from float to
+    #   float | list[float] (single field union — a float IS the
+    #   length-1 special case, no second concept). A list must be
+    #   non-empty, all positive and STRICTLY ASCENDING (duplicates and
+    #   unsorted input are 422 — ascending is the parsing contract, silent
+    #   sorting would create two "different" jobs with identical results).
+    #   Storage keeps the given form verbatim (a float is NOT rewritten to
+    #   [float] — legacy payloads stay byte-identical). Kernel side:
+    #   per-λ serial solve with warm start + overlap branch matching
+    #   (sorted_by="branch_cont"); results h5 gains the lam_### sweep
+    #   layout (single-λ layout unchanged).
     # 2.0.1a7 (2026-11-13, additive — geometry rotation, task 4): all
     #   seven geometry specs take an optional `rotation: Vec3` (Euler
     #   angles in degrees, default (0,0,0) = unrotated; convention:

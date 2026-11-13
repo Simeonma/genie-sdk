@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "genie-sdk"
-version = "2.0.1a7"
+version = "2.0.1a8"
 description = "GENIE SDK v2 鈥?build photonic FDTD simulations in Python, submit them to cloud GPUs, and keep results plus custom post_analyze in one portable .gensim document; local Studio included"
 # PEP 639 SPDX form requires setuptools>=77; LICENSE ships with the repo and the wheel.
 license = "Apache-2.0"
@@ -14,7 +14,7 @@ dependencies = [
     # Wire-format models. 鐙珛鍒嗗彂鍖?genie-protocol锛堜笌 SDK 鍚屾壒鍑鸿疆瀛愶級锛?
     # 涓嶅啀鍐呭祵: 鍐呭祵浼氳鍚屼竴浠?genie_protocol/ 鍦ㄤ袱棰楄疆瀛愰噷鍚勬湁涓€浠斤紝
     # 瑁呭寘椤哄簭鍐冲畾鏈€缁堝姞杞藉摢浠藉崗璁紝涓旀病鏈変换浣曟姤閿欍€傜増鏈笌 protocol/ 鍚屾銆?
-    "genie-protocol==2.0.1a7",
+    "genie-protocol==2.0.1a8",
     "pydantic>=2,<3",
     "numpy>=1.24",
     # Result reading (genie-results-h5/1: the SimData behind f.results() / post_analyze)

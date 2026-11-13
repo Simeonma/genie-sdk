@@ -1337,13 +1337,40 @@ class ModeConfigSpec(_StrictModel):
     domain: ModeDomainSpec
     mesh: ModeMeshSpec
     boundary: dict[str, BoundarySpec] = Field(default_factory=dict)
-    wavelength: float = Field(gt=0.0)         # 真空波长 [m]
+    #: 真空波长 [m]——**单字段 union**（站长拍 2026-11-13）：``float`` = 单 λ
+    #: （长度 1 的特例），``list[float]`` = 多 λ（serve 升序串行逐 λ 求解）；
+    #: 不立 ``wavelengths`` 第二概念。list 非空、全正数、**严格升序**
+    #: （重复/乱序 422——升序是解析契约，静默排序会造出两个"不同"作业
+    #: 同结果的 digest 脏）；存储保持原样（``float`` 不改写为 ``[float]``，
+    #: 存量载荷字节不变）。
+    wavelength: Union[float, list[float]]
     n_modes: int = Field(default=1, ge=1)
     #: 搜索折射率（Q20，直通内核 ``ModeSpec.neff_guess``：shift-invert
     #: 中心 + 结果按 |neff−它| 排序）。缺省 None = 截面最大横向折射率
     #: （内核现缺省行为，零变化）——与 ``domain.n_bg`` 语义不同：一个
     #: 说"在哪个折射率附近找模"（数值），一个说"世界是什么介质"（物理）。
     n_ref: Optional[float] = Field(default=None, gt=0.0)
+
+    @field_validator("wavelength", mode="after")
+    @classmethod
+    def _check_wavelength(cls, v):
+        vals = v if isinstance(v, list) else [v]
+        if not vals:
+            raise ValueError(
+                "wavelength: empty list — give at least one wavelength "
+                "(or a single float)")
+        for w in vals:
+            if isinstance(w, bool) or not (
+                    isinstance(w, (int, float)) and math.isfinite(w)
+                    and w > 0.0):
+                raise ValueError(
+                    f"wavelength: every wavelength must be a finite "
+                    f"positive number [m], got {w!r}")
+        if any(vals[i] >= vals[i + 1] for i in range(len(vals) - 1)):
+            raise ValueError(
+                "wavelength: list must be strictly ascending (duplicates "
+                "and unsorted input are rejected — sort before sending)")
+        return v
 
     @model_validator(mode="after")
     def _check(self):
