@@ -1078,7 +1078,7 @@ const FormPanel = {
             row.appendChild(this._el("div", "note",
               "轴向 pole：挂在单个坐标轴（对角各向异性），每轴可各自一组 pole。" +
               "各向同性 = 不选轴（自动展开到三根轴）。斜向/复数耦合已移除——" +
-              "它们在宽带时域会泵能（相位共轭 / 半格错位）。")));
+              "它们在宽带时域会泵能（相位共轭 / 半格错位）。"));
           } else if (shape === "legacy") {
             row.appendChild(this._el("div", "note",
               "旧「三轴」速记（3 元参数，内核 1.4.0 已移除）。拆成多个" +
@@ -1596,7 +1596,7 @@ const FormPanel = {
     body.appendChild(this._row("超时 (s)",
       this._input("run.timeout_s", r.timeout_s ?? 3600, "num")));
     // 提交面板挂载点（app.js 常驻 DOM 移进来; 2026-08-31au 方案A：
-    // 执行动作归 run 节，与生成代码的 f.run(...) 同构）
+    // 执行动作归 run 节，与生成代码的 genie.run(...) 同构）
     // 2026-09-10：顶栏 Simulate 框已有常驻 #run-mount（index.html），
     // 此处只在缺位时补挂点——避免同页重复 id（getElementById 取首个，
     // 重复 id 是非法 HTML 且会让 remountTools 目标含糊）。

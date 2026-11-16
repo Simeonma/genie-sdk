@@ -710,7 +710,7 @@ input::placeholder,textarea::placeholder {
 /* 空态：会话终端未跑过任何东西时，给出安静的一行操作提示
  * （旧值 = 一整块空白白卡，读作「坏了/没加载出来」） */
 #term-out:empty::before {
-  content: "会话终端 · 直接输入 Python 操作 f（Enter 执行，Shift+Enter 换行）——输出与脚本的运行痕迹都会出现在这里";
+  content: "会话终端 · 直接输入 Python 操作 genie（Enter 执行，Shift+Enter 换行）——输出与脚本的运行痕迹都会出现在这里";
   color: var(--text-muted); font-family: var(--font); font-size: var(--fs-xs);
   letter-spacing: 0.01em;
 }

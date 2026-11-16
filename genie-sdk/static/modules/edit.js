@@ -126,5 +126,5 @@ let _lastRootErr = "";
 function scheduleValidate() {
   /* v2：校验只在 worker 里（提交时 `validate_for_ui`，错误走终端红行）。
    * v1 的 `/api/validate` 已退役；字段级即时校验（失焦 / 保存前）需要
-   * 公开读动词 `f.validate()`，记在后端线，GUI 批先不接、也不再发请求。 */
+   * 公开读动词 `genie.validate()`，记在后端线，GUI 批先不接、也不再发请求。 */
 }

@@ -290,11 +290,11 @@ const _SIM_NAME_KEY = "genie-sim-filename";
 const _SIM_NAME_DEFAULT = "genie_sim.gensim";
 
 async function exportCfg(askName = true) {
-  /* v2：Save = worker 里跑一句 f._save()（Q4.3：路径归 host——有文档
+  /* v2：Save = worker 里跑一句 genie.save()（Q4.3：路径归 host——有文档
    * 路径写原路径，否则 <工作区>/genie.gensim；落位/自动存同一机器）。 */
   try {
-    await GenieApp.exec("f._save()", { fresh: false, echo: false });
-    toast("已保存（f._save()）", "ok");
+    await GenieApp.exec("genie.save()", { fresh: false, echo: false });
+    toast("已保存（genie.save()）", "ok");
     return true;
   } catch (e) {
     toast("保存失败：" + e.message, "err");
@@ -303,14 +303,14 @@ async function exportCfg(askName = true) {
 }
 
 async function importCfgText(text) {
-  /* v2：整份换模型只走 worker（编辑器跑脚本 / f._open）；此钩子不再直推。 */
-  toast("整份导入随文档线（用 Open 输路径或写 f._open('path')）", "warn");
+  /* v2：整份换模型只走 worker（编辑器跑脚本 / genie._open）；此钩子不再直推。 */
+  toast("整份导入随文档线（用 Open 输路径或写 genie.open('path')）", "warn");
   return false;
 }
 
 function importCfg() {
-  /* 文件上传导入随文档线（v2 的 Open 用路径；上传 = host 收字节落 temp 再 f._open） */
-  toast("导入 .gensim 随文档线（先用 Open 输路径，或写 f._open('path')）", "warn");
+  /* 文件上传导入随文档线（v2 的 Open 用路径；上传 = host 收字节落 temp 再 genie._open） */
+  toast("导入 .gensim 随文档线（先用 Open 输路径，或写 genie.open('path')）", "warn");
 }
 
 /* e2e 钩子（headless 无下载/文件选择对话框——直接调函数面） */
@@ -335,7 +335,7 @@ async function exportScript(askName = true) {
  * 浏览器拿不到真实路径，所以先走服务端原生文件对话框（/api/sim/open）；
  * 本机没有系统对话框时退回浏览器上传（importCfg）。 */
 async function openSimulation() {
-  /* v2：Open = worker 里跑一句 f._open(<path>)（整份换模型 + 路径跟随；
+  /* v2：Open = worker 里跑一句 genie.open(<path>)（整份换模型 + 路径跟随；
    * 失败原因由 worker 的红行进终端）。浏览器拿不到 worker 文件系统，
    * 路径用 prompt 承接。 */
   const asked = window.prompt("打开 .gensim（工作区路径）：", "genie.gensim");
@@ -343,9 +343,9 @@ async function openSimulation() {
   const path = asked.trim();
   if (!path) return null;
   try {
-    await GenieApp.exec("f._open(" + JSON.stringify(path) + ")",
+    await GenieApp.exec("genie.open(" + JSON.stringify(path) + ")",
                         { fresh: false, echo: false });
-    toast("已提交 f._open(" + path + ")——结果见终端", "ok");
+    toast("已提交 genie.open(" + path + ")——结果见终端", "ok");
     return true;
   } catch (e) {
     toast("打开失败：" + e.message, "err");

@@ -57,6 +57,9 @@ from genie.net import TERMINAL_OK, GenieJobError
 from ..core.param import validate_for_ui
 
 from . import chain, plot, post, sweep
+from .api import (Drude as _Drude, Lorentz as _Lorentz,
+                  Rational as _Rational, Surface,
+                  _ROCollection, _ROItem, _ROMapping)
 from .chain import (ROW_CANCELED, ROW_DONE, ROW_FAILED, ROW_POST_FAILED,
                     ROW_SUBMIT_ONE)
 from .post import UNSET, resolve_result
@@ -117,80 +120,52 @@ def load_sweeps(doc_path) -> dict:
 class _SolverHandle:
     """One declared solver seen from the script side: attribute reads and
     writes delegate to the solver's envelope (domain / mesh / sources /
-    monitors — Q15); the action surface adds ``run`` / ``validate``.
-    Stateless — every access resolves back to the model, so a handle
-    held across a fresh Run naturally follows the new model."""
+    monitors — Q15); the action surface adds ``run`` / ``validate``, and
+    the Q25 creation verbs ``add_source`` / ``add_monitor`` /
+    ``add_mesh_refine``."""
 
-    __slots__ = ("_model", "_env", "_name")
+    __slots__ = ("_model", "_env", "_name", "_surface")
 
-    def __init__(self, model, env, name):
+    def __init__(self, model, env, name, surface=None):
         object.__setattr__(self, "_model", model)
         object.__setattr__(self, "_env", env)
         object.__setattr__(self, "_name", name)
+        object.__setattr__(self, "_surface", surface)
 
     def _solver(self):
         return self._model.envelope(self._name)
 
     def __getattr__(self, name):
-        return getattr(self._solver(), name)
+        env = self._solver()
+        if name in ("sources", "monitors"):
+            return _ROCollection(getattr(env, name), f"{self._name}.{name}")
+        if name in ("domain", "mesh"):
+            return _ROItem(getattr(env, name), f"{self._name}.{name}")
+        return getattr(env, name)
 
     def __setattr__(self, name, value):
-        setattr(self._solver(), name, value)
+        raise AttributeError(
+            f"genie.{self._name}.{name}: attributes are read-only — use "
+            f"genie.set_named({self._name + '.' + name!r}, ...)")
 
     def __repr__(self):
         return f"<genie.{self._name}>"
 
-    # -- the one public run verb (Q15) --------------------------------
+    # -- Q25 creation verbs ------------------------------------------
 
-    def run(self, *, n_gpu=None):
-        """Run the model **through this solver** once and block until it
-        finishes.
+    def _children(self):
+        if self._surface is None:
+            raise RuntimeError("solver handle is not bound to a genie surface")
+        return self._surface.solver(self._name)
 
-        Promotes the live model to a strict config (this solver's
-        envelope + the shared structure), validates it, submits it,
-        waits for the terminal state, then writes the result into the
-        document (``results/<job>.h5``) and returns the job id
-        (``str``). Submitting invalidates the previous run's results
-        immediately. Failure or cancellation raises ``GenieJobError``
-        (wording ``failed`` / ``canceled``).
+    def add_source(self, name, type):        # noqa: A002
+        return self._children().add_source(name, type)
 
-        ``solver`` goes only into the submit payload and is never
-        written back to the model — the same rule as `
-_gpu``. The
-        fdtd default omits the wire ``solver`` field entirely (legacy
-        payloads byte-identical); any other declared name goes in
-        verbatim. Batch runs (parameter sweeps) go through
-        ``genie.add_param_sweep`` / ``genie.run_param_sweep`` — this
-        verb always runs exactly one simulation.
-        """
-        env = self._env
-        cfg = self._model.to_config(self._name)  # promotion: model → this solver's config
-        chain._validate([cfg])
-        jid = chain.submit(env, self._model, cfg, n_gpu=n_gpu)
-        env.emit(ipc.out(ROW_SUBMIT_ONE.format(id=jid)))
-        staged = chain.stage(env, self._model, [jid])   # submitting invalidates the old batch
-        staged_digest = digest(staged)
-        outcome = chain.wait(env, [jid])[0]       # the repo's single wait implementation
-        if outcome["state"] in TERMINAL_OK:
-            env.emit(ipc.out(ROW_DONE.format(id=jid)))
-            archive.inject_result(env.doc_path, jid,
-                                  env.client().stream_result(jid),
-                                  chain.state_for(staged,
-                                                  self._model.last_id, [],
-                                                  staged_digest))
-            post.run_post(env, jid)               # run-tail auto-run (only if recipes exist)
-            return jid
-        if outcome["state"] == "failed":
-            env.emit(ipc.out(ROW_FAILED.format(
-                id=jid, detail=outcome.get("error") or outcome["state"])))
-        else:                                      # killed / canceled
-            env.emit(ipc.out(ROW_CANCELED.format(id=jid)))
-        raise GenieJobError(jid, outcome["state"], error=outcome.get("error"))
+    def add_monitor(self, name, type):       # noqa: A002
+        return self._children().add_monitor(name, type)
 
-    def validate(self):
-        """Preflight **this solver's** configuration without submitting
-        (see ``Genie.validate`` for the exact surface)."""
-        return validate_for_ui(self._model.to_config(self._name))
+    def add_mesh_refine(self, name):
+        return self._children().add_mesh_refine(name)
 
 
 class Genie:
@@ -204,7 +179,7 @@ class Genie:
     ``run`` lives on the solver handles; **there is no cancel** —
     public cancel is a session-intercepted command, not in worker."""
 
-    __slots__ = ("_model", "_env", "lib")
+    __slots__ = ("_model", "_env", "lib", "_surface")
 
     def __init__(self, model, env):
         object.__setattr__(self, "_model", model)
@@ -212,12 +187,19 @@ class Genie:
         # the handle shadows the package name inside exec namespaces;
         # this is the way back to everything the package exports
         object.__setattr__(self, "lib", _genie_pkg)
+        object.__setattr__(self, "_surface", Surface(model, env))
 
     def __getattr__(self, name):
         try:
-            return getattr(self._model, name)
+            attr = getattr(self._model, name)
         except AttributeError:
-            pass
+            attr = None
+        if name == "parameters":
+            return _ROMapping(self._model.parameters)
+        if name in ("geometry", "materials"):
+            return _ROCollection(attr, name)
+        if attr is not None:
+            return attr
         # solver access: a well-formed but undeclared name raises with
         # add_solver guidance (as AttributeError, so hasattr() behaves);
         # the fdtd default auto-vivifies inside envelope()
@@ -225,10 +207,12 @@ class Genie:
             self._model.envelope(name)
         except LookupError as e:
             raise AttributeError(str(e)) from None
-        return _SolverHandle(self._model, self._env, name)
+        return _SolverHandle(self._model, self._env, name, self._surface)
 
     def __setattr__(self, name, value):
-        setattr(self._model, name, value)
+        raise AttributeError(
+            f"genie.{name}: attributes are read-only — use "
+            f"genie.set_named(\"<family>.{name}\", ...)")
 
     def __repr__(self):
         return f"<genie model={self._model!r}>"
@@ -266,28 +250,11 @@ class Genie:
         path = archive.extract_result(env.doc_path, scratch, jid)
         return core_results.open_result(path, job_id=jid, scratch=scratch)
 
-    def get_time(self, name=None):
-        """Time-domain monitors → TimeResult (eager parsing; default = the
-        domain's single group taken directly, multiple groups named
-        explicitly)."""
-        return self._read_monitor("t", name)
-
-    def get_freq(self, name=None):
-        """Frequency-domain monitors → FreqResult (eager parsing; default =
-        the domain's single group taken directly, multiple groups named
-        explicitly)."""
-        return self._read_monitor("f", name)
-
-    def get_index(self, name=None):
-        """Index monitors → IndexResult (eager parsing; default = the
-        domain's single group taken directly, multiple groups named
-        explicitly)."""
-        return self._read_monitor("i", name)
-
     def mode_results(self):
-        """Mode solver results → ModeResult (Q18 拍①; eager parsing —
-        ``.neff`` / ``.fields{分量}`` / ``.coords`` / ``.modes[i]``; the
-        eigenmode list, not monitors; zero terminal lines)."""
+        """Mode solver results → ``ModeSweepResult`` (eager parsing — one
+        ``ModeResult`` per wavelength: ``.neff`` / ``.fields{分量}`` /
+        ``.coords`` / ``.modes[i]``; a single-λ job is the one-element
+        case; zero terminal lines)."""
         return self._read_current(lambda data: data.get_modes())
 
     # -- the two result-view verbs (Q4.5 public read verbs; emit structured
@@ -353,59 +320,6 @@ class Genie:
                 data.close()
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
-
-    # -- the four post verbs (implementation lives in worker/post)----------
-
-    def add_post_analyze(self, name):
-        """Create a new **empty** recipe (placeholder; same name already
-        exists → one-line error)."""
-        return post.add_verb(self._env, name)
-
-    def update_post_analyze(self, name, script_location):
-        """Import the py file's full text into the recipe's code slot
-        (whitelist gate runs here; the document is the authoritative
-        copy; does not run)."""
-        return post.update_verb(self._env, name, script_location)
-
-    def run_post_analyze(self, name=None, script=UNSET):
-        """Call and compute (direct call expression; return dict →
-        ``post/<name>.npz``; call line recorded first). ``run()`` = all
-        complete recipes."""
-        return post.run_verb(self._env, name, script)
-
-    def delete_post_analyze(self, name):
-        """Delete one (registry + document synced + orphan npz removed;
-        idempotent)."""
-        return post.delete_verb(self._env, name)
-
-    # -- the three param_sweep verbs (implementation lives in worker/sweep)------
-
-    def add_param_sweep(self, name, parameters, *, mode="product",
-                        n_gpu=None, on_failure="continue"):
-        """Define a named parameter sweep: ``parameters = {name:
-        sequence}`` (one call carries the whole definition — a definition
-        is data, not code; same name overwrites; the name becomes a
-        folder name, so letters / digits / '_' / '-' only). Definitions
-        are persisted to the document (``sweeps.json`` — the
-        authoritative copy)."""
-        return sweep.add_verb(self._env, name, parameters, mode=mode,
-                              n_gpu=n_gpu, on_failure=on_failure)
-
-    def run_param_sweep(self, name):
-        """Run one named sweep and block until the whole batch is
-        terminal: expand → one batch submit → stage each point document
-        (``parameter_sweep_<name>/p####.gensim`` — re-running a name
-        clears and re-stages the folder) → collect each job as it
-        finishes (inject result + the same post tail hook + the index
-        line). Returns the Sweep handle; ``on_failure="abort"`` raises
-        ``GenieJobError`` at the first bad point (still-live jobs
-        canceled); zero terminal lines (progress rides the job card)."""
-        return sweep.run_verb(self._env, self._model, name)
-
-    def delete_param_sweep(self, name):
-        """Delete one definition (document synced; the folder on disk is
-        untouched). Idempotent."""
-        return sweep.delete_verb(self._env, name)
 
     # -- material verbs (implementation lives in core/material, zero terminal lines)------------
 
@@ -499,46 +413,7 @@ class Genie:
         directly, multiple errors out)."""
         return core_material.load_nk(name, component=component)
 
-    def mat_from_nk(self, name, band=None, max_poles=10,
-                     imaginary_weight=1.0, make_passive=False):
-        """Library name → material node in one step (a near-zero-knob
-        convenience layer; one line to add into the model:
-        ``genie.materials.add_lorentz(node)``).
-
-        ``band`` is the fit window [m]: **pass it and it is honoured
-        verbatim** (too few samples → a clear "widen band" error). Omit it
-        and the fit follows the **simulation source band**; with neither a
-        source nor a band there is no defensible window, so the verb raises
-        instead of silently fitting the whole data domain.
-        """
-        if band is not None:
-            return core_material.mat_from_nk(
-                name, band=band, max_poles=max_poles,
-                imaginary_weight=imaginary_weight, make_passive=make_passive)
-        want = self._source_band()
-        if want is None:
-            raise ValueError(
-                "genie.mat_from_nk needs a wavelength window: no simulation "
-                "source is set, and fitting the whole data domain is not a "
-                "meaningful default — pass band=(lo, hi) in metres, e.g. "
-                "band=(400e-9, 800e-9)")
-        try:
-            return core_material.mat_from_nk(
-                name, band=want, max_poles=max_poles,
-                imaginary_weight=imaginary_weight, make_passive=make_passive)
-        except ValueError as exc:
-            if "data points in band" not in str(exc):
-                raise
-            core_material._report(
-                f"source band {want[0] * 1e9:.0f}-{want[1] * 1e9:.0f} nm "
-                f"is too sparse in the {name} library — fitted over the full "
-                f"data range instead; pass band= to force a window")
-        return core_material.mat_from_nk(name, band=None,
-                                         max_poles=max_poles,
-                                         imaginary_weight=imaginary_weight,
-                                         make_passive=make_passive)
-
-    def fit_preview(self, name, band=None, max_poles=10, make_passive=False,
+    def _fit_preview(self, name, band=None, max_poles=10, make_passive=False,
                     tolerance=0.1):
         """Library name → fit **preview** (emits ``out(kind="matfit")`` and
         returns the same payload).
@@ -574,7 +449,7 @@ class Genie:
                                kind=ipc.OUT_KIND_MATFIT, data=payload))
         return payload
 
-    def material_library(self):
+    def _material_library(self):
         """Local library names for the GUI picker → emits
         ``out(kind="matlib")`` and returns the same list (script / agent).
 
@@ -616,38 +491,6 @@ class Genie:
 
     # -- document commands (_save + startup restore)--
 
-    def _save(self, path=None):
-        """Save / save-as (no path = save). digest is updated to the
-        save-time fingerprint, inflight cleared, results and post outputs
-        carried over (the current batch); the recipe set enters the
-        document from current in-memory values. After save-as the live
-        document path follows."""
-        env = self._env
-        target = path or env.doc_path
-        cfg = self._model.to_config()
-        archive.save(target, simconfig=cfg,
-                     state=chain.state_for(cfg, self._model.last_id, []),
-                     carry_result_from=env.doc_path,
-                     post_recipes=env.post_recipes, sweeps=env.sweeps)
-        env.doc_path = target
-        return target
-
-    def _open(self, path):
-        """Open an existing `.gensim`: swap the model wholesale
-        (the id allocator resumes from max) + the live document path
-        follows + `f` re-injected immediately + the recipe set swaps with
-        the document; results members stay in the document; unsaved
-        changes are discarded on the swap. Unopenable → one-line error,
-        and neither model nor path moves."""
-        env = self._env
-        model, _state = load_model(path)    # fails before assignment: nothing moves
-        env.model = model
-        env.doc_path = str(path)
-        env.post_recipes = load_recipes(str(path))
-        env.sweeps = load_sweeps(str(path))
-        env._reinject_genie()               # later statements in the same exec see the new model at once
-        return str(path)
-
     def _dirty(self) -> bool:
         """Model fingerprint ≠ the current `.gensim`'s state.digest →
         True; no document / unreadable document = True (the mirror side of
@@ -661,6 +504,75 @@ class Genie:
         except Exception:                   # noqa: BLE001 — no saved state to compare against
             return True
         return digest(self._model.to_config()) != state.get("digest")
+
+
+    # ══════════════════════════════════════════════════════════════════
+    # Q25 unified surface (docs/API-STYLE.md) — thin delegates to
+    # worker.api.Surface; the old verb family is retired in the next
+    # migration commit.
+    # ══════════════════════════════════════════════════════════════════
+
+    def add_parameter(self, name):
+        return self._surface.add_parameter(name)
+
+    def add_material(self, name, type, *, library=None):  # noqa: A002
+        return self._surface.add_material(name, type, library=library)
+
+    def add_geometry(self, name, type):  # noqa: A002
+        return self._surface.add_geometry(name, type)
+
+    def add_analysis(self, name):
+        return self._surface.add_analysis(name)
+
+    def add_sweep(self, name):
+        return self._surface.add_sweep(name)
+
+    def add_solver(self, name, type=None):  # noqa: A002
+        return self._surface.add_solver(name, type)
+
+    def set_named(self, addr, **fields):
+        return self._surface.set_named(addr, **fields)
+
+    def get_named(self, addr, field=None):
+        return self._surface.get_named(addr, field)
+
+    def describe(self, addr):
+        return self._surface.describe(addr)
+
+    def remove(self, addr):
+        return self._surface.remove(addr)
+
+    def fit_material(self, name):
+        return self._surface.fit_material(name)
+
+    def run_fdtd(self, *, n_gpu=None):
+        return self._surface.run_fdtd(n_gpu=n_gpu)
+
+    def run_mode(self, *, n_gpu=None):
+        return self._surface.run_mode(n_gpu=n_gpu)
+
+    def run_sweep(self, name):
+        return self._surface.run_sweep(name)
+
+    def run_analysis(self, name=None, call=UNSET):
+        return self._surface.run_analysis(name, call)
+
+    def get_result(self, mon, field=None):
+        return self._surface.get_result(mon, field)
+
+    def save(self, path=None):
+        return self._surface.save(path)
+
+    def open(self, path):
+        return self._surface.open(path)
+
+    def validate(self):
+        return self._surface.validate()
+
+    # payload constructors (values, not model objects)
+    Drude = staticmethod(_Drude)
+    Lorentz = staticmethod(_Lorentz)
+    Rational = staticmethod(_Rational)
 
 
 def bind(model, env) -> Genie:

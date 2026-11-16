@@ -26,7 +26,7 @@ install the protocol wheel first, then the SDK without dependency resolution
 ```
 pip install genie_protocol-<ver>-py3-none-any.whl
 pip install --no-deps git+https://github.com/Simeonma/genie-sdk.git
-pip install "pydantic>=2,<3" numpy h5py scipy mcp
+pip install "pydantic>=2,<3" numpy h5py mcp
 ```
 
 ## Connect to the cloud
@@ -60,43 +60,50 @@ model directly with Python; exit with `Ctrl+C`. To pick a fixed port use
 Minimal script (paste into the editor and run):
 
 ```python
-genie.add_solver("fdtd")
-genie.fdtd.domain.x_range = (-1e-6, 1e-6)
-genie.fdtd.domain.y_range = (-1e-6, 1e-6)
-genie.fdtd.domain.z_range = (-1e-6, 1e-6)
-genie.fdtd.domain.total_time = 60e-15
-genie.fdtd.mesh.dx = 40e-9
-genie.materials.add_lorentz(genie.mat_from_nk("Au"))   # material library in one step
-genie.geometry.add_box("wg")
-genie.geometry["wg"].material = "Au"
-genie.geometry["wg"].x_range = (-5e-7, 5e-7)
-genie.geometry["wg"].y_range = (-5e-7, 5e-7)
-genie.geometry["wg"].z_range = (-5e-7, 5e-7)
-genie.fdtd.sources.add_plane_wave("src")
-genie.fdtd.sources["src"].freq = 300e12
-genie.fdtd.sources["src"].bandwidth = 60e12
-genie.fdtd.monitors.add_freq("tr")
-genie.fdtd.monitors["tr"].field = "Ex"
-genie.fdtd.monitors["tr"].freq = {"center": 300e12, "bw": 120e12, "n": 200}
+genie.add_solver(name="fdtd", type="fdtd")
+genie.set_named("fdtd", x_range=(-1e-6, 1e-6), y_range=(-1e-6, 1e-6),
+                z_range=(-1e-6, 1e-6), total_time=60e-15, dx=40e-9)
 
-genie.fdtd.run()      # run through the fdtd solver (the default); the result is saved back into the local .gensim
-r = genie.results()   # read the results (SimData)
+genie.add_material(name="Au", type="library", library="Au")
+genie.set_named("material.Au", band=(400e-9, 1000e-9), tolerance=0.01)
+genie.fit_material("Au")                    # explicit fit (lazy on run too)
+
+genie.add_geometry(name="wg", type="box")
+genie.set_named("geometry.wg", material="Au",
+                x_range=(-5e-7, 5e-7), y_range=(-5e-7, 5e-7),
+                z_range=(-5e-7, 5e-7))
+
+genie.fdtd.add_source(name="src", type="plane_wave")
+genie.set_named("fdtd.src", freq_center=300e12, freq_bw=60e12)
+genie.fdtd.add_monitor(name="tr", type="freq")
+genie.set_named("fdtd.tr", field="Ex",
+                freq_center=300e12, freq_bw=120e12, freq_n=200)
+
+genie.run_fdtd()          # run; the result is saved back into the local .gensim
+r = genie.get_result("tr", "Ex")     # one monitor field array
+d = genie.results()                  # advanced: the whole SimData view
 ```
 
 ## Parameter sweeps
 
-Define a named sweep, run it as one batch, read the results as a cube
-(the sweep axes lead the field dimensions; failed points are NaN):
-
 ```python
-genie.add_param_sweep("grid", {"x": [2e-6, 3e-6, 4e-6]})
-sw = genie.run_param_sweep("grid")   # blocks until the whole batch finishes
-sw.get_freq("tr")                    # fields shaped (3, ...) — one leading axis
-sw.run_post_analyze("Q")             # re-run a post_analyze recipe over all points
+genie.add_sweep(name="grid")
+genie.set_named("sweep.grid", parameters={"L": [2e-6, 3e-6, 4e-6]})
+sw = genie.run_sweep("grid")     # blocks until the whole batch finishes
+sw.get_result("tr")              # fields shaped (3, ...) — one leading axis
+sw.run_analysis("Q")             # re-run an analysis recipe over all points
 ```
 
 Each point is a plain `.gensim` document under `parameter_sweep_grid/`,
 with an `index.json` account beside them.
+
+## Analyses (post-processing)
+
+```python
+genie.add_analysis(name="Q")
+genie.set_named("analysis.Q", script="recipes/Q.py", call="calc(L=2e-6)")
+genie.run_analysis("Q")          # result dict → post/Q.npz in the document
+```
 
 ## Command reference
 

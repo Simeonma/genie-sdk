@@ -98,6 +98,7 @@ class ExecContext:
         if fresh:                            # only on success: wholesale replace + atomic swap of the model
             self.ns = ns
             self.model = model
+            self.api_state = None            # Q25 surface state follows the model
         self._reinject_genie()
 
         text = buf_out.getvalue()

@@ -1,0 +1,962 @@
+"""genie.worker.api — the unified user surface (Q25 / docs/API-STYLE.md).
+
+One address grammar, one write verb, one read verb:
+
+    genie.add_parameter / add_material / add_geometry / add_analysis /
+    add_sweep / add_solver / <solver>.add_source / add_monitor /
+    add_mesh_refine
+    genie.set_named(addr, **fields)      # the ONLY write channel
+    genie.get_named(addr[, field])       # model fields
+    genie.describe(addr)                 # field table
+    genie.remove(addr)
+    genie.fit_material(name)             # explicit library fit
+    genie.validate() / run_fdtd() / run_sweep(name) / run_analysis(name)
+    genie.get_result(mon[, field])       # result data
+    genie.save(path=None) / open(path)
+
+Addresses are ``<family>.<name>`` for top-level objects, ``<solver>`` for a
+solver itself, and ``<solver>.<name>`` for its children (sources, monitors,
+mesh-refine zones; one shared namespace per solver).
+"""
+from __future__ import annotations
+
+import os
+import re
+from pathlib import Path
+
+import numpy as np
+
+from genie import ipc
+from genie.core import material as core_material
+from genie.core.model import Model
+from genie.core.model.draft import digest
+from genie.core.param import validate_for_ui
+from genie.net import GenieJobError
+
+from genie.core import archive
+
+from . import chain, post, sweep as sweep_mod
+from .chain import (ROW_CANCELED, ROW_DONE, ROW_FAILED,
+                    ROW_SUBMIT_ONE)
+from genie.net import TERMINAL_OK
+
+#: one address segment: letters/digits/underscore/hyphen, must not contain '.'
+_SEG = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
+
+#: top-level families of the user surface
+_FAMILIES = ("parameter", "material", "geometry", "analysis", "sweep")
+
+#: material types accepted by ``add_material`` (wire type in parentheses)
+_MAT_TYPES = {"const": "const", "lorentz": "lorentz", "library": "lorentz"}
+
+#: geometry types → wire kinds (same name on both sides)
+_GEO_TYPES = {"box", "sphere", "cylinder", "ngon_z", "polygon_z",
+              "ellipse_z", "ring_z"}
+
+#: source / monitor types → wire kinds
+_SRC_TYPES = {"plane_wave", "soft_source", "gaussian_beam"}
+_MON_TYPES = {"time", "freq", "index"}
+
+#: solver-flattened fields: user name → (section, wire field)
+_SOLVER_FIELDS = {
+    "x_range": ("domain", "x_range"), "y_range": ("domain", "y_range"),
+    "z_range": ("domain", "z_range"), "total_time": ("domain", "total_time"),
+    "cfl": ("domain", "cfl"), "boundary": ("domain", "boundary"),
+    "dx": ("mesh", "dx"), "dy": ("mesh", "dy"), "dz": ("mesh", "dz"),
+    "max_refinement": ("mesh", "max_refinement"),
+    "min_cells": ("mesh", "min_cells"),
+}
+
+#: temporal source/monitor aliases (user name → wire field)
+_TEMPORAL = {"freq_center": "freq", "freq_bw": "bandwidth"}
+#: monitor band trio (merged into the wire ``freq`` dict)
+_MON_BAND = {"freq_center": "center", "freq_bw": "bw", "freq_n": "n"}
+
+_SEVERITY = "error"
+
+
+class _Target:
+    """One resolved address: kind + the thing + how to read/write its fields."""
+
+    __slots__ = ("kind", "family", "name", "obj", "solver")
+
+    def __init__(self, kind, family, name, obj=None, solver=None):
+        self.kind = kind          # parameter|material|geometry|analysis|sweep|
+        #                           solver|source|monitor|refine
+        self.family = family      # address prefix as typed (may be None)
+        self.name = name
+        self.obj = obj
+        self.solver = solver
+
+    def addr(self):
+        if self.kind == "solver":
+            return self.name
+        if self.family:
+            return f"{self.family}.{self.name}"
+        return self.name
+
+
+class Surface:
+    """The user-facing surface bound to one model + session env."""
+
+    __slots__ = ("_model", "_env", "_state")
+
+    def __init__(self, model, env):
+        state = getattr(env, "api_state", None)
+        if state is None:
+            state = {"mat_meta": {}, "refines": {}}
+            env.api_state = state
+        object.__setattr__(self, "_model", model)
+        object.__setattr__(self, "_env", env)
+        object.__setattr__(self, "_state", state)
+
+    # state kept on the exec env (a fresh Genie is bound on every exec)
+    @property
+    def _mat_meta(self):
+        return self._state["mat_meta"]
+
+    @property
+    def _refines(self):
+        return self._state["refines"]
+
+    # ══════════════════════════════════════════════════════════════
+    # address parsing / resolution
+    # ══════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def _check_name(name, what="object"):
+        if not isinstance(name, str) or not _SEG.fullmatch(name):
+            raise ValueError(
+                f"{what} name {name!r} is invalid: letters / digits / '_' / '-' "
+                f"only, must start with a letter, no '.' (the address "
+                f"separator)")
+
+    def _family_members(self, family):
+        """family → {name: obj/tuple} (live view)."""
+        m = self._model
+        if family == "parameter":
+            return {k: ("parameter", k) for k in m.parameters}
+        if family == "material":
+            return {it.name: it for it in m._materials}
+        if family == "geometry":
+            return {it.name: it for it in m._geometry}
+        if family == "analysis":
+            return {k: {"script": (v or {}).get("script")}
+                    for k, v in self._env.post_recipes.items()}
+        if family == "sweep":
+            return {k: v for k, v in self._env.sweeps.items()}
+        return {}
+
+    def _solver_children(self, solver):
+        """solver → {name: _Target} for sources / monitors / refine zones."""
+        env = self._model.envelope(solver)
+        out = {}
+        src = getattr(env, "_source", None)
+        mon = getattr(env, "_monitor", None)
+        if src is not None:
+            for it in src:
+                out[it.name] = _Target("source", solver, it.name, it, solver)
+        if mon is not None:
+            for it in mon:
+                out[it.name] = _Target("monitor", solver, it.name, it, solver)
+        names = self._refines.get(solver, {})
+        mesh = getattr(env, "mesh", None)
+        zones = (getattr(mesh, "refine", None) or []) if mesh is not None else []
+        for nm, idx in names.items():
+            if idx < len(zones):
+                out[nm] = _Target("refine", solver, nm, zones[idx], solver)
+        return out
+
+    def _all_candidates(self):
+        """{short name: [_Target, ...]} across every family + solver child."""
+        cands: dict = {}
+
+        def push(t):
+            cands.setdefault(t.name, []).append(t)
+
+        for fam in _FAMILIES:
+            for nm, obj in self._family_members(fam).items():
+                push(_Target(fam, fam, nm, obj))
+        for sname in self._model._solvers:
+            push(_Target("solver", None, sname, self._model.envelope(sname)))
+            for nm, t in self._solver_children(sname).items():
+                push(t)
+        return cands
+
+    def _resolve(self, addr):
+        if not isinstance(addr, str) or not addr.strip():
+            raise ValueError(f"address must be a non-empty string, got {addr!r}")
+        addr = addr.strip()
+        if "." in addr:
+            fam, _, name = addr.partition(".")
+            if fam in self._model._solvers:                 # solver child
+                child = self._solver_children(fam).get(name)
+                if child is None:
+                    raise ValueError(
+                        f"address {addr!r}: {fam} has no object named {name!r} "
+                        f"(existing: {self._names_hint(self._solver_children(fam))})")
+                return child
+            if fam not in _FAMILIES:
+                raise ValueError(
+                    f"address {addr!r}: unknown family {fam!r} "
+                    f"(expected one of: {', '.join(_FAMILIES)}; or a solver name)")
+            members = self._family_members(fam)
+            if name not in members:
+                raise ValueError(
+                    f"address {addr!r}: {fam} has no object named {name!r} "
+                    f"(existing: {self._names_hint(members)})")
+            return _Target(fam, fam, name, members[name])
+        if addr in self._model._solvers:                    # the solver itself
+            return _Target("solver", None, addr, self._model.envelope(addr))
+        cands = self._all_candidates().get(addr, [])
+        if not cands:
+            raise ValueError(f"address {addr!r}: no object with that name")
+        if len(cands) > 1:
+            alts = ", ".join(t.addr() for t in cands)
+            raise ValueError(
+                f"address {addr!r} is ambiguous ({len(cands)} objects); "
+                f"use the full form: {alts}")
+        return cands[0]
+
+    @staticmethod
+    def _names_hint(members):
+        names = sorted(members)[:12]
+        more = "" if len(members) <= 12 else ", …"
+        return ", ".join(names) + more if names else "none"
+
+    # ══════════════════════════════════════════════════════════════
+    # creation verbs (identity + type only)
+    # ══════════════════════════════════════════════════════════════
+
+    def _ensure_free(self, name, family):
+        self._check_name(name)
+        if name in self._family_members(family):
+            raise ValueError(f"{family}.{name} already exists")
+
+    def add_parameter(self, name):
+        self._ensure_free(name, "parameter")
+        self._model.parameters[name] = None
+        return f"parameter.{name}"
+
+    def add_material(self, name, type, *, library=None):  # noqa: A002
+        self._ensure_free(name, "material")
+        if type not in _MAT_TYPES:
+            raise ValueError(
+                f"material type {type!r} is invalid (expected: const | lorentz "
+                f"| library)")
+        if type == "library":
+            if not isinstance(library, str) or not library:
+                raise ValueError(
+                    f"add_material(type='library') needs library=<name>, e.g. "
+                    f"library='Si'")
+            if library not in core_material.list_library_materials():
+                raise ValueError(
+                    f"library {library!r} is not in the local n-k library "
+                    f"(use genie.list_library_materials())")
+        self._model.materials._add(_MAT_TYPES[type], name)
+        if type == "library":
+            self._mat_meta[name] = {"library": library, "band": None,
+                                    "tolerance": 0.1, "max_poles": 10,
+                                    "imaginary_weight": 1.0,
+                                    "make_passive": False, "quality": None}
+        return f"material.{name}"
+
+    def add_geometry(self, name, type):  # noqa: A002
+        self._ensure_free(name, "geometry")
+        if type not in _GEO_TYPES:
+            raise ValueError(
+                f"geometry type {type!r} is invalid (expected: "
+                f"{', '.join(sorted(_GEO_TYPES))})")
+        self._model.geometry._add(type, name)
+        return f"geometry.{name}"
+
+    def add_analysis(self, name):
+        self._ensure_free(name, "analysis")
+        post.add_verb(self._env, name)          # creates the empty recipe
+        return f"analysis.{name}"
+
+    def add_sweep(self, name):
+        self._ensure_free(name, "sweep")
+        self._env.sweeps[name] = {"parameters": {}, "mode": "product",
+                                  "n_gpu": None, "on_failure": "continue"}
+        sweep_mod.sync_sweeps(self._env)
+        return f"sweep.{name}"
+
+    def add_solver(self, name, type=None):  # noqa: A002
+        type = type or name
+        self._check_name(name)
+        if type not in ("fdtd", "mode"):
+            raise ValueError(f"solver type {type!r} is invalid (expected: "
+                             f"fdtd | mode)")
+        if name != type:
+            raise ValueError(
+                f"solver address must equal its type for now ({name!r} vs "
+                f"{type!r}); use add_solver(name='{type}', type='{type}')")
+        self._model.add_solver(type)
+        return name
+
+    def solver(self, name):
+        """The solver-child creation handle (``genie.fdtd.add_source(...)``)."""
+        return _SolverChildren(self, name)
+
+    # ══════════════════════════════════════════════════════════════
+    # the single write channel
+    # ══════════════════════════════════════════════════════════════
+
+    def set_named(self, addr, **fields):
+        t = self._resolve(addr)
+        if not fields:
+            raise ValueError(f"set_named({addr!r}): no fields given")
+        writer = getattr(self, f"_set_{t.kind}")
+        writer(t, fields)
+        return t.addr()
+
+    # -- per-kind writers ------------------------------------------------
+
+    def _set_parameter(self, t, fields):
+        self._only(t, fields, {"value"})
+        val = fields["value"]
+        if not isinstance(val, (int, float, str)):
+            raise ValueError(
+                f"{t.addr()}.value: expected a number or an expression "
+                f"string, got {type(val).__name__}")
+        self._model.parameters[t.name] = val
+
+    def _set_material(self, t, fields):
+        draft = t.obj
+        meta = self._mat_meta.get(t.name)
+        allowed = set(getattr(type(draft), "model_fields", {}))
+        if meta is not None:
+            allowed |= {"library", "band", "tolerance", "max_poles",
+                        "imaginary_weight", "make_passive"}
+        self._only(t, fields, allowed)
+        for k, v in fields.items():
+            if meta is not None and k in ("library", "band", "tolerance",
+                                          "max_poles", "imaginary_weight",
+                                          "make_passive"):
+                if k == "library":
+                    if v not in core_material.list_library_materials():
+                        raise ValueError(
+                            f"{t.addr()}.library: {v!r} is not in the local "
+                            f"n-k library")
+                meta[k] = v
+                meta["quality"] = None          # invalidate the fit
+                continue
+            setattr(draft, k, v)
+
+    def _set_geometry(self, t, fields):
+        draft = t.obj
+        self._only(t, fields, set(type(draft).model_fields))
+        for k, v in fields.items():
+            if k == "material" and v is not None:
+                if v not in self._family_members("material"):
+                    raise ValueError(
+                        f"{t.addr()}.material: material {v!r} not found "
+                        f"(existing: {self._names_hint(self._family_members('material'))})")
+            setattr(draft, k, v)
+
+    def _set_solver(self, t, fields):
+        env = t.obj
+        for k, v in fields.items():
+            if "." in k:                  # nested path (GUI boundary edits)
+                node, attr = env, None
+                parts = k.split(".")
+                for part in parts[:-1]:
+                    if isinstance(node, dict):
+                        node = node.setdefault(part, {})
+                    else:
+                        node = getattr(node, part)
+                        if node is None:
+                            raise ValueError(f"{t.addr()}.{k}: no parent "
+                                             f"object {part!r}")
+                attr = parts[-1]
+                if isinstance(node, dict):
+                    node[attr] = v
+                else:
+                    setattr(node, attr, v)
+                continue
+            if k in _SOLVER_FIELDS:
+                section, wire = _SOLVER_FIELDS[k]
+                setattr(getattr(env, section), wire, v)
+                continue
+            if hasattr(env, "_FIELDS") and k in env._FIELDS:
+                setattr(env, k, v)
+                continue
+            if k in getattr(type(env.domain), "model_fields", {}):
+                setattr(env.domain, k, v)
+                continue
+            if k in getattr(type(env.mesh), "model_fields", {}):
+                setattr(env.mesh, k, v)
+                continue
+            raise ValueError(
+                f"unknown field {k!r} on solver {t.addr()!r} — fields: "
+                f"{', '.join(sorted(_SOLVER_FIELDS))} (or a dotted path)")
+
+    def _set_source(self, t, fields):
+        draft = t.obj
+        mapping = dict(_TEMPORAL)
+        allowed = set(type(draft).model_fields) | set(_TEMPORAL)
+        self._only(t, fields, allowed)
+        for k, v in fields.items():
+            if k in mapping:
+                setattr(draft, mapping[k], v)
+            else:
+                setattr(draft, k, v)
+
+    def _set_monitor(self, t, fields):
+        draft = t.obj
+        allowed = set(type(draft).model_fields) | set(_MON_BAND)
+        self._only(t, fields, allowed)
+        band = dict(getattr(draft, "freq", None) or {})
+        rest = {}
+        for k, v in fields.items():
+            if k in _MON_BAND:
+                band[_MON_BAND[k]] = v
+            else:
+                rest[k] = v
+        for k, v in rest.items():
+            setattr(draft, k, v)
+        if band:
+            draft.freq = band
+
+    def _set_refine(self, t, fields):
+        draft = t.obj
+        self._only(t, fields, set(type(draft).model_fields))
+        for k, v in fields.items():
+            setattr(draft, k, v)
+
+    def _set_analysis(self, t, fields):
+        self._only(t, fields, {"script", "call"})
+        val = fields.get("script")
+        if val is not None:
+            if not isinstance(val, str) or not val.strip():
+                raise ValueError(f"{t.addr()}.script: expected source text "
+                                 f"or a .py file path")
+            code, src = val, None
+            if "\n" not in val and val.endswith(".py"):
+                if not Path(val).is_file():
+                    raise ValueError(
+                        f"{t.addr()}.script: cannot read analysis script "
+                        f"file {val!r}")
+                code = Path(val).read_text(encoding="utf-8")
+                src = val
+            post.set_code(self._env, t.name, code, src)
+            self._state.setdefault("sources", {})[t.name] = src
+        if "call" in fields:
+            post.set_call(self._env, t.name, fields["call"])
+
+    def _set_sweep(self, t, fields):
+        self._only(t, fields, {"parameters", "mode", "n_gpu", "on_failure"})
+        rec = dict(self._env.sweeps[t.name])
+        for k, v in fields.items():
+            if k == "parameters":
+                if not isinstance(v, dict) or not v:
+                    raise ValueError(
+                        f"{t.addr()}.parameters: expected a non-empty "
+                        f"{{parameter: [values, ...]}} dict")
+                missing = [p for p in v if p not in self._model.parameters]
+                if missing:
+                    raise ValueError(
+                        f"{t.addr()}.parameters: unknown parameter(s) "
+                        f"{missing} (existing: {self._names_hint(self._family_members('parameter'))})")
+            rec[k] = v
+        # same rules as the definition path (shape / mode / 512-point cap)
+        if rec.get("parameters"):
+            rec["parameters"] = sweep_mod.validate_def(
+                rec["parameters"], mode=rec.get("mode", "product"),
+                on_failure=rec.get("on_failure", "continue"))
+        self._env.sweeps[t.name] = rec
+        sweep_mod.sync_sweeps(self._env)
+
+    @staticmethod
+    def _only(t, fields, allowed):
+        bad = [k for k in fields if k not in allowed]
+        if bad:
+            raise ValueError(
+                f"unknown field {bad[0]!r} on {t.kind} {t.addr()!r} — "
+                f"fields: {', '.join(sorted(allowed))}")
+
+    # ══════════════════════════════════════════════════════════════
+    # read channel
+    # ══════════════════════════════════════════════════════════════
+
+    def get_named(self, addr, field=None):
+        t = self._resolve(addr)
+        snap = getattr(self, f"_get_{t.kind}")(t)
+        if field is None:
+            return snap
+        if field not in snap:
+            raise ValueError(
+                f"unknown field {field!r} on {t.kind} {t.addr()!r} — "
+                f"fields: {', '.join(sorted(snap))}")
+        return snap[field]
+
+    def describe(self, addr):
+        t = self._resolve(addr)
+        snap = self.get_named(addr)
+        out = []
+        for k in sorted(snap):
+            out.append({"field": k, "type": type(snap[k]).__name__,
+                        "value": snap[k]})
+        return out
+
+    def _get_parameter(self, t):
+        return {"value": self._model.parameters[t.name]}
+
+    def _get_material(self, t):
+        snap = {k: getattr(t.obj, k) for k in type(t.obj).model_fields
+                if getattr(t.obj, k, None) is not None}
+        meta = self._mat_meta.get(t.name)
+        if meta is not None:
+            snap.update({k: meta[k] for k in
+                         ("library", "band", "tolerance", "quality")})
+        return snap
+
+    def _get_geometry(self, t):
+        return {k: getattr(t.obj, k) for k in type(t.obj).model_fields
+                if getattr(t.obj, k, None) is not None}
+
+    def _get_solver(self, t):
+        env = t.obj
+        out = {}
+        for user, (section, wire) in _SOLVER_FIELDS.items():
+            out[user] = getattr(getattr(env, section), wire)
+        return out
+
+    def _get_source(self, t):
+        snap = {k: getattr(t.obj, k) for k in type(t.obj).model_fields
+                if getattr(t.obj, k, None) is not None}
+        for user, wire in _TEMPORAL.items():
+            snap[user] = getattr(t.obj, wire)
+            snap.pop(wire, None)
+        return snap
+
+    def _get_monitor(self, t):
+        draft = t.obj
+        snap = {k: getattr(draft, k) for k in type(draft).model_fields
+                if getattr(draft, k, None) is not None}
+        band = snap.pop("freq", None) or {}
+        for user, wire in _MON_BAND.items():
+            if wire in band:
+                snap[user] = band[wire]
+        return snap
+
+    def _get_refine(self, t):
+        return {k: getattr(t.obj, k) for k in type(t.obj).model_fields
+                if getattr(t.obj, k, None) is not None}
+
+    def _get_analysis(self, t):
+        rec = self._env.post_recipes.get(t.name) or {}
+        src = self._state.get("sources", {}).get(t.name)
+        return {"script": rec.get("code") or "",
+                "call": rec.get("script") or None,
+                "source": src}
+
+    def _get_sweep(self, t):
+        return dict(self._env.sweeps[t.name])
+
+    def remove(self, addr):
+        try:
+            t = self._resolve(addr)
+        except ValueError:
+            if isinstance(addr, str) and "." in addr:
+                return addr            # idempotent for qualified addresses
+            raise
+        if t.kind == "parameter":
+            self._model.parameters.pop(t.name, None)
+        elif t.kind == "material":
+            self._model.materials.remove(t.name)
+            self._mat_meta.pop(t.name, None)
+        elif t.kind == "geometry":
+            self._model.geometry.remove(t.name)
+        elif t.kind == "analysis":
+            post.delete_verb(self._env, t.name)
+        elif t.kind == "sweep":
+            self._env.sweeps.pop(t.name, None)
+            sweep_mod.sync_sweeps(self._env)
+        elif t.kind == "solver":
+            raise ValueError(f"remove({addr!r}): solvers cannot be removed")
+        else:                                   # solver child
+            env = self._model.envelope(t.solver)
+            if t.kind == "source":
+                env.sources.remove(t.name)
+            elif t.kind == "monitor":
+                env.monitors.remove(t.name)
+            else:
+                idx = self._refines.get(t.solver, {}).get(t.name)
+                if idx is not None:
+                    del env.mesh.refine[idx]
+                    del self._refines[t.solver][t.name]
+        return t.addr()
+
+    # ══════════════════════════════════════════════════════════════
+    # material fitting
+    # ══════════════════════════════════════════════════════════════
+
+    def _source_band(self):
+        cfg = self._model.to_config()
+        lo = hi = None
+        for src in (cfg.get("config") or {}).get("source") or []:
+            try:
+                f0 = float(src.get("freq", 0.0))
+                bw = float(src.get("bandwidth", 0.0))
+            except (TypeError, ValueError):
+                continue
+            if f0 <= 0:
+                continue
+            if bw > 0:
+                lo = f0 - bw / 2.0 if lo is None else min(lo, f0 - bw / 2.0)
+                hi = f0 + bw / 2.0 if hi is None else max(hi, f0 + bw / 2.0)
+        if lo is None or lo <= 0:
+            return None
+        c0 = core_material.C0_SI
+        return (c0 / hi, c0 / lo)
+
+    def fit_material(self, name):
+        meta = self._mat_meta.get(name)
+        if meta is None:
+            raise ValueError(
+                f"fit_material({name!r}): not a library material (add it with "
+                f"add_material(type='library', library=...))")
+        band = meta.get("band") or self._source_band()
+        if band is None:
+            raise ValueError(
+                f"material.{name}: no fit window — set band=(lo, hi) in "
+                f"metres, or add a simulation source first")
+        lib = meta["library"]
+        wl, n, k = core_material.load_nk(lib)
+        fit = core_material.fit_nk(
+            wl, n, k, band=band, tolerance=meta.get("tolerance", 0.1),
+            max_poles=int(meta.get("max_poles", 10)),
+            imaginary_weight=float(meta.get("imaginary_weight", 1.0)),
+            make_passive=bool(meta.get("make_passive", False)))
+        node = core_material.assemble_nk({"xx": fit, "yy": fit, "zz": fit},
+                                         name=name)
+        draft = self._family_members("material")[name]
+        draft.eps_inf = node["eps_inf"]
+        draft.poles = node["poles"]
+        meta["band"] = band
+        meta["quality"] = {k2: (float(v) if isinstance(v, (int, float)) else v)
+                           for k2, v in fit.quality.items()}
+        return dict(meta["quality"], warnings=list(fit.warnings),
+                    n_poles=int(fit.n_poles))
+
+    def _fit_pending(self):
+        for name, meta in list(self._mat_meta.items()):
+            if meta.get("quality") is None:
+                self.fit_material(name)
+
+    # ══════════════════════════════════════════════════════════════
+    # actions
+    # ══════════════════════════════════════════════════════════════
+
+    def validate(self):
+        self._fit_pending()
+        return validate_for_ui(self._model.to_config())
+
+    def run_fdtd(self, *, n_gpu=None):
+        self._fit_pending()
+        return self._run_solver("fdtd", n_gpu=n_gpu)
+
+    def _run_solver(self, solver, *, n_gpu=None):
+        env = self._env
+        cfg = self._model.to_config(solver)
+        chain._validate([cfg])
+        jid = chain.submit(env, self._model, cfg, n_gpu=n_gpu)
+        env.emit(ipc.out(ROW_SUBMIT_ONE.format(id=jid)))
+        staged = chain.stage(env, self._model, [jid])
+        staged_digest = digest(staged)
+        outcome = chain.wait(env, [jid])[0]
+        if outcome["state"] in TERMINAL_OK:
+            env.emit(ipc.out(ROW_DONE.format(id=jid)))
+            archive.inject_result(env.doc_path, jid,
+                                  env.client().stream_result(jid),
+                                  chain.state_for(staged, self._model.last_id,
+                                                  [], staged_digest))
+            post.run_post(env, jid)
+            return jid
+        if outcome["state"] == "failed":
+            env.emit(ipc.out(ROW_FAILED.format(
+                id=jid, detail=outcome.get("error") or outcome["state"])))
+        else:                                      # killed / canceled
+            env.emit(ipc.out(ROW_CANCELED.format(id=jid)))
+        raise GenieJobError(jid, outcome["state"],
+                            error=outcome.get("error"))
+
+    def run_mode(self, *, n_gpu=None):
+        self._fit_pending()
+        return self._run_solver("mode", n_gpu=n_gpu)
+
+    def run_sweep(self, name):
+        self._fit_pending()
+        if name not in self._env.sweeps:
+            raise ValueError(f"run_sweep({name!r}): no such sweep "
+                             f"(existing: {self._names_hint(self._env.sweeps)})")
+        return sweep_mod.run_verb(self._env, self._model, name)
+
+    def run_analysis(self, name=None, call=post.UNSET):
+        return post.run_verb(self._env, name, call)
+
+    # ══════════════════════════════════════════════════════════════
+    # results
+    # ══════════════════════════════════════════════════════════════
+
+    def get_result(self, mon, field=None):
+        """Read the current result by monitor name (``solver.monitor`` is
+        accepted too). The monitor's domain is discovered from the result
+        file itself (freq / time / index), so a name the document does not
+        know about still reads correctly."""
+        want = mon.split(".", 1)[1] if "." in mon else mon
+        jid = post.resolve_result(self._env)
+        scratch = self._tmpdir()
+        try:
+            path = archive.extract_result(self._env.doc_path, scratch, jid)
+            data = core_results_open(path, jid, scratch)
+            try:
+                res = None
+                for getter in (data.get_freq, data.get_time, data.get_index):
+                    try:
+                        res = getter(want)
+                        break
+                    except (KeyError, ValueError, RuntimeError):
+                        continue
+                if res is None:
+                    raise ValueError(
+                        f"get_result({mon!r}): no monitor named {want!r} in "
+                        f"the current result (existing: "
+                        f"{', '.join(sorted(data.monitors)) or 'none'})")
+                if field is None:
+                    return res
+                return res.fields[field]
+            finally:
+                data.close()
+        finally:
+            import shutil
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def _tmpdir(self):
+        import tempfile
+        return tempfile.mkdtemp(prefix="genie-results.")
+
+    # ══════════════════════════════════════════════════════════════
+    # document commands
+    # ══════════════════════════════════════════════════════════════
+
+    def save(self, path=None):
+        env = self._env
+        target = path or env.doc_path
+        cfg = self._model.to_config()
+        archive.save(target, simconfig=cfg,
+                     state=chain.state_for(cfg, self._model.last_id, []),
+                     carry_result_from=env.doc_path,
+                     post_recipes=env.post_recipes, sweeps=env.sweeps)
+        env.doc_path = target
+        return target
+
+    def open(self, path):
+        try:
+            cfg = archive.read_config(path)
+            state = archive.read_state(path)
+        except Exception as e:                  # noqa: BLE001 — one-line error
+            raise RuntimeError(f"cannot open {str(path)!r}: {e}") from e
+        model = Model.from_config(cfg, next_id=state.get("allocator"))
+        env = self._env
+        env.model = model
+        env.doc_path = str(path)
+        try:
+            env.post_recipes = archive.read_recipes(path)
+        except Exception:                       # noqa: BLE001 — lenient restore
+            env.post_recipes = {}
+        try:
+            env.sweeps = archive.read_sweeps(path)
+        except Exception:                       # noqa: BLE001 — lenient restore
+            env.sweeps = {}
+        object.__setattr__(self, "_model", model)
+        env.api_state = {"mat_meta": {}, "refines": {}}
+        object.__setattr__(self, "_state", env.api_state)
+        env._reinject_genie()
+        return str(path)
+
+    def __repr__(self):
+        return "<genie surface>"
+
+
+class _ROItem:
+    """Read-only view of one model item (attributes are reads only — Q25)."""
+
+    __slots__ = ("_obj", "_label")
+
+    def __init__(self, obj, label):
+        object.__setattr__(self, "_obj", obj)
+        object.__setattr__(self, "_label", label)
+
+    def __getattr__(self, name):
+        return getattr(self._obj, name)
+
+    def __setattr__(self, name, value):
+        raise AttributeError(
+            f"{self._label}.{name}: attributes are read-only — use "
+            f"genie.set_named(<address>, {name}=...)")
+
+    def __repr__(self):
+        return f"<{self._label} (read-only)>"
+
+
+class _ROCollection:
+    """Read-only collection view: index/iterate only, no add_*/remove/attr writes."""
+
+    __slots__ = ("_view", "_family")
+
+    def __init__(self, view, family):
+        object.__setattr__(self, "_view", view)
+        object.__setattr__(self, "_family", family)
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            for it in self._view._items:
+                if it.id == key:
+                    return _ROItem(it, f"{self._family}[{key}]")
+            raise LookupError(f"{self._family}[{key}]: no item with id {key}")
+        for it in self._view._items:
+            if it.name == key:
+                return _ROItem(it, f"{self._family}[{key!r}]")
+        raise LookupError(f"{self._family}[{key!r}]: not found")
+
+    def __iter__(self):
+        return iter([_ROItem(it, f"{self._family}[{it.name!r}]")
+                     for it in self._view._items])
+
+    def __len__(self):
+        return len(self._view._items)
+
+    def __setattr__(self, name, value):
+        raise AttributeError(
+            f"{self._family}: read-only — use genie.add_* / genie.set_named")
+
+    def __getattr__(self, name):
+        raise AttributeError(
+            f"{self._family}.{name}: not available on the read-only view — "
+            f"use genie.add_* / genie.set_named / genie.remove")
+
+
+class _ROMapping:
+    """Read-only view over the parameters table (writes go through set_named)."""
+
+    __slots__ = ("_dict",)
+
+    def __init__(self, d):
+        object.__setattr__(self, "_dict", d)
+
+    def __getitem__(self, k):
+        return self._dict[k]
+
+    def get(self, k, default=None):
+        return self._dict.get(k, default)
+
+    def keys(self):
+        return self._dict.keys()
+
+    def items(self):
+        return self._dict.items()
+
+    def __iter__(self):
+        return iter(self._dict)
+
+    def __len__(self):
+        return len(self._dict)
+
+    def __setitem__(self, k, v):
+        raise TypeError("genie.parameters is read-only — use "
+                        "genie.set_named('parameter.<name>', value=...)")
+
+    def __setattr__(self, name, value):
+        raise AttributeError("genie.parameters is read-only")
+
+
+class _SolverChildren:
+    """``genie.fdtd.add_source / add_monitor / add_mesh_refine``."""
+
+    __slots__ = ("_s", "_name")
+
+    def __init__(self, surface, name):
+        self._s = surface
+        self._name = name
+
+    def _env(self):
+        return self._s._model.envelope(self._name)
+
+    def _free(self, name):
+        Surface._check_name(name)
+        if name in self._s._solver_children(self._name):
+            raise ValueError(f"{self._name}.{name} already exists")
+
+    def add_source(self, name, type):  # noqa: A002
+        self._free(name)
+        if type not in _SRC_TYPES:
+            raise ValueError(f"source type {type!r} is invalid (expected: "
+                             f"{', '.join(sorted(_SRC_TYPES))})")
+        self._env().sources._add(type, name)
+        return f"{self._name}.{name}"
+
+    def add_monitor(self, name, type):  # noqa: A002
+        self._free(name)
+        if type not in _MON_TYPES:
+            raise ValueError(f"monitor type {type!r} is invalid (expected: "
+                             f"{', '.join(sorted(_MON_TYPES))})")
+        self._env().monitors._add(type, name)
+        return f"{self._name}.{name}"
+
+    def add_mesh_refine(self, name):
+        self._free(name)
+        env = self._env()
+        if env.mesh.refine is None:
+            env.mesh.refine = []
+        index = len(env.mesh.refine)
+        env.mesh.refine.append(_refine_draft())
+        self._s._refines.setdefault(self._name, {})[name] = index
+        return f"{self._name}.{name}"
+
+    def __repr__(self):
+        return f"<solver {self._name} children>"
+
+
+def _refine_draft():
+    from genie.core.model.draft import DRAFT_OF
+    from genie_protocol import _wire
+    return DRAFT_OF[_wire.RefineSpec]()
+
+
+def core_results_open(path, jid, scratch):
+    from genie.core import results
+    return results.open_result(path, job_id=jid, scratch=scratch)
+
+
+def _payload(kind, **fields):
+    """Wire-shaped pole payload (a value, not a model object)."""
+    node = {"kind": kind}
+    node.update(fields)
+    return node
+
+
+def Drude(*, omega_p, gamma):
+    return _payload("drude", omega_p=omega_p, gamma=gamma)
+
+
+def Lorentz(*, omega_0, gamma, delta_eps, axis=None):
+    node = _payload("lorentz", omega_0=omega_0, gamma=gamma,
+                    delta_eps=delta_eps)
+    if axis is not None:
+        if axis not in ("x", "y", "z"):
+            raise ValueError(f"Lorentz axis {axis!r}: expected x | y | z")
+        node["axis"] = axis
+    return node
+
+
+def Rational(*, num, den, axis=None):
+    if len(num) != 3 or len(den) != 2:
+        raise ValueError("Rational(num=..., den=...): num is 3 coefficients "
+                         "(a0, a1, a2), den is 2 (b0, b1)")
+    node = _payload("rational", num=list(num), den=list(den))
+    if axis is not None:
+        node["axis"] = axis
+    return node

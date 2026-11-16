@@ -92,20 +92,14 @@ def _axis_values(seq) -> list:
     return list(seq)
 
 
-def add_verb(env, name, parameters, *, mode="product", n_gpu=None,
-             on_failure="continue"):
-    """Define a named sweep: ``{name: {parameters, mode, n_gpu,
-    on_failure}}``; same name overwrites (a definition is one line of
-    data — redefining is editing). The name must be filesystem-safe (it
-    becomes a folder name)."""
-    if not isinstance(name, str) or not _NAME_RE.match(name):
-        raise RuntimeError(
-            f"param_sweep name {name!r} is invalid — letters / digits / "
-            f"'_' / '-' only (it becomes a folder name)")
+def validate_def(parameters, *, mode="product", on_failure="continue"):
+    """Validate one sweep definition (shape / mode / 512-point rule).
+
+    Shared by the legacy ``add_verb`` and the Q25 ``set_named`` path so the
+    two entry points cannot drift."""
     if not isinstance(parameters, dict) or not parameters:
         raise TypeError(
-            "add_param_sweep(name, parameters): parameters must be a "
-            "non-empty {name: sequence} dict")
+            "parameters must be a non-empty {parameter: sequence} dict")
     if mode not in ("product", "zip"):
         raise ValueError(f"mode must be 'product' or 'zip', got {mode!r}")
     if on_failure not in _ON_FAILURE:
@@ -116,6 +110,20 @@ def add_verb(env, name, parameters, *, mode="product", n_gpu=None,
     expand.SweepSpec(                      # early axis / zip / 512 rules
         parameters=[expand.SweepAxisSpec(name=k, values=v)
                     for k, v in defs.items()], mode=mode)
+    return defs
+
+
+def add_verb(env, name, parameters, *, mode="product", n_gpu=None,
+             on_failure="continue"):
+    """Define a named sweep: ``{name: {parameters, mode, n_gpu,
+    on_failure}}``; same name overwrites (a definition is one line of
+    data — redefining is editing). The name must be filesystem-safe (it
+    becomes a folder name)."""
+    if not isinstance(name, str) or not _NAME_RE.match(name):
+        raise RuntimeError(
+            f"param_sweep name {name!r} is invalid — letters / digits / "
+            f"'_' / '-' only (it becomes a folder name)")
+    defs = validate_def(parameters, mode=mode, on_failure=on_failure)
     env.sweeps[name] = {"parameters": defs,
                         "mode": mode, "n_gpu": n_gpu,
                         "on_failure": on_failure}
@@ -228,6 +236,14 @@ class WorkerSweep(Sweep):
     def __init__(self, env, dir):
         super().__init__(dir)
         self._env = env
+
+    def run_analysis(self, name=None):
+        """Q25 name for the per-point analysis rerun."""
+        return self.run_post_analyze(name)
+
+    def get_result(self, name=None):
+        """Q25 name for the swept result cube."""
+        return self.get_freq(name)
 
     def run_post_analyze(self, name=None):
         env = self._env

@@ -23,7 +23,7 @@ function genieToken() {
  * 登录成功后记录"模型属于谁"，返回**是否换了账号**。
  *
  * 规则：同账号再登录（改密码/token 过期重登）→ 保留模型；换账号 → 丢掉
- * 浏览器的"模型属于谁"记录（整份换模型走 worker 的 `f._open`，不再有
+ * 浏览器的"模型属于谁"记录（整份换模型走 worker 的 `genie.open`，不再有
  * 服务端 `model/new` 动作）。
  */
 function genieClaimUser(username) {

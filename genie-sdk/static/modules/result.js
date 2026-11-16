@@ -108,7 +108,7 @@ async function pickDefaultField(mon, job) {
     if (fields.length <= 1) return fields[0] || "Ex";
     let best = null, bestPeak = -1;
     for (const fld of fields) {
-      /* v2 连线：f.visualize(...) 的 series 事件带 peak（全量数组，不降采样） */
+      /* v2 连线：genie.visualize(...) 的 series 事件带 peak（全量数组，不降采样） */
       const d = await GenieApp.resultSeries({ mon, field: fld }).catch(() => null);
       const pk = d && d.ok ? Number(d.peak || 0) : -1;
       if (pk > bestPeak) { bestPeak = pk; best = fld; }
@@ -392,7 +392,7 @@ function renderPlotInto(view, spec) {
       : "（峰值列）";
     updHead(roleTxt);
     cv.textContent = "";
-    /* v2 连线：f.visualize(...) → 环上的 series 事件（全量数组） */
+    /* v2 连线：genie.visualize(...) → 环上的 series 事件（全量数组） */
     GenieApp.resultSeries(params)
       .then(d => {
         if (!d || !d.ok) { toast((d && d.detail) || "无数据", "warn"); return; }
@@ -464,7 +464,7 @@ function _cancelJobButton(jobId) {
   b.onclick = () => {
     b.disabled = true;
     b.textContent = "取消请求已发送…";
-    /* v2 连线层：取消 = 与 f.cancel 同一扇门（session 拦截 → /gw 直拨，
+    /* v2 连线层：取消 = 与 genie.cancel 同一扇门（session 拦截 → /gw 直拨，
      * 整批一颗；逐作业取消不公开）。 */
     GenieApp.cancel()
       .then(() => { b.textContent = "等待作业终态…"; })

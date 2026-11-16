@@ -1350,6 +1350,17 @@ class ModeConfigSpec(_StrictModel):
     #: （内核现缺省行为，零变化）——与 ``domain.n_bg`` 语义不同：一个
     #: 说"在哪个折射率附近找模"（数值），一个说"世界是什么介质"（物理）。
     n_ref: Optional[float] = Field(default=None, gt=0.0)
+    #: 两个面（2026-11-16）：计算面相对交货面（= domain）的摆放——一个
+    #: 旋转的三句话。交货面 = domain 本身（轴/位置/窗口）；计算面 = 绕
+    #: ``rotate_axis`` 转 ``rotate_angle`` 度（右手定则），旋转轴离交货面
+    #: 中心 ``rotate_radius`` 米（沿垂直于轴的横向量、正方向为正，杠杆
+    #: 不是范围）。``rotate_axis`` = 两根横向轴之一，**禁 = domain.axis**
+    #: （绕法线转是面内自转，无意义）；``rotate_angle != 0`` 时必填（不
+    #: 静默猜方向）；``|angle| < 90``（90° 时计算面含传播轴，模无通量）。
+    #: ``angle = 0``（缺省）= 无旋转，三者为规范自由度——存量载荷不变。
+    rotate_axis: Optional[str] = None
+    rotate_angle: float = 0.0
+    rotate_radius: float = 0.0
 
     @field_validator("wavelength", mode="after")
     @classmethod
@@ -1442,6 +1453,30 @@ class ModeConfigSpec(_StrictModel):
                 raise ValueError(
                     f"mesh.refine[{zi}]: all factors are 1 — the zone "
                     f"refines nothing (drop it or raise one axis >= 2)")
+        # 两个面：摆放三句话的守卫（口径 = 内核 _grid.solve_grid，响亮不猜）
+        import math as _m
+        if self.rotate_axis is not None:
+            if self.rotate_axis not in ("x", "y", "z"):
+                raise ValueError(
+                    f"rotate_axis must be one of 'x'/'y'/'z'; got "
+                    f"{self.rotate_axis!r}")
+            if self.rotate_axis == ax:
+                raise ValueError(
+                    f"rotate_axis={self.rotate_axis!r} is the propagation "
+                    f"axis (法线) — 绕它转是面内自转：面没换、横轴互搅、"
+                    f"网格碎掉；旋转轴必须是两根横向轴之一（{t1!r} 或 "
+                    f"{t2!r}）")
+        if self.rotate_angle != 0.0 and self.rotate_axis is None:
+            raise ValueError(
+                "rotate_axis is required when rotate_angle != 0 — 不静默"
+                "猜旋转方向；交货面的两根横向轴选一根")
+        if not _m.isfinite(self.rotate_angle) \
+                or not -90.0 < self.rotate_angle < 90.0:
+            raise ValueError(
+                f"rotate_angle must be finite and |angle| < 90: at 90° "
+                f"the solve plane contains the propagation axis, so a "
+                f"mode on it carries no flux; got {self.rotate_angle!r}")
+
         # boundary：键 = 横截面四缘；kind 限 pec/pmc/periodic/pml
         # （bloch 是 fdtd 的斜入射概念）；n_background 是 fdtd 侧的
         # 边界背景——mode 的背景在 domain.n_bg（一条事实一个主人）。

@@ -89,7 +89,7 @@ function addObject(kind, type) {
 
 /** Run 按钮 = 提交**当前模型**（POST /api/run）。
  *
- * M3 起这是一等的意图，不是"往终端里打一行 f.run()"：那个写法让按钮的
+ * M3 起这是一等的意图，不是"往终端里打一行 genie.run()"：那个写法让按钮的
  * 语义取决于终端命名空间里恰好有个没被换掉的 f（还要操心 f 是否已提交、
  * 终端是否在忙）。现在它提交的是模型本身，模型一个字节不动。
  * 无 cfg（没跑过脚本也没动过表单）时给指引——这是「点了没反应」的历史成因。 */
@@ -131,7 +131,7 @@ function buildToolbar() {
      * 它挂的 addObject 会塞进线格式明确拒收的 from_library 死节点。 */
     const libBtn = document.createElement("button");
     libBtn.className = "tb-btn tb-add";
-    libBtn.title = "库材料：genie.materials.add_lorentz(node=genie.mat_from_nk(名))";
+    libBtn.title = "库材料：genie.add_material(name=名, type='library', library=名)";
     libBtn.appendChild(previewEl("mat_library"));
     libBtn.appendChild(document.createTextNode("library"));
     libBtn.addEventListener("click", () => GenieApp.addLibraryMaterial());

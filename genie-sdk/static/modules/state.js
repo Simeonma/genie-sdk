@@ -6,7 +6,7 @@
  * 唯一仿真主体 = SimConfig（worker 里的 f，真 SDK + 登录 key）。
  * 三条编辑通道同汇执行层 /api/exec：①下方 Terminal 逐条指令 ②脚本
  * 编辑器「运行」整体 exec（脚本文本只是程序，运行才生效）③工具栏
- * Run = f.run()。表单/树/3D/Plot 全是 f 的只读投影：exec 后 cfg 快照
+ * Run = genie.run()。表单/树/3D/Plot 全是 f 的只读投影：exec 后 cfg 快照
  * 回流刷新全视图；表单字段级修改防抖 400ms 经 model/patch 推回 worker。
  * 脚本文本永不跟随 cfg（它是程序，不是状态）。
  *

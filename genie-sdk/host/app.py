@@ -146,20 +146,56 @@ def _coerce(ann, value):
     return value
 
 
+#: GUI collection → (address family prefix, add verb / solver)
+_ADDR_OF = {
+    "geom": ("geometry", "genie.add_geometry"),
+    "mat": ("material", "genie.add_material"),
+    "src": ("fdtd", "genie.fdtd.add_source"),
+    "mon": ("fdtd", "genie.fdtd.add_monitor"),
+}
+
+
+def _addr_of(coll: str, name) -> str:
+    """collection + name → the Q25 address string."""
+    if coll in ("domain", "mesh"):
+        return "fdtd"
+    fam = _ADDR_OF[coll][0]
+    if fam == "fdtd":
+        return f"fdtd.{name}" if name else "fdtd"
+    return f"{fam}.{name}" if name else fam
+
+
+def _solver_field(field: str) -> str:
+    """domain./mesh. GUI paths → the solver-flattened field / nested path."""
+    for head in ("domain.", "mesh."):
+        if field.startswith(head):
+            return field[len(head):]
+    return field
+
+
 def form_delta(intent: dict) -> str:
-    """Browser thin intent → a one-line Python delta (the only public surface)."""
+    """Browser thin intent → one line of the Q25 API (set_named)."""
     coll = intent.get("collection")
     field = intent.get("field")
     if coll not in _F_ATTR or not isinstance(field, str) \
-            or not field.isidentifier():
+            or not field.isidentifier() and "." not in field:
         raise ValueError(f"bad form intent: {intent!r}")
-    spec = _resolve_spec(coll, intent.get("kind"))
-    if field not in spec.model_fields:
-        raise ValueError(f"unknown field {field!r} on {coll}")
-    value = _coerce(spec.model_fields[field].annotation, intent.get("value"))
-    if intent.get("id") is None:
-        return f"{_F_PREFIX[coll]}.{field} = {value!r}"
-    return f"{_F_PREFIX[coll]}[{int(intent['id'])}].{field} = {value!r}"
+    if coll in ("domain", "mesh"):
+        field = _solver_field(field)
+        spec = None
+    else:
+        spec = _resolve_spec(coll, intent.get("kind"))
+        if "." not in field and field not in spec.model_fields:
+            raise ValueError(f"unknown field {field!r} on {coll}")
+    value = _coerce(spec.model_fields[field].annotation, intent.get("value")) \
+        if spec is not None and "." not in field else intent.get("value")
+    name = intent.get("name")
+    if intent.get("id") is not None and not name:
+        raise ValueError("form intent needs the item name (address-based API)")
+    addr = _addr_of(coll, name)
+    if "." in field:
+        return (f"genie.set_named({addr!r}, **{{{field!r}: {value!r}}})")
+    return f"genie.set_named({addr!r}, {field}={value!r})"
 
 
 def _is_union(origin) -> bool:
@@ -246,21 +282,25 @@ _MAT_ADD_KINDS = ("const", "lorentz")
 
 
 def form_intent(intent: dict) -> str:
-    """A form intent → one line of Python. Ops: ``param`` (parameters
-    table), ``add`` (address-only shell, Q1.4), ``remove`` (by id), and the
-    default ``set`` (one field assignment — delegated to form_delta)."""
+    """A form intent → one line of Python. Ops: ``param`` (parameter
+    object), ``add`` (identity + type only), ``remove`` (by name), and the
+    default ``set`` (delegated to form_delta)."""
     op = intent.get("op") or "set"
     if op == "param":
-        # 参数表：genie.parameters[<name>] = value / 删除（value=null 或 remove）
         name = intent.get("name")
         if not isinstance(name, str) or not name.isidentifier():
             raise ValueError(f"bad parameter name: {name!r}")
         if intent.get("remove") or intent.get("value") is None:
-            return f"genie.parameters.pop({name!r}, None)"
-        return f"genie.parameters[{name!r}] = {intent.get('value')!r}"
+            return f"genie.remove(\"parameter.{name}\")"
+        call = (f"genie.set_named(\"parameter.{name}\", "
+                f"value={intent.get('value')!r})")
+        if intent.get("add"):
+            return f"genie.add_parameter(name={name!r})\n{call}"
+        return call
     coll = intent.get("collection")
     if coll not in _F_ATTR:
         raise ValueError(f"bad form intent: {intent!r}")
+    name = intent.get("name")
     if op == "add":
         kind = intent.get("kind")
         if not isinstance(kind, str) or not kind.isidentifier():
@@ -269,19 +309,18 @@ def form_intent(intent: dict) -> str:
             if kind not in _MAT_ADD_KINDS:
                 raise ValueError(f"materials cannot add {kind!r} "
                                  f"(use the library flow)")
+        elif coll in ("geom", "src", "mon"):
+            _resolve_spec(coll, kind)
         else:
-            _resolve_spec(coll, kind)                        # unknown kind → ValueError
-        name = intent.get("name")
-        if name is None:
-            return f"{_F_PREFIX[coll]}.add_{kind}()"
+            raise ValueError(f"cannot add into {coll!r}")
         if not isinstance(name, str) or not name:
-            raise ValueError(f"bad add name: {name!r}")
-        return f"{_F_PREFIX[coll]}.add_{kind}({name!r})"
+            raise ValueError("add needs a name (identity + type only)")
+        verb = _ADDR_OF[coll][1]
+        return f"{verb}(name={name!r}, type={kind!r})"
     if op == "remove":
-        iid = intent.get("id")
-        if iid is None:
-            raise ValueError("remove needs an item id")
-        return f"{_F_PREFIX[coll]}.remove({int(iid)})"
+        if not isinstance(name, str) or not name:
+            raise ValueError("remove needs the item name")
+        return f"genie.remove({_addr_of(coll, name)!r})"
     return form_delta(intent)
 
 

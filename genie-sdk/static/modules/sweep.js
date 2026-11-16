@@ -6,7 +6,7 @@
  * 各轴点数之积。参数页本身保持"单次仿真的单值表"，不做内联扫参。
  *
  * 数据链（零新概念）：
- *   Run  → POST /api/sweep → worker `f.sweep(axes).wait()`（与终端同一条
+ *   Run  → POST /api/sweep → worker `genie.sweep(axes).wait()`（与终端同一条
  *          原语）；进度吃既有 `sweep-progress` 事件（term.js 转喂
  *          __sweepProgress，本页在它旁边再吃一份）。
  *   Plot → POST /api/sweep/plot → worker 把最近一次扫描的**合并结果**
@@ -44,7 +44,7 @@ function _sweepLab(text, cls) {
   return el;
 }
 
-/* 轴 → f.sweep 的轴规格；不完整 → null（页面本地先拦，错误远离原因） */
+/* 轴 → genie.sweep 的轴规格；不完整 → null（页面本地先拦，错误远离原因） */
 function sweepAxisPayload(a) {
   if (!a || !a.name) return null;
   if (a.mode === "values") {

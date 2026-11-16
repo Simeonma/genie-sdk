@@ -8,6 +8,9 @@ REFERENCES: |
     <a href="https://doi.org/10.1103/PhysRevB.27.985"><i>Phys. Rev. B</i> <b>27</b>, 985-1009 (1983)</a>
 COMMENTS: |
     Crysal orientation: <100>; Undoped; Room temperature
+# imported from the refractiveindex.info database (CC0 1.0):
+#   main/InP/nk/Aspnes.yml  [Aspnes and Studna 1983: n,k 0.21–0.83 µm]
+# via tools/import_rii.py (curated import)
 DATA:
   - type: tabulated nk
     data: |

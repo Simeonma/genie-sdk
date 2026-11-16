@@ -38,7 +38,7 @@ UNSET = object()
 #: collections / document commands / post verbs) is refused outright.
 #: ``f`` is refused entirely — the handle was renamed (Q15) and any
 #: surviving ``f`` reference is a stale pre-rename recipe.
-_POST_GENIE_OK = ("results", "get_time", "get_freq", "get_index")
+_POST_GENIE_OK = ("results", "get_result")
 
 
 def resolve_result(env) -> str:
@@ -137,6 +137,27 @@ def add_verb(env, name):
             f"post_analyze {name!r} already exists — "
             f"update_post_analyze to change its code")
     env.post_recipes[name] = {"code": "", "script": ""}
+    sync_recipes(env)
+
+
+def set_call(env, name, call):
+    """Q25: store the call expression of an analysis recipe (gated)."""
+    if name not in env.post_recipes:
+        raise RuntimeError(f"analysis {name!r} does not exist — add it first")
+    gate_recipe(call, f"analysis {name!r} call")
+    env.post_recipes[name]["script"] = call
+    sync_recipes(env)
+
+
+def set_code(env, name, code, source=None):
+    """Q25 surface: write an analysis recipe's code **with the same
+    whitelist gate** as ``update_verb`` (inline source text or an imported
+    file's text)."""
+    if name not in env.post_recipes:
+        raise RuntimeError(
+            f"analysis {name!r} does not exist — add it first")
+    gate_recipe(code, f"analysis {name!r}")
+    env.post_recipes[name]["code"] = code      # "script" is the CALL line
     sync_recipes(env)
     return None
 

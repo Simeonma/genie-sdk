@@ -3,7 +3,7 @@
  * 经典 script 按序加载，跨模块引用为运行期全局查找。 */
 /* ══ Terminal（terminal 战役）：worker 命令面 ═══════════════════
  * 三条命令腿同汇 /api/exec：①输入行逐条指令 ②脚本「运行」整体 exec
- * ③工具栏 Run = f.run()。输出唯一滚在这里；cfg 快照驱动
+ * ③工具栏 Run = genie.run()。输出唯一滚在这里；cfg 快照驱动
  * 表单/树/3D 刷新。SDK/agent 与 terminal 同一执行层（一步到位）。 */
 let termBusy = false;
 let termPollTimer = null;
@@ -82,7 +82,7 @@ const SessionSync = {
         continue;
       }
       if (kind === "plot" && l.data) {
-        /* G148 腿 A：worker 内 f.visualize(mon, field) → Plot 面板自动
+        /* G148 腿 A：worker 内 genie.visualize(mon, field) → Plot 面板自动
          * 开卡（job_id 用实例自己的——外部注入腿带自己的 id）。 */
         if (typeof addPlot === "function")
           addPlot(l.data.mon, l.data.field, l.data.job_id);
@@ -252,7 +252,7 @@ function termAppend(text, cls) {
  * runScript()     = 脚本运行（mode=build：构造新模型，成功才替换）
  * runModel()      = 提交当前模型（POST /api/run：**不改模型**）
  *
- * 以前工具栏 Run 是 `termExec("f.run()")`——把一个按钮的意图写成另一
+ * 以前工具栏 Run 是 `termExec("genie.run()")`——把一个按钮的意图写成另一
  * 个界面里的文本，于是它依赖"命名空间里恰好有个没被换掉的 f"。现在
  * 它是一个独立的意图，走自己的端点。 */
 async function _postJSON(path, body) {
@@ -468,7 +468,7 @@ setInterval(async () => {
  * stopPropagation：dock 点击有聚焦逻辑，点停止钮不把焦点抢回输入行。 */
 $("term-stop").addEventListener("click", (e) => {
   e.stopPropagation();
-  GenieApp.cancel().catch(() => {});   /* 取消在飞作业（f.cancel 同门） */
+  GenieApp.cancel().catch(() => {});   /* 取消在飞作业（genie.cancel 同门） */
 });
 
 /* 重启 worker（R31 站长裁：停止治不了时的进程级兜底）：杀 worker

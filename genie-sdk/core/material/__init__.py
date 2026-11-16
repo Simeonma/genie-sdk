@@ -24,20 +24,21 @@ Public surface:
 - material_node validation = a real protocol
   (``LorentzMatSpec.model_validate``); carries no color / no id
   (that is the id issuer's business).
-- quality holds the twelve documented keys (``rms`` / ``rms_rel`` /
-  ``tolerance_met`` …); failure taxonomy: non-finite inside the fit
+- quality holds the error concept and its state: ``rms`` (weighted absolute
+  ε-RMS — the only error number), ``tolerance_met``, ``passive``,
+  ``coverage``, ``n_points``; failure taxonomy: non-finite inside the fit
   window = ValueError + a data-cleaning prescription; an empty
   window = ValueError; data quantity inside a non-empty window is
   the caller's call (one sample → constant model).
 - Error messages are always English.
-- Data files = ``genie-sdk/resources/materials/*.yml`` (37 files;
+- Data files = ``genie-sdk/resources/materials/*.yml`` (144 files;
   refractiveindex.info format, CC0) — located relative to
   ``__file__`` (the data ships inside the package, not at an
   external path); parsing semantics: tabulated DATA blocks + both
   formula 1/4 paths, bad rows skipped with a warning without
   truncating, non-finite rows dropped, a lower bound of ≥5 rows.
-- numpy only: the fitter is a hand-written vector fit — no scipy, no
-  nonlinear optimiser, no hidden dependency.
+- numpy only: Levenberg–Marquardt polish, hand-written — no scipy, no
+  hidden dependency.
 """
 from __future__ import annotations
 
@@ -51,7 +52,7 @@ import numpy as np
 from genie_protocol import _wire
 from .fit import (_TOLERANCE, C0_SI, ComponentFit, DispersionResult,
                    coverage_fraction, evaluate_dispersion, fit_adaptive,
-                   fit_error, fit_range_bounds, passivity_report,
+                   fit_range_bounds, passivity_report,
                    pole_from_node, pole_to_node, scalar_result)
 
 __all__ = ["fit_nk", "assemble_nk", "mat_from_nk", "load_nk",
@@ -445,22 +446,16 @@ class NKFit:
     def summary(self) -> str:
         """One line: band · poles · ε-RMS · passive · coverage.
 
-        The single error number is the **weighted ε RMS relative to the data
-        norm** — exactly what the order search minimises (Lumerical's
-        ``PoleFit`` yardstick). ``rel_err_n`` / ``rel_err_k`` stay in
-        ``quality`` as diagnostics only: they are re-derived from sqrt(eps)
-        after the fit and never enter the objective, so quoting them as "the
-        fit error" misleads (a metal can show 0.2% in n and 24% in k while
-        the ε residual is unchanged).
+        The single error number is the **weighted absolute ε-RMS** — the
+        quantity the order search minimises and the quantity a user's
+        ``tolerance`` compares against (站长拍 2026-11-13: one error concept
+        everywhere — no relative percentage, no n/k error split).
         """
         q = self.quality
         state = "passive" if q.get("passive") else "NOT passive"
-        rms_rel = q.get("rms_rel")
-        if rms_rel is None:
-            rms_rel = q.get("rms", 0.0)
         return (f"{self.band[0] * 1e9:.0f}-{self.band[1] * 1e9:.0f}nm | "
                 f"{self.n_poles} pole(s) | "
-                f"rms {100.0 * rms_rel:.3g}% | {state} | "
+                f"ε-RMS {q['rms']:.3g} | {state} | "
                 f"coverage {q['coverage']:.0%}")
 
     def curve(self, wl=None):
@@ -525,9 +520,9 @@ def fit_nk(wl, n, k, band=None, max_poles=10, imaginary_weight=1.0, tolerance=0.
     -------
     NKFit
         ``band`` / ``n_poles`` / ``quality`` / ``warnings`` / ``model``,
-        plus ``summary()`` and ``curve()``. ``quality['rms']`` is the
-        acceptance metric; ``rel_err_n`` / ``rel_err_k`` are diagnostics
-        only (at k≈0 their denominator makes them meaningless).
+        plus ``summary()`` and ``curve()``. ``quality['rms']`` is **the**
+        error number: the weighted absolute ε-RMS (compared against
+        ``tolerance``; printed by every display surface).
 
     Raises
     ------

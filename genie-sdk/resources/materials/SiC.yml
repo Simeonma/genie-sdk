@@ -9,6 +9,9 @@ REFERENCES: |
     (Numerical data kindly provided by Juan Larruquert)
 COMMENTS: |
     Density: 2.98 g/cm<sup>3</sup>. Film deposited at room temperature.
+# imported from the refractiveindex.info database (CC0 1.0):
+#   main/SiC/nk/Larruquert.yml  [Larruquert et al. 2011: Thin film; n,k 0.006154–131.7 µm]
+# via tools/import_rii.py (curated import)
 DATA:
   - type: tabulated nk
     data: |

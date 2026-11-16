@@ -85,10 +85,10 @@
     }
     if (allTerminal) {
       /* 结果视图：作业终态 = 结果就绪——记 job id 并刷 v1 的结果摘要
-       * （meta 走 f.result_meta()，Q4.5 公开读动词）。 */
+       * （meta 走 genie.result_meta()，Q4.5 公开读动词）。 */
       if (ids[0]) window.__lastJobId = ids[0];
       if (typeof refreshResultChip === "function") refreshResultChip();
-      /* Q4.5：结果成员在 .gensim 里；曲线走 f.visualize（Visualize 页签）。 */
+      /* Q4.5：结果成员在 .gensim 里；曲线走 genie.visualize（Visualize 页签）。 */
       const chip = document.getElementById("result-chip");
       if (chip && !window.__resultStatus) {
         chip.classList.remove("hidden");
@@ -109,7 +109,7 @@
   }
 
   /* ── 结果视图请求桥：GUI 发一句 f 命令，等环里对应的结构化事件 ──────
-   * f.result_meta() → out(kind="meta")；f.visualize(...) → out(kind="series")。
+   * genie.result_meta() → out(kind="meta")；genie.visualize(...) → out(kind="series")。
    * 同一时刻只挂一个请求（读动词本就走 worker 的 exec 通道，串行）。 */
   let _pending = null;                            // {kind, match, resolve, reject, timer}
   function _awaitEvent(kind, match, timeoutMs) {
@@ -132,10 +132,18 @@
 
   function _py(v) { return JSON.stringify(v); }   // JSON literals are valid Python
 
-  async function resultMeta() {
-    const wait = _awaitEvent("meta", null);
+  async function resultMeta(opts) {
+    /* opts.probe = 首屏探测：档里可能还没有结果，worker 的
+     * 「no results」是预期零态、不是错误（动词语义由 test_plot 锁死：
+     * 用户脚本里它就该响亮报错）。探测在脚本层 try/except 掉，
+     * 终端不落红行；超时也收紧到 2.5s（无结果时不会再有 meta 事件）。 */
+    const probe = !!(opts && opts.probe);
+    const wait = _awaitEvent("meta", null, probe ? 2500 : undefined);
+    const code = probe
+      ? "try:\n    genie.result_meta()\nexcept RuntimeError:\n    pass"
+      : "genie.result_meta()";
     try {
-      await exec("f.result_meta()", { fresh: false, echo: false });
+      await exec(code, { fresh: false, echo: false });
     } catch (e) {
       if (_pending) { clearTimeout(_pending.timer); _pending = null; }
       throw e;
@@ -145,7 +153,7 @@
 
   async function resultSeries(q) {
     q = q || {};
-    let code = "f.visualize(" + _py(String(q.mon || ""));
+    let code = "genie.visualize(" + _py(String(q.mon || ""));
     if (q.field) code += ", field=" + _py(String(q.field));
     if (Array.isArray(q.axes) && q.axes.length) code += ", axes=" + _py(q.axes);
     if (q.slices && Object.keys(q.slices).length) code += ", slices=" + _py(q.slices);
@@ -272,7 +280,7 @@
   }
 
   function runModel() {
-    exec("genie.fdtd.run()", { fresh: false, echo: true }).catch((e) => {
+    exec("genie.run_fdtd()", { fresh: false, echo: true }).catch((e) => {
       if (typeof termAppend === "function") termAppend("✗ " + e.message + "\n", "term-err");
     });
   }
@@ -304,7 +312,7 @@
   /* ── 材料库：两段式（选材料 → 拟合预览窗口）────────────────────
    * 第一段只挑材料；第二段给三个参数（波长窗口 / 极点上限 / 强制无源）
    * 并把**原始数据点**与**拟合曲线**画出来。拟合跑在 worker 里
-   * （f.fit_preview → out(kind="matfit")，只读、不碰模型）；"加入材料"
+   * （genie.fit_preview → out(kind="matfit")，只读、不碰模型）；"加入材料"
    * 仍走今天那条 mat_from_nk + add_lorentz，不新增落模路径。 */
   const GM_CSS = `
   .gm-bd{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;
@@ -401,7 +409,7 @@
 
   async function fitPreview(name, win, poles, passive, tol) {
     const wait = _awaitEvent("matfit", (d) => !d || d.name === name, 120000);
-    let code = "genie.fit_preview(" + JSON.stringify(name);
+    let code = "genie._fit_preview(" + JSON.stringify(name);
     const m = /^\s*(\d+(?:\.\d+)?)\s*[-~,，]\s*(\d+(?:\.\d+)?)\s*$/.exec(win || "");
     if (m) code += ", band=(" + (parseFloat(m[1]) * 1e-9) + ", " + (parseFloat(m[2]) * 1e-9) + ")";
     if (/^\s*\d+\s*$/.test(poles || "")) code += ", max_poles=" + parseInt(poles, 10);
@@ -460,13 +468,6 @@
         const line = document.createElement("div");
         line.textContent = d.summary;
         meta.appendChild(line);
-        if (d.quality && d.quality.rms !== undefined) {
-          const abs = document.createElement("div");
-          abs.style.color = "#5f7183";
-          abs.textContent = "绝对 ε-RMS = " + Number(d.quality.rms).toPrecision(4) +
-            "（加权，跨材料不可比；上面的 rms% 才是可比的那个）";
-          meta.appendChild(abs);
-        }
         if (d.warnings && d.warnings.length) {
           const wl2 = document.createElement("div");
           wl2.className = "gm-warn";
@@ -486,13 +487,15 @@
       }
     });
     const apply = _gmBtn("加入材料", true, () => {
-      let parts = [JSON.stringify(name)];
+      let parts = [];
       const m = /^\s*(\d+(?:\.\d+)?)\s*[-~,，]\s*(\d+(?:\.\d+)?)\s*$/.exec(win.value || "");
       if (m) parts.push("band=(" + (parseFloat(m[1]) * 1e-9) + ", " + (parseFloat(m[2]) * 1e-9) + ")");
       if (/^\s*\d+\s*$/.test(poles.value || "")) parts.push("max_poles=" + parseInt(poles.value, 10));
       if (/^\s*\d*\.?\d+(?:[eE][-+]?\d+)?\s*$/.test(tol.value || "")) parts.push("tolerance=" + parseFloat(tol.value));
       if (passive.checked) parts.push("make_passive=True");
-      termExec("genie.materials.add_lorentz(node=genie.mat_from_nk(" + parts.join(", ") + "))");
+      termExec("genie.add_material(name=" + JSON.stringify(name) + ", type='library', library=" + JSON.stringify(name) + ")\n" +
+            "genie.set_named('material.' + " + JSON.stringify(name) + ", " + parts.join(", ") + ")\n" +
+            "genie.fit_material(" + JSON.stringify(name) + ")");
       w.close();
     });
     apply.disabled = true;
@@ -523,7 +526,7 @@
     w.btns.appendChild(_gmBtn("取消", false, w.close));
     w.btns.appendChild(go);
     const wait = _awaitEvent("matlib", null, 20000);
-    exec("genie.material_library()", { fresh: false, echo: false })
+    exec("genie._material_library()", { fresh: false, echo: false })
       .then(() => wait)
       .then((d) => {
         const names = (d && d.materials) || [];
@@ -620,10 +623,12 @@
         /* 参数表 → genie.parameters[<k>] = v / pop(k)（扫参轴引用的就是这些键） */
         if (parts.length === 2 && parts[1]) {
           if (op.value === null) intents.push({ op: "param", name: parts[1], remove: true });
-          else intents.push({ op: "param", name: parts[1], value: op.value });
+          else intents.push({ op: "param", name: parts[1], value: op.value,
+                              add: !(cfg && cfg.parameters && parts[1] in cfg.parameters) });
         } else if (parts.length === 1 && op.value && typeof op.value === "object") {
           for (const k of Object.keys(op.value)) {
-            intents.push({ op: "param", name: k, value: op.value[k] });
+            intents.push({ op: "param", name: k, value: op.value[k],
+                           add: !(cfg && cfg.parameters && k in cfg.parameters) });
           }
         }
         continue;
@@ -642,7 +647,7 @@
         const oldByName = new Map(oldArr.filter(x => x && x.name).map(x => [x.name, x]));
         const newByName = new Map(newArr.filter(x => x && x.name).map(x => [x.name, x]));
         for (const [name, it] of oldByName) {
-          if (!newByName.has(name)) intents.push({ op: "remove", collection: coll, id: it.id });
+          if (!newByName.has(name)) intents.push({ op: "remove", collection: coll, id: it.id, name });
         }
         for (const [name, it] of newByName) {
           const old = oldByName.get(name);
@@ -650,7 +655,7 @@
           for (const k of Object.keys(it)) {
             if (k === "type" || k === "name" || k === "id") continue;
             if (JSON.stringify(old[k]) !== JSON.stringify(it[k])) {
-              intents.push({ collection: coll, id: old.id, field: k, value: it[k] });
+              intents.push({ collection: coll, id: old.id, name: old.name, field: k, value: it[k] });
             }
           }
         }
@@ -662,7 +667,7 @@
       if (!local) continue;
       const server = serverItems(head).find(x => x.name === local.name);
       if (!server || server.id === undefined) continue;
-      intents.push({ collection: coll, id: server.id,
+      intents.push({ collection: coll, id: server.id, name: local.name,
                      field: parts.slice(2).join("."), value: op.value });
     }
     return intents;
@@ -706,7 +711,7 @@
     setTimeout(() => { pollOnce().catch(() => {}); }, 0);
     /* 结果就绪探测：档里已有结果时，让结果面板/Plot 不必先 Run 一次 */
     setTimeout(() => {
-      resultMeta().then((m) => {
+      resultMeta({ probe: true }).then((m) => {
         if (!m || !m.ok) return;
         window.__lastJobId = m.job_id || window.__lastJobId;
         window.__resultStatus = m;

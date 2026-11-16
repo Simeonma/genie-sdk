@@ -5,26 +5,25 @@ One scalar n-k component → a **rational pole model**
     eps(s) = eps_inf + Σ_k [ r_k/(s − p_k) + conj(r_k)/(s − conj(p_k)) ]
     s = −jω        (e^{−iωt}; the same convention as ωp²/(ω0² − ω² − jγω))
 
-The fitter is **vector fitting with pole relocation** (Gustavsen–Semlyen;
-no SK reweighting — that broke convergence here). Every pole carries a
-complex residue, so "zeros" are not a separate stage — they *are* the
-residue phase. Lorentz and Drude are then the special case (a single real
+The fitter is a **Levenberg–Marquardt nonlinear least squares** over the
+rational form (Q24: the former vector-fitting path was removed entirely —
+its σ pole relocation collapsed on narrow bands).  Parameters are residues plus
+exponentiated pole coordinates (stable half plane by construction) and an
+``eps_inf = 1 + e^y`` term (ε∞ ≥ 1 hard constraint).  Every pole carries a
+complex residue; Lorentz and Drude are then the special case (a single real
 positive residue on the axis) and survive only as **wire-format
 shorthands** a user may hand-write; the fitter has no Lorentz stage (Q14).
 
-Why this algorithm: with the poles fixed the model is **linear** in the
-residues; the pole *positions* are recovered by solving another linear
-problem for the zeros of an auxiliary function σ(s) and iterating. No
-nonlinear optimiser, no scipy. Relocation is non-convex, so each order is
-restarted from randomized starting points and the best RMS wins.
-
-``vector_fit`` returns the pole set; ``fit_adaptive`` evaluates every order
-0..min(max_poles, N−1) and keeps the global argmin of the weighted RMS of
-the eps residual (``tolerance`` is the report threshold, not an early
-stop). Passivity is reported by default; ``make_passive=True`` enables
-Lumerical's gain penalty.
+Order search: ``fit_adaptive`` evaluates every order 0..min(max_poles, N−1)
+and keeps the global argmin of the weighted RMS of the eps residual
+(``tolerance`` is the report threshold, not an early stop).  Order P seeds
+from order P−1 plus one zero-residue pole, so the RMS is **monotone
+non-increasing** in the order by construction.  Passivity is reported by
+default; ``make_passive=True`` enables Lumerical's gain penalty.
 """
 from __future__ import annotations
+
+import math
 
 import numpy as np
 from dataclasses import dataclass, field
@@ -32,20 +31,12 @@ from dataclasses import dataclass, field
 #: Speed of light [m/s] — the one copy (``__init__`` imports it from here).
 C0_SI = 299792458.0
 
-#: Pole relocation is non-convex, so every order is restarted from a set of
-#: random starting points (log-uniform off-axis angle, log/lin spacing) and the
-#: best RMS is kept.  Fixed seed ⇒ reproducible on the same data.
-_VF_STARTS = 12
-_VF_SEED = 20261108
-#: Relocation runs to convergence (Δerr < 1e-12); 200 is only a termination
-#: guard for pathological cases, not a quality knob.
-_VF_MAX_ITER = 20
-_VF_EPS = 1e-6
-#: Lumerical's ε∞ floor (`0x230`, default 1.0): n-k library data always
-#: satisfies ε∞ ≥ 1, so a constant fitted below it is a fitting artefact
-#: (Ag/Cu were landing at −135 with huge cancelling residues).  Their branch
-#: drops the constant column, pins it here, and refits once (`0x238 = 0`).
+#: ε∞ floor (`0x230`, default 1.0) — **hard constraint** (站长拍 2026-11-13):
+#: ε∞ ≥ 1, enforced by parameterising ε∞ = 1 + e^y.  A constant below it is a
+#: fitting artefact (Ag/Cu were landing at −135 with huge cancelling residues).
 _EPSINF_FLOOR = 1.0
+#: Levenberg–Marquardt iteration guard (termination only, not a quality knob).
+_LM_MAX_ITER = 60
 #: Weight on the imaginary equations ("imaginary weight", `PoleFit` field 0x1f8).
 #: Lumerical's material default is 1.0 for all shipped materials (`.mdf`, 55/55).
 _W_IMAG = 1.0
@@ -154,149 +145,12 @@ def pole_to_node(a0, a1, a2, b0, b1):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Vector fitting (pole relocation)
+# Model helpers (denominator / residues / metrics)
 # ═══════════════════════════════════════════════════════════════════════════
-
-def _starting_poles(omega_lo, omega_hi, n_pairs, alpha, grid="log"):
-    """One starting-pole set: **one pole per pair** (the caller's pole count
-    *is* the pair count, since a wire pole is a second-order section), placed
-    on ``grid`` (``"log"`` or ``"lin"``) with the real part ``-alpha·ω``.
-
-    There is no Lorentz pre-fit: the starting point is a property of the
-    band.  ``_vf_starts`` samples this family because relocation is non-convex.
-    """
-    if n_pairs <= 0:
-        return []
-    lo = max(float(omega_lo), 1.0)
-    hi = max(float(omega_hi), lo * 1.000001)
-    if grid == "log":
-        w = np.exp(np.linspace(np.log(lo), np.log(hi), n_pairs))
-    else:
-        w = np.linspace(lo, hi, n_pairs)
-    return [complex(-alpha * float(wk), float(wk)) for wk in w]
-
-
-def _vf_starts(seed=_VF_SEED, n=_VF_STARTS):
-    """Randomized (but seeded ⇒ reproducible) starting points.
-
-    The old fixed six-set family was itself a restriction; relocation is
-    non-convex, so the off-axis angle is sampled log-uniformly in
-    ``[1e-3, 1]`` and the spacing is log or lin with equal probability.
-    """
-    rng = np.random.default_rng(seed)
-    return [(10.0 ** rng.uniform(-3.0, 0.0),
-             "log" if rng.random() < 0.5 else "lin")
-            for _ in range(int(n))]
-
 
 def _pair_den(s, p):
     """Denominator of one conjugate pair: s² − 2Re(p)·s + |p|²."""
     return s * s - 2.0 * p.real * s + abs(p) ** 2
-
-
-def _sigma_zeros(pairs, u, v):
-    """Zeros of ``σ(s) = 1 + Σ (u_k s + v_k)/den_k`` via state-space.
-
-    Each section is realised as ``A_k = [[0,1],[-b0,-b1]]``, ``B_k = [0,1]ᵀ``,
-    ``C_k = [v_k, u_k]``; then σ = 1 + C(sI−A)⁻¹B = det(sI−A+BC)/det(sI−A),
-    so its zeros are the eigenvalues of ``A − B·C`` (2P×2P).  This replaces the
-    monomial-polynomial expansion + ``np.roots``, which is ill-conditioned at
-    higher orders and was losing the good pole set (Au order 5/6 regressed).
-    """
-    P = len(pairs)
-    if P == 0:
-        return np.array([], dtype=complex)
-    A = np.zeros((2 * P, 2 * P))
-    B = np.zeros((2 * P, 1))
-    C = np.zeros((1, 2 * P))
-    for k, p in enumerate(pairs):
-        b0 = float(abs(p) ** 2)
-        b1 = float(-2.0 * p.real)
-        i = 2 * k
-        A[i, i + 1] = 1.0
-        A[i + 1, i] = -b0
-        A[i + 1, i + 1] = -b1
-        B[i + 1, 0] = 1.0
-        C[0, i] = float(v[k])
-        C[0, i + 1] = float(u[k])
-    return np.linalg.eigvals(A - B @ C)
-
-
-def _vf_step(s, f, pairs, w_im=_W_IMAG, with_const=True):
-    """One pole-relocation step in the **conjugate-pair basis**.
-
-    Working with pairs (rather than raw poles) makes the whole thing
-    real-coefficient by construction: the σ function is a real-rational
-    function, so its zeros come in conjugate pairs and every section is
-    realizable as s²+b1·s+b0. Model:
-
-        Σ_k (a1_k·s + a0_k)/den_k + d  ≈  f · [ 1 + Σ_k (u_k·s + v_k)/den_k ]
-
-    Zeros of the bracket are the improved poles (polynomial roots).
-    ``with_const=False`` drops the ``d`` column — used by the constrained
-    pass where the constant is pinned (``f`` is then already ``eps - d``).
-
-    ``w_im`` weights every **imaginary** equation row (Lumerical's
-    "imaginary weight" knob, default 1.0, optionally 2.0 — reverse-engineered
-    from `PoleFit`, field 0x1f8). No SK reweighting by the previous σ: that
-    was tried and *broke* convergence; Lumerical also uses the plain
-    linearised (Levy) system.
-    """
-    P = len(pairs)
-    dens = [_pair_den(s, p) for p in pairs]
-    Bs = [s / d for d in dens]
-    B1 = [1.0 / d for d in dens]
-    N = s.size
-    base = 2 * P + (1 if with_const else 0)
-    ncol = base + 2 * P
-    A = np.zeros((2 * N, ncol))
-    rhs = np.zeros(2 * N)
-    # model residues (a0 real column, a1 real column)
-    for k in range(P):
-        A[:N, 2 * k] = B1[k].real
-        A[:N, 2 * k + 1] = Bs[k].real
-        A[N:, 2 * k] = B1[k].imag
-        A[N:, 2 * k + 1] = Bs[k].imag
-    if with_const:
-        A[:N, 2 * P] = 1.0
-    # − f · σ  (σ coefficients u, v)
-    for k in range(P):
-        cu = -f * Bs[k]
-        cv = -f * B1[k]
-        A[:N, base + 2 * k] = cu.real
-        A[N:, base + 2 * k] = cu.imag
-        A[:N, base + 2 * k + 1] = cv.real
-        A[N:, base + 2 * k + 1] = cv.imag
-    rhs[:N] = f.real
-    rhs[N:] = f.imag
-    if w_im != 1.0:
-        A[N:] *= w_im
-        rhs[N:] *= w_im
-    x, *_ = np.linalg.lstsq(A, rhs, rcond=None)
-    u = x[base::2][:P]
-    v = x[base + 1::2][:P]
-    # zeros of σ(s) = 1 + Σ (u_k s + v_k)/den_k via a state-space linearisation
-    # (eig(A − B·C), 2P×2P) — numerically far better than expanding the common
-    # denominator into a monomial polynomial and calling np.roots, which loses
-    # the good poles at higher orders
-    roots = _sigma_zeros(pairs, u, v)
-    keep = [r for r in roots if r.imag > 0.0]
-    if len(keep) < P:                      # pad with the best available roots
-        rest = sorted((r for r in roots if r.imag <= 0.0),
-                      key=lambda r: -abs(r.imag))
-        keep = keep + rest[:P - len(keep)]
-    keep = keep[:P]
-    out = []
-    for r in keep:
-        re = -abs(r.real) if r.real > 0 else r.real
-        im = abs(r.imag) if r.imag != 0 else 1e-6
-        out.append(complex(re, im))
-    return out
-
-
-def _den_poly(p):
-    """(s² − 2Re(p)s + |p|²) as a polynomial, real coefficients."""
-    return np.poly1d([1.0, -2.0 * float(p.real), float(abs(p) ** 2)])
 
 
 def _residues(s, f, pairs, w_im=_W_IMAG, fixed_const=None):
@@ -372,82 +226,134 @@ def _gain_violation(eps_inf, sections, omega, f):
     return float(np.max(np.maximum(0.0, -eps.imag[lossy])))
 
 
-def vector_fit(s, f, pairs, w_im=_W_IMAG, const_floor=None):
-    """Pole relocation + residues in **normalized frequency**.
+def _norm_sections(sections, s0):
+    """Physical sections → (poles, residues) in the normalized variable."""
+    poles, res = [], []
+    for a0, a1, _a2, b0, b1 in sections:
+        b0n, b1n = b0 / (s0 * s0), b1 / s0
+        half = b1n / 2.0
+        disc = max(b0n - half * half, 0.0)
+        poles.append(complex(-half, math.sqrt(disc)))
+        res.append((a0 / (s0 * s0), a1 / s0))
+    return poles, res
 
-    1/(s−p) with s, p ~ 1e15 makes the LSQ matrix condition ~1e30 (SVD stops
-    converging), so everything is solved with s' = s/s0 and converted back
-    (poles ×s0). Returns (eps_inf, section list, weighted RMS error).
 
-    The relocation runs to ``|Δerr| < _VF_EPS``; ``_VF_MAX_ITER`` is only a
-    termination guard, and the best iterate is kept.
+def _norm_to_sections(poles, residues, s0):
+    out = []
+    for p, (a0, a1) in zip(poles, residues):
+        pp = p * s0
+        out.append((float(a0 * s0 * s0), float(a1 * s0), 0.0,
+                    float(abs(pp) ** 2), float(-2.0 * pp.real)))
+    return out
 
-    ``const_floor`` implements Lumerical's ε∞ floor (`0x230/0x238`): if the
-    fitted constant lands **below** the floor, the constant column is dropped,
-    it is pinned at the floor, and the relocation is redone — the returned
-    ``eps_inf`` is then exactly the floor. n-k library data always satisfies
-    ε∞ ≥ 1, so a fit that dives below it is a fitting artefact (Ag/Cu were
-    landing at −135), not physics.
+
+def _polish(sn, f, poles, residues, eps_inf, w_im=_W_IMAG, max_iter=None):
+    """Levenberg–Marquardt polish of one candidate (**numpy only**).
+
+    Parameters: ``eps_inf = floor + e^y`` — ε∞ ≥ 1 is a hard constraint
+    (站长拍 2026-11-13) — per-section residues ``(a0, a1)``, and pole
+    coordinates ``p = −e^lr + i·e^lw`` (stable half plane by construction).
+    Analytic Jacobian; the result is never worse than the input candidate
+    (the order search relies on that monotonicity).  Returns
+    ``(eps_inf, poles, residues, rms)``.
     """
-    s = np.asarray(s, dtype=complex)
-    f = np.asarray(f, dtype=complex)
-    s0 = float(np.exp(np.mean(np.log(np.abs(s)))))
-    sn = s / s0
-    pairs = [complex(p) / s0 for p in pairs]
-    best = None
-    prev = None
-    for _ in range(max(1, int(_VF_MAX_ITER))):
-        pairs = _vf_step(sn, f, pairs, w_im, with_const=True)
-        eps_inf, coefs = _residues(sn, f, pairs, w_im)
-        err = _weighted_rms(sn, f, eps_inf, pairs, coefs, w_im)
-        if best is None or err < best[0]:
-            best = (err, eps_inf, list(pairs), coefs)
-        if prev is not None and abs(err - prev) < _VF_EPS:
-            break                       # converged (|Δerr| < _VF_EPS)
-        prev = err
-    err, eps_inf, pairs, coefs = best
+    P = len(poles)
+    if P == 0:
+        return eps_inf, poles, residues, _weighted_rms(sn, f, eps_inf, [], [], w_im)
+    it_max = int(max_iter or _LM_MAX_ITER)
+    a0 = np.array([r[0] for r in residues], dtype=float)
+    a1 = np.array([r[1] for r in residues], dtype=float)
+    lr = np.log(np.maximum(-np.array([p.real for p in poles], dtype=float), 1e-12))
+    lw = np.log(np.maximum(np.array([p.imag for p in poles], dtype=float), 1e-12))
+    ei = max(float(eps_inf), _EPSINF_FLOOR + 1e-9)
+    y = math.log(ei - _EPSINF_FLOOR)
+    x = np.concatenate([[y], a0, a1, lr, lw])
+    denom = max(1.0, w_im)
 
-    if const_floor is not None and eps_inf < const_floor:
-        # Lumerical: drop the constant term, pin it at the floor, redo.
-        floor = float(const_floor)
-        best = None
-        prev = None
-        for _ in range(max(1, int(_VF_MAX_ITER))):
-            pairs = _vf_step(sn, f - floor, pairs, w_im, with_const=False)
-            _, coefs = _residues(sn, f, pairs, w_im, fixed_const=floor)
-            err = _weighted_rms(sn, f, floor, pairs, coefs, w_im)
-            if best is None or err < best[0]:
-                best = (err, list(pairs), coefs)
-            if prev is not None and abs(err - prev) < _VF_EPS:
+    def unpack(z):
+        yy = z[0]
+        aa0 = z[1:1 + P]
+        aa1 = z[1 + P:1 + 2 * P]
+        r2 = z[1 + 2 * P:1 + 3 * P]
+        w2 = z[1 + 3 * P:1 + 4 * P]
+        e_y = math.exp(float(np.clip(yy, -60.0, 60.0)))
+        ei_z = _EPSINF_FLOOR + e_y
+        b1 = 2.0 * np.exp(np.clip(r2, -30.0, 30.0))
+        b0 = (np.exp(np.clip(2.0 * r2, -60.0, 60.0))
+              + np.exp(np.clip(2.0 * w2, -60.0, 60.0)))
+        dens = [sn * sn + b1[k] * sn + b0[k] for k in range(P)]
+        model = np.full(sn.shape, ei_z, dtype=complex)
+        for k in range(P):
+            model += (aa0[k] + aa1[k] * sn) / dens[k]
+        return ei_z, e_y, aa0, aa1, b1, b0, dens, model
+
+    def resid(z):
+        _ei, _ey, _a0, _a1, _b1, _b0, _dens, model = unpack(z)
+        r = model - f
+        return np.concatenate([r.real / denom, r.imag * (w_im / denom)])
+
+    def jac(z):
+        # column order must match x = [y, a0_0..a0_{P-1}, a1_0.., lr_0.., lw_0..]
+        _ei, e_y, aa0, aa1, b1, b0, dens, _model = unpack(z)
+        n = sn.size
+        d_y = np.concatenate([np.full(n, e_y / denom), np.zeros(n)])
+        d_a0, d_a1, d_lr, d_lw = [], [], [], []
+        for k in range(P):
+            sec = (aa0[k] + aa1[k] * sn) / dens[k]
+            d_a0.append(np.concatenate([(1.0 / dens[k]).real / denom,
+                                        (1.0 / dens[k]).imag * (w_im / denom)]))
+            d_a1.append(np.concatenate([(sn / dens[k]).real / denom,
+                                        (sn / dens[k]).imag * (w_im / denom)]))
+            e_lr = b1[k] / 2.0
+            g_lr = -(sec / dens[k]) * (2.0 * e_lr * sn + 2.0 * e_lr * e_lr)
+            g_lw = -(sec / dens[k]) * (2.0 * (b0[k] - e_lr * e_lr))
+            d_lr.append(np.concatenate([g_lr.real / denom,
+                                        g_lr.imag * (w_im / denom)]))
+            d_lw.append(np.concatenate([g_lw.real / denom,
+                                        g_lw.imag * (w_im / denom)]))
+        return np.vstack([d_y] + d_a0 + d_a1 + d_lr + d_lw)
+
+    p0 = [complex(-math.exp(lr[k]), math.exp(lw[k])) for k in range(P)]
+    res0 = list(zip(a0.tolist(), a1.tolist()))
+    best_rms = _weighted_rms(sn, f, ei, p0, res0, w_im)
+    best_x = x.copy()
+    lam = 1e-3
+    r = resid(x)
+    cost = float(r @ r)
+    for _ in range(it_max):
+        J = jac(x).T
+        JtJ = J.T @ J
+        g = J.T @ r
+        try:
+            delta = np.linalg.solve(JtJ + lam * np.diag(np.diag(JtJ) + 1e-30),
+                                    -g)
+        except np.linalg.LinAlgError:
+            break
+        x_new = x + delta
+        r_new = resid(x_new)
+        cost_new = float(r_new @ r_new)
+        if np.isfinite(cost_new) and cost_new < cost:
+            x, r, cost = x_new, r_new, cost_new
+            lam = max(lam / 3.0, 1e-12)
+            if float(delta @ delta) < 1e-24:
                 break
-            prev = err
-        if best is None:
-            raise ValueError("eps_inf floor refit produced no iterate")
-        err, pairs, coefs = best
-        eps_inf = floor
-
-    sections = []
-    for p, (a0, a1) in zip(pairs, coefs):
-        p = p * s0
-        sections.append((float(a0 * s0 * s0), float(a1 * s0), 0.0,
-                         float(abs(p) ** 2), float(-2.0 * p.real)))
-    return eps_inf, sections, err
+        else:
+            lam = min(lam * 4.0, 1e12)
+            if lam >= 1e12:
+                break
+    ei_f, _ey, aa0, aa1, _b1, _b0, _dens, _model = unpack(x)
+    pp = [complex(-math.exp(np.clip(x[1 + 2 * P + k], -30, 30)),
+                  math.exp(np.clip(x[1 + 3 * P + k], -30, 30))) for k in range(P)]
+    res = list(zip(aa0.tolist(), aa1.tolist()))
+    rms = _weighted_rms(sn, f, ei_f, pp, res, w_im)
+    if not np.isfinite(rms) or rms > best_rms:
+        return eps_inf, poles, residues, best_rms
+    return float(ei_f), pp, res, float(rms)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Metrics + adaptive pole count
+# Adaptive pole count
 # ═══════════════════════════════════════════════════════════════════════════
-
-def fit_error(eps_inf, poles, wavelengths, n, k):
-    """max(rel_err_n, rel_err_k) over the supplied samples — the user's metric."""
-    omega = 2.0 * np.pi * C0_SI / np.asarray(wavelengths, dtype=float)
-    d = evaluate_dispersion(eps_inf, poles, omega)
-    scale_n = np.maximum(np.abs(np.asarray(n, dtype=float)), 1e-12)
-    scale_k = np.maximum(np.abs(np.asarray(k, dtype=float)), 1e-3)
-    rn = float(np.max(np.abs(d.n - n) / scale_n))
-    rk = float(np.max(np.abs(d.k - k) / scale_k))
-    return max(rn, rk)
-
 
 def fit_adaptive(wavelengths, n, k, *, tolerance=_TOLERANCE,
                  max_poles=_MAX_COEFFS, w_im=_W_IMAG,
@@ -461,17 +367,16 @@ def fit_adaptive(wavelengths, n, k, *, tolerance=_TOLERANCE,
       (slot[5]), with the ``w_im`` ("imaginary weight") applied to the
       imaginary residual — and with the passivity penalty on top when
       ``make_passive`` (gain > 1e-14 → error ×1e6);
-    - every order is restarted from ``_VF_STARTS`` randomized starting points
-      and the best RMS is kept — pole relocation is non-convex, so a single
-      starting point can land in a local minimum (Ag 16% vs 0.8%);
+    - every order is a Levenberg–Marquardt polish start: order 1 from a
+      deterministic grid of pole positions, higher orders from the previous
+      order's solution plus one new pole with zero residue;
     - **all** orders up to the ceiling are evaluated and the global argmin is
       kept (``tolerance`` is the acceptance/report threshold, not an early
       stop);
-    - relocation runs to convergence; there is no pole clamp.
+    - poles stay in the stable half plane by construction.
 
-    ``eps_inf`` is a free real constant: there is **no positivity constraint**
-    anywhere in the pipeline (a negative constant is a perfectly ordinary
-    rational model, and metals routinely need one).
+    ``eps_inf`` is constrained to **≥ 1** (站长拍 2026-11-13): a constant
+    below the floor is a fitting artefact, not a physical dispersion term.
     """
     if not (tolerance > 0):
         raise ValueError(f"tolerance must be > 0, got {tolerance!r}")
@@ -486,38 +391,65 @@ def fit_adaptive(wavelengths, n, k, *, tolerance=_TOLERANCE,
     w_lo, w_hi = float(np.min(omega)), float(np.max(omega))
     # 2N complex equations must cover 2P+1 unknowns → P ≤ N−1
     max_order = int(min(int(max_poles), max(0, wl.size - 1)))
-    starts = _vf_starts()
 
     def _search():
-        """All orders 0..max_order; keep the global argmin."""
+        """All orders 0..max_order; keep the global argmin.
+
+        Pure LM pipeline (VF retired 2026-11-13): order 1 is seeded from a
+        small deterministic grid of pole positions; every higher order adds
+        one pole to the previous order's solution with **zero residue**, so
+        its starting RMS equals the previous best and the LM polish never
+        increases the cost ⇒ ``best_rms(order) <= best_rms(order-1)`` holds
+        by construction.  ε∞ ≥ 1 is enforced inside the polish.
+        """
         best = None
+        prev_pack = None                  # (eps_inf, sections) of the previous order
 
         # order 0: a constant model — exact for a non-dispersive medium and
-        # the smallest candidate.  The constant may be negative.
+        # the smallest candidate.  The constant may be negative (it is the
+        # windowed-fit constant, not a physical ε∞; the pole model still
+        # carries ε∞ ≥ 1).
         eps0 = float(np.mean(f.real))
         if np.isfinite(eps0):
             rms0 = _weighted_rms(s, f, eps0, [], [], w_im)
             best = ComponentFit(eps_inf=eps0, poles=[], converged=True,
                                 error=rms0, rms=rms0, poles_tried=0,
                                 target_met=rms0 < tolerance)
+            prev_pack = (eps0, [])
+
+        s0 = float(np.exp(np.mean(np.log(np.abs(s)))))
+        sn = s / s0
+        rng = np.random.default_rng(20261113)   # fixed seed ⇒ reproducible
 
         for order in range(1, max_order + 1):
-            # relocation is non-convex — randomized (seeded) restarts per order
-            best_order = None
-            for alpha, grid in starts:
-                poles0 = _starting_poles(w_lo, w_hi, order, alpha, grid)
-                try:
-                    eps_inf, sections, rms = vector_fit(s, f, poles0, w_im,
-                                                        const_floor=_EPSINF_FLOOR)
-                except (ValueError, np.linalg.LinAlgError):
-                    continue
-                if not np.isfinite(eps_inf) or not np.all(np.isfinite(sections)):
-                    continue
-                if best_order is None or rms < best_order[2]:
-                    best_order = (eps_inf, sections, rms)
-            if best_order is None:
+            seeds = []                    # (eps_inf, poles_norm, residues_norm)
+            # 1) deterministic-random multi-start: pole positions log-uniform in
+            #    [band/3, band*3], off-axis angle 0.05–0.6 (residues from LSQ)
+            lo_n, hi_n = w_lo / s0, w_hi / s0
+            for _ in range(4):
+                ws = np.exp(rng.uniform(np.log(lo_n / 3.0),
+                                        np.log(hi_n * 3.0), order))
+                pp = [complex(-rng.uniform(0.05, 0.6) * wk, wk) for wk in ws]
+                ei0, res0 = _residues(sn, f, pp, w_im)
+                seeds.append((max(ei0, _EPSINF_FLOOR + 1e-9), pp, res0))
+            # 2) incremental: the previous order's solution + one new pole
+            if prev_pack is not None:
+                ei_p, secs_p = prev_pack
+                poles_n, res_n = _norm_sections(secs_p, s0)
+                for alpha in (0.05, 0.3):
+                    w_new = math.sqrt(lo_n * hi_n)
+                    pp = poles_n + [complex(-alpha * w_new, w_new)]
+                    rr = res_n + [(0.0, 0.0)]
+                    seeds.append((max(ei_p, _EPSINF_FLOOR + 1e-9), pp, rr))
+            if not seeds:
                 continue
-            eps_inf, sections, rms = best_order
+            polished = []
+            for ei0, pp0, rr0 in seeds:
+                ei1, pp1, rr1, rms1 = _polish(sn, f, pp0, rr0, ei0, w_im)
+                polished.append((ei1, _norm_to_sections(pp1, rr1, s0),
+                                 rms1))
+            eps_inf, sections, rms = min(polished, key=lambda p: p[2])
+            prev_pack = (eps_inf, sections)
             err = rms
             if make_passive and _gain_violation(
                     eps_inf, sections, omega, f) > _GAIN_EPS:
@@ -539,7 +471,7 @@ def fit_adaptive(wavelengths, n, k, *, tolerance=_TOLERANCE,
     best = _search()
     if best is None:
         raise ValueError(
-            "vector fitting failed for every order — check the band and the data")
+            "fit failed for every order — check the band and the data")
     return best
 
 
@@ -587,33 +519,27 @@ def coverage_fraction(lo, hi, wl):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Result assembly (pure): numeric → the six-key user dict
+# Result assembly (pure): numeric → the user dict
 # ═══════════════════════════════════════════════════════════════════════════
 
 def scalar_result(fit, w, n_data, k_data, *, passive, coverage):
     """Single-component result assembly (**numeric only** — no node/name).
 
-    ``quality['rms']`` is the **acceptance metric** — Lumerical's weighted RMS
-    of the eps residual (absolute) — and ``quality['tolerance_met']`` says
-    whether it landed under the requested tolerance.  ``rms_rel`` is the same
-    residual divided by the data norm (the number a human should read:
-    0.03 = 3%); the relative n/k errors are **diagnostics** only (at k≈0 they
-    are dominated by the ratio, not by the model).
+    ``quality['rms']`` is the **one error concept** (站长拍 2026-11-13):
+    the weighted **absolute** ε-RMS of the residual — the quantity the
+    optimiser minimises, the quantity ``tolerance`` compares, and the
+    quantity every display surface prints.  There are no relative variants
+    and no n/k error split.
     """
     omega = 2.0 * np.pi * C0_SI / np.asarray(w, dtype=float)
-    d = evaluate_dispersion(fit.eps_inf, fit.poles, omega)
-    n_fit = np.asarray(d.n)
-    k_fit = np.asarray(d.k)
+    _d = evaluate_dispersion(fit.eps_inf, fit.poles, omega)
     n_data = np.asarray(n_data, dtype=float)
     k_data = np.asarray(k_data, dtype=float)
 
     warnings_out: list[str] = []
-    eps_norm = (float(np.sqrt(np.mean(np.abs((n_data + 1j * k_data) ** 2) ** 2)))
-                or 1.0)
     if fit.target_met is False:
         warnings_out.append(
-            f"tolerance not met: best weighted RMS = {fit.error:.3g} "\
-            f"({fit.error / eps_norm:.1%} of data) with "
+            f"tolerance not met: best weighted ε-RMS = {fit.error:.3g} with "
             f"{len(fit.poles)} pole(s) (of the orders tried) — raise "
             f"max_poles, narrow the band, or accept this fit knowing the "
             f"residual")
@@ -629,20 +555,13 @@ def scalar_result(fit, w, n_data, k_data, *, passive, coverage):
             f"unvalidated")
 
     poles = [pole_to_node(*p) for p in fit.poles]
-    scale_n = np.maximum(np.abs(n_data), 1e-12)
-    scale_k = np.maximum(np.abs(k_data), 1e-3)
-    eps_norm = float(np.sqrt(np.mean(np.abs((n_data + 1j * k_data) ** 2) ** 2))) or 1.0
+    # The one error concept (站长拍 2026-11-13): weighted **absolute** ε-RMS.
+    # It is what the optimiser minimises, what ``tolerance`` compares, and
+    # what every surface displays — no relative variants, no n/k split.
     quality = {
         "n_points": int(np.size(w)),
         "rms": float(fit.rms if fit.rms is not None else fit.error or 0.0),
-        "rms_rel": float((fit.rms if fit.rms is not None else fit.error or 0.0) / eps_norm),
         "tolerance_met": bool(fit.target_met),
-        "rel_err_n": float(np.max(np.abs(n_fit - n_data) / scale_n)),
-        "rel_err_k": float(np.max(np.abs(k_fit - k_data) / scale_k)),
-        "rmse_n": float(np.sqrt(np.mean((n_fit - n_data) ** 2))),
-        "rmse_k": float(np.sqrt(np.mean((k_fit - k_data) ** 2))),
-        "max_abs_err_n": float(np.max(np.abs(n_fit - n_data))),
-        "max_abs_err_k": float(np.max(np.abs(k_fit - k_data))),
         "passive": bool(passive),
         "coverage": float(coverage),
     }
