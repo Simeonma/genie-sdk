@@ -54,7 +54,7 @@ _GEO_TYPES = {"box", "sphere", "cylinder", "ngon_z", "polygon_z",
               "ellipse_z", "ring_z"}
 
 #: source / monitor types → wire kinds
-_SRC_TYPES = {"plane_wave", "soft_source", "gaussian_beam"}
+_SRC_TYPES = {"plane_wave", "soft_source", "gaussian_beam", "mode"}
 _MON_TYPES = {"time", "freq", "index"}
 
 #: solver-flattened fields: user name → (section, wire field)

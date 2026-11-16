@@ -912,8 +912,119 @@ class GaussianBeamSpec(PlaneWaveSpec):
     radius: float = Field(gt=0)
 
 
+class ModeSelectionSpec(_StrictModel):
+    """Which mode a ``mode`` source injects (nested in the source).
+
+    ``n_modes`` : how many modes the solver returns. Asking for more than
+    one is the search-stability knob — a (near-)degenerate cross-section
+    can hand back an arbitrary superposition, so solve a few and pick.
+    ``index`` : which of them is injected; the engine keeps only that one
+    and re-indexes it to 0.
+    ``neff_target`` : the search centre handed to the solver
+    (``ModeSpec.neff_guess``). ``None`` = the cross-section's maximum
+    index (kernel default). For a WEAK-CONTRAST guide that default drops
+    the whole batch into the window trap modes (measured: a
+    ~1.709 − 0.112j leaky mode of the window itself, four copies) — give
+    the guide's own estimate (recipe = ``physics_test/
+    mode_weak_contrast.py`` header: n_ref ≈ sqrt(n_clad² + 0.72·Δε),
+    window ≥ 8·κ⁻¹, n_modes large enough, then pick the branch by index).
+    """
+
+    n_modes: int = Field(default=1, ge=1)
+    index: int = Field(default=0, ge=0)
+    neff_target: Optional[float] = Field(default=None, gt=0.0)
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.index >= self.n_modes:
+            raise ValueError(
+                f"mode_selection.index={self.index} is out of range: it "
+                f"picks one of the n_modes={self.n_modes} solved modes "
+                f"(0 <= index < n_modes)")
+        return self
+
+
+class ModeSourceSpec(_TemporalMixin):
+    """Mode source (TFSF): the engine solves the cross-section's
+    eigenmode on the source plane and injects that six-component field.
+
+    Time/frequency come from ``_TemporalMixin``; ``freq`` is the carrier
+    AND fixes the solve wavelength (lambda = ref/freq — a mode carrying
+    another wavelength would inject "another mode" and is rejected
+    engine-side).
+
+    ``center`` / ``size`` / ``propagation_axis`` follow PlaneWaveSpec's
+    placement vocabulary. A mode is defined on the WHOLE cross-section,
+    so ``size`` is the global full-span plane: both transverse slots stay
+    null (null = full span) and the propagation-axis slot is non-positive;
+    a positive transverse entry is an aperture window that would truncate
+    the mode (rejected engine-side).
+
+    ``rotate_axis / rotate_angle / rotate_radius`` = the tilted solve
+    plane — the same three sentences as the mode solver's own section
+    (``ModeConfigSpec``): the mode is solved on the plane rotated
+    ``rotate_angle`` degrees (right-hand rule) about an axis lying
+    ``rotate_radius`` metres from the delivery-face centre, then delivered
+    back to the source plane (rigid rotation + phase ramp). This is how a
+    mode source gets an oblique incidence: unlike a plane wave it carries
+    its own propagation direction and polarization, hence no
+    theta/phi/psi here. When ``propagation_axis`` is given, the rotation
+    axis must not be it (that would be an in-plane spin); when it is null
+    the kernel infers the axis from ``size`` and applies the same guard.
+
+    v1 boundaries: injection runs along +propagation_axis (no
+    ``direction``); the source plane is placed by ``center`` (no
+    ``from_face``). Injection power = amplitude² (the delivered field is
+    normalised to unit power on the source plane).
+    """
+
+    type: Literal["mode"] = "mode"
+    amplitude: float = 1.0
+    center: Optional[Vec3] = None
+    size: Optional[tuple[Optional[float], Optional[float],
+                         Optional[float]]] = None
+    propagation_axis: Optional[Literal["x", "y", "z"]] = None
+    mode_selection: ModeSelectionSpec = Field(
+        default_factory=ModeSelectionSpec)
+    # The same three sentences as ModeConfigSpec's two-face placement.
+    # Shared vocabulary, shared guards; the one extra case here is that
+    # `propagation_axis` is optional — when it is null the engine infers
+    # it from `size`, so the "rotation axis is not the normal" half of the
+    # guard lives intake-side.
+    rotate_axis: Optional[str] = None
+    rotate_angle: float = 0.0
+    rotate_radius: float = 0.0
+
+    @model_validator(mode="after")
+    def _check(self):
+        if self.rotate_axis is not None:
+            if self.rotate_axis not in ("x", "y", "z"):
+                raise ValueError(
+                    f"rotate_axis must be one of 'x'/'y'/'z'; got "
+                    f"{self.rotate_axis!r}")
+            if (self.propagation_axis is not None
+                    and self.rotate_axis == self.propagation_axis):
+                raise ValueError(
+                    f"rotate_axis={self.rotate_axis!r} is the propagation "
+                    f"axis (法线) — 绕它转是面内自转：面没换、横轴互搅、"
+                    f"网格碎掉；旋转轴必须是两根横向轴之一（给定 "
+                    f"propagation_axis={self.propagation_axis!r} 时是另外"
+                    f"两根）")
+        if self.rotate_angle != 0.0 and self.rotate_axis is None:
+            raise ValueError(
+                "rotate_axis is required when rotate_angle != 0 — 不静默"
+                "猜旋转方向；交货面的两根横向轴选一根")
+        if not math.isfinite(self.rotate_angle) \
+                or not -90.0 < self.rotate_angle < 90.0:
+            raise ValueError(
+                f"rotate_angle must be finite and |angle| < 90: at 90° "
+                f"the solve plane contains the propagation axis, so a "
+                f"mode on it carries no flux; got {self.rotate_angle!r}")
+        return self
+
+
 SourceSpec = Annotated[
-    Union[SoftSourceSpec, PlaneWaveSpec, GaussianBeamSpec],
+    Union[SoftSourceSpec, PlaneWaveSpec, GaussianBeamSpec, ModeSourceSpec],
     Field(discriminator="type"),
 ]
 

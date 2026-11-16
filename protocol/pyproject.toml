@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "genie-protocol"
-version = "2.0.1a11"
+version = "2.0.1a12"
 description = "GENIE wire-format protocol layer - SimConfig models, expression evaluator, resolver, estimator (single source shared by SDK client, gateway and compute kernel)"
 requires-python = ">=3.10"
 dependencies = [
@@ -53,6 +53,20 @@ dependencies = [
     #   boundary pairing into FdtdConfigSpec. Solver set stays open —
     #   unknown solvers' config passes through as a dict (deployment
     #   fact).
+    # 2.0.1a12 (2026-11-16, additive — M3 mode source enters the wire):
+    #   the fdtd source union gains type="mode" (ModeSourceSpec): temporal
+    #   five (freq/bandwidth/delay/phase/name, shared with every source;
+    #   freq is the carrier AND fixes the solve wavelength, lambda =
+    #   ref/freq), amplitude (injection power = amplitude^2), placement
+    #   (center/size/propagation_axis — size is the full-span plane:
+    #   transverse slots null, propagation-axis slot non-positive), nested
+    #   mode_selection {n_modes, index, neff_target} (index<n_modes;
+    #   neff_target=None = section max index, weak-contrast guides must
+    #   give their own estimate), and the tilted solve plane's three
+    #   sentences rotate_axis/rotate_angle/rotate_radius (same vocabulary
+    #   and guards as ModeConfigSpec: axis in x/y/z, not the propagation
+    #   axis, angle!=0 requires axis, |angle|<90). Legacy payloads are
+    #   untouched (the union is discriminated by type).
     # 2.0.1a8 (2026-11-13, additive — multi-wavelength mode sweep): the
     #   ModeConfigSpec top-level `wavelength` widens from float to
     #   float | list[float] (single field union — a float IS the

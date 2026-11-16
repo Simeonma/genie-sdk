@@ -67,6 +67,7 @@ _SRC: dict = {
     "soft_source": DRAFT_OF[_wire.SoftSourceSpec],
     "plane_wave": DRAFT_OF[_wire.PlaneWaveSpec],
     "gaussian_beam": DRAFT_OF[_wire.GaussianBeamSpec],
+    "mode": DRAFT_OF[_wire.ModeSourceSpec],
 }
 _MON: dict = {
     "time": DRAFT_OF[_wire.TimeMonSpec],
@@ -226,6 +227,7 @@ class _CollectionView:
     def add_soft_source(self, name=None):    return self._add("soft_source", name)
     def add_plane_wave(self, name=None):     return self._add("plane_wave", name)
     def add_gaussian_beam(self, name=None):  return self._add("gaussian_beam", name)
+    def add_mode(self, name=None):           return self._add("mode", name)
 
     def add_time(self, name=None):           return self._add("time", name)
     def add_freq(self, name=None):           return self._add("freq", name)
