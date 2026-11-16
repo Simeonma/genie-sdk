@@ -256,10 +256,9 @@ class ModeResult:
     不猜）、``.modes[i]`` 单模视图。与三个监视器 Result 同族：零计算零
     物理——只承运原始数组。
 
-    h5 /2 起 ``.fields``/``.coords`` = **交货面**（消费方语义不变；coords
-    由 edges 派生格心，与 /1 同值口径），另露对称两面：``.delivery`` /
-    ``.cross_section`` = :class:`ModePlane`（完整边 + frame + 场；/1 旧件
-    无面组 ⇒ 两属性为 None）。"""
+    h5 /2 起 ``.fields``/``.coords`` = **交货面**（消费方语义；coords
+    由 edges 派生格心），另露对称两面：``.delivery`` / ``.cross_section``
+    = :class:`ModePlane`（完整边 + frame + 场）。"""
 
     def __init__(self, neff: np.ndarray, fields: dict, coords: dict,
                  wavelength=None, sorted_by=None, delivery=None,
@@ -361,25 +360,6 @@ def read_monitor(h5, domain: str, name: str | None = None):
     return IndexResult(name, fields, shape_hint=hint, **axes)
 
 
-def _read_mode_group(grp):
-    """一个 mode 组（单 λ 的 ``modes`` 或扫描的 ``modes/lam_###``）→
-    ``(neff, fields, coords)``：轴名 = 坐标、``neff`` 必在、其余场分量。"""
-    coords: dict = {}
-    fields: dict = {}
-    neff = None
-    for key in grp.keys():        # 轴名/neff/power 之外的键都是场分量
-        arr = np.asarray(grp[key][()])
-        if key in _AXES:
-            coords[key] = arr
-        elif key == "neff":
-            neff = arr
-        else:
-            fields[key] = arr
-    if neff is None:
-        raise RuntimeError("modes group has no 'neff' dataset")
-    return neff, fields, coords
-
-
 def _read_plane_group(g) -> "ModePlane":
     """h5 /2 面组（edges + frame + 场分量）→ ModePlane（两面同构）。"""
     fields: dict = {}
@@ -407,10 +387,10 @@ def _read_plane_group(g) -> "ModePlane":
 def read_modes(h5) -> ModeSweepResult:
     """mode 结果 → ``ModeSweepResult``（唯一读法：**λ 是组，不是形态**）。
 
-    组 ``modes/lam_###``：``neff (n,)`` 必在；其余按**结构自识别**——
-    /2 两面件 = ``delivery``/``cross-section`` 面组（→ :class:`ModePlane`，
-    ``coords`` 由 delivery 的 edges 派生格心，与 /1 同值口径）；/1 旧件 =
-    x/y/z 两轴坐标（真轴名）+ 场分量 ``(n, N1, N2)``。**λ 住组属性
+    组 ``modes/lam_###``：``neff (n,)`` 必在 + **两面组**（``delivery`` /
+    ``cross-section`` → :class:`ModePlane`；``coords`` 由 delivery 的 edges
+    派生格心）。**没有 /1 兼容垫片**：a10 前的 mode 结果档（顶层键布局）
+    不回读——重新跑作业。**λ 住组属性
     ``wavelength``**（根 manifest 不再抄一份 λ 列表）；组序按 λ 升序，不靠
     组名排序。排序口径来自根 attrs ``modes`` manifest 的 ``sorted_by``
     （缺 = None，不猜）。
@@ -440,27 +420,27 @@ def read_modes(h5) -> ModeSweepResult:
     axes = man.get("axes") or ["h", "v"]
     results = []
     for g in groups:
-        if "delivery" in g.keys():          # /2 两面件（cross-section 同在）
-            if "neff" not in g.keys():
-                raise RuntimeError("modes group has no 'neff' dataset")
-            if "cross-section" not in g.keys():
-                raise RuntimeError(
-                    f"modes subgroup {g.name!r} has 'delivery' but no "
-                    f"'cross-section' — a /2 group carries both planes")
-            delivery = _read_plane_group(g["delivery"])
-            cross = _read_plane_group(g["cross-section"])
-            centers = delivery.centers
-            coords = {axes[0]: centers["h"], axes[1]: centers["v"]}
-            results.append(ModeResult(
-                np.asarray(g["neff"][()]), delivery.fields, coords,
-                wavelength=float(g.attrs["wavelength"]),
-                sorted_by=man.get("sorted_by"),
-                delivery=delivery, cross_section=cross))
-        else:                               # /1 旧件（顶层键，照读）
-            neff, fields, coords = _read_mode_group(g)
-            results.append(ModeResult(neff, fields, coords,
-                                      wavelength=float(g.attrs["wavelength"]),
-                                      sorted_by=man.get("sorted_by")))
+        if "delivery" not in g.keys():
+            raise RuntimeError(
+                f"modes subgroup {g.name!r} has no 'delivery' plane — mode "
+                f"results are the two-plane layout (genie-results-h5/2, "
+                f"2.0.1a10+); pre-a10 archives are not back-read by "
+                f"design (no compatibility shim) — rerun the job")
+        if "cross-section" not in g.keys():
+            raise RuntimeError(
+                f"modes subgroup {g.name!r} has 'delivery' but no "
+                f"'cross-section' — a /2 group carries both planes")
+        if "neff" not in g.keys():
+            raise RuntimeError("modes group has no 'neff' dataset")
+        delivery = _read_plane_group(g["delivery"])
+        cross = _read_plane_group(g["cross-section"])
+        centers = delivery.centers
+        coords = {axes[0]: centers["h"], axes[1]: centers["v"]}
+        results.append(ModeResult(
+            np.asarray(g["neff"][()]), delivery.fields, coords,
+            wavelength=float(g.attrs["wavelength"]),
+            sorted_by=man.get("sorted_by"),
+            delivery=delivery, cross_section=cross))
     return ModeSweepResult([r.wavelength for r in results], results,
                            man.get("sorted_by"))
 
