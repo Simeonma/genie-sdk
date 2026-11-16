@@ -379,6 +379,13 @@ class BoundarySpec(_StrictModel):
     layers: int = Field(default=12, ge=2)
     kappa_max: float = Field(default=1.0, ge=1.0)
     order: int = Field(default=3, ge=1)
+    #: PML design target (power reflection at the outer edge). ``None`` =
+    #: solver default (fdtd 1e-3, mode 1e-3 since 2.0.1a13); an explicit
+    #: value overrides that face only. Physically this is the ``R(0)`` that
+    #: σmax is derived from — smaller = stronger absorption per cell, which
+    #: trades against the discrete entrance reflection (measured optimum is
+    #: layer-count dependent: ~8e-3 at 16 layers, ~3e-2 at 60).
+    reflection: Optional[float] = Field(default=None, gt=0.0, lt=1.0)
     # bloch
     k: Optional[Vec3] = None
     from_source: bool = False

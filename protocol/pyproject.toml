@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "genie-protocol"
-version = "2.0.1a12"
+version = "2.0.1a13"
 description = "GENIE wire-format protocol layer - SimConfig models, expression evaluator, resolver, estimator (single source shared by SDK client, gateway and compute kernel)"
 requires-python = ">=3.10"
 dependencies = [
@@ -53,7 +53,7 @@ dependencies = [
     #   boundary pairing into FdtdConfigSpec. Solver set stays open —
     #   unknown solvers' config passes through as a dict (deployment
     #   fact).
-    # 2.0.1a12 (2026-11-16, additive — M3 mode source enters the wire):
+    # 2.0.1a13 (2026-11-16, additive — M3 mode source enters the wire):
     #   the fdtd source union gains type="mode" (ModeSourceSpec): temporal
     #   five (freq/bandwidth/delay/phase/name, shared with every source;
     #   freq is the carrier AND fixes the solve wavelength, lambda =
