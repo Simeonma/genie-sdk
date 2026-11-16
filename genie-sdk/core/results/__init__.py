@@ -225,22 +225,53 @@ class _ModeView:
 GUIDED_IM_TOL = 1e-6
 
 
+class ModePlane:
+    """mode 结果的一张面（h5 /2：``cross-section`` / ``delivery`` 同构载荷）：
+    ``.fields`` {分量: (n, Nv+1, Nh+1)}、``.edges`` {"h"/"v": (N+1,)}（**完整
+    边**，非格心）、``.frame_origin (3,)`` / ``.frame_R (3,3)``（面→全局映射；
+    delivery 恒等，cross-section 倾斜时含刚转）。``.centers`` = 格心（/1
+    旧件 ``coords`` 的同值口径）。零计算零物理——只承运数组。"""
+
+    def __init__(self, fields: dict, edges: dict,
+                 frame_origin, frame_R) -> None:
+        self.fields = fields
+        self.edges = edges
+        self.frame_origin = frame_origin
+        self.frame_R = frame_R
+
+    @property
+    def centers(self) -> dict:
+        return {k: 0.5 * (v[:-1] + v[1:]) for k, v in self.edges.items()}
+
+    def __repr__(self):
+        inner = ", ".join(f"{k}: {v.shape}" for k, v in self.fields.items())
+        return f"<ModePlane {inner or '(empty)'}>"
+
+
 class ModeResult:
     """一个波长的模列表（ModeSweepResult 的元素）：``.neff (n,)``、
     ``.fields`` {分量: (n, N1, N2)}（**交付面单位功率**归一，绝对尺度归
     注入侧幅度）、``.coords`` {轴: (N,)}``、
     ``.wavelength``（组属性）、``.sorted_by``（manifest 口径，缺 = None
     不猜）、``.modes[i]`` 单模视图。与三个监视器 Result 同族：零计算零
-    物理——只承运原始数组。"""
+    物理——只承运原始数组。
+
+    h5 /2 起 ``.fields``/``.coords`` = **交货面**（消费方语义不变；coords
+    由 edges 派生格心，与 /1 同值口径），另露对称两面：``.delivery`` /
+    ``.cross_section`` = :class:`ModePlane`（完整边 + frame + 场；/1 旧件
+    无面组 ⇒ 两属性为 None）。"""
 
     def __init__(self, neff: np.ndarray, fields: dict, coords: dict,
-                 wavelength=None, sorted_by=None) -> None:
+                 wavelength=None, sorted_by=None, delivery=None,
+                 cross_section=None) -> None:
         self.neff = neff
         self.fields = fields
         self.coords = coords
         self.wavelength = wavelength
         self.sorted_by = sorted_by
         self.n_modes = int(np.size(neff))
+        self.delivery = delivery
+        self.cross_section = cross_section
 
     @property
     def modes(self) -> list[_ModeView]:
@@ -349,13 +380,40 @@ def _read_mode_group(grp):
     return neff, fields, coords
 
 
+def _read_plane_group(g) -> "ModePlane":
+    """h5 /2 面组（edges + frame + 场分量）→ ModePlane（两面同构）。"""
+    fields: dict = {}
+    edges: dict = {}
+    frame_origin = frame_R = None
+    for key in g.keys():
+        arr = np.asarray(g[key][()])
+        if key == "edges_h":
+            edges["h"] = arr
+        elif key == "edges_v":
+            edges["v"] = arr
+        elif key == "frame_origin":
+            frame_origin = arr
+        elif key == "frame_R":
+            frame_R = arr
+        else:
+            fields[key] = arr
+    if not edges:
+        raise RuntimeError(
+            f"mode plane group {g.name!r} has no edges datasets — a /2 "
+            f"plane carries edges_h/edges_v + frame + field components")
+    return ModePlane(fields, edges, frame_origin, frame_R)
+
+
 def read_modes(h5) -> ModeSweepResult:
     """mode 结果 → ``ModeSweepResult``（唯一读法：**λ 是组，不是形态**）。
 
-    组 ``modes/lam_###``：``neff (n,)`` 必在；x/y/z = 两轴坐标（真轴名）；
-    其余 = 场分量 ``(n, N1, N2)``。**λ 住组属性 ``wavelength``**（根 manifest
-    不再抄一份 λ 列表）；组序按 λ 升序，不靠组名排序。排序口径来自根 attrs
-    ``modes`` manifest 的 ``sorted_by``（缺 = None，不猜）。
+    组 ``modes/lam_###``：``neff (n,)`` 必在；其余按**结构自识别**——
+    /2 两面件 = ``delivery``/``cross-section`` 面组（→ :class:`ModePlane`，
+    ``coords`` 由 delivery 的 edges 派生格心，与 /1 同值口径）；/1 旧件 =
+    x/y/z 两轴坐标（真轴名）+ 场分量 ``(n, N1, N2)``。**λ 住组属性
+    ``wavelength``**（根 manifest 不再抄一份 λ 列表）；组序按 λ 升序，不靠
+    组名排序。排序口径来自根 attrs ``modes`` manifest 的 ``sorted_by``
+    （缺 = None，不猜）。
 
     单 λ 结果 = 只含一个组的同一读法——没有第二套形状、第二套守卫。
     """
@@ -379,12 +437,30 @@ def read_modes(h5) -> ModeSweepResult:
             f"modes subgroup(s) {missing} carry no 'wavelength' attr — the "
             f"wavelength lives on the group (one subgroup per wavelength)")
     groups.sort(key=lambda g: float(g.attrs["wavelength"]))
+    axes = man.get("axes") or ["h", "v"]
     results = []
     for g in groups:
-        neff, fields, coords = _read_mode_group(g)
-        results.append(ModeResult(neff, fields, coords,
-                                  wavelength=float(g.attrs["wavelength"]),
-                                  sorted_by=man.get("sorted_by")))
+        if "delivery" in g.keys():          # /2 两面件（cross-section 同在）
+            if "neff" not in g.keys():
+                raise RuntimeError("modes group has no 'neff' dataset")
+            if "cross-section" not in g.keys():
+                raise RuntimeError(
+                    f"modes subgroup {g.name!r} has 'delivery' but no "
+                    f"'cross-section' — a /2 group carries both planes")
+            delivery = _read_plane_group(g["delivery"])
+            cross = _read_plane_group(g["cross-section"])
+            centers = delivery.centers
+            coords = {axes[0]: centers["h"], axes[1]: centers["v"]}
+            results.append(ModeResult(
+                np.asarray(g["neff"][()]), delivery.fields, coords,
+                wavelength=float(g.attrs["wavelength"]),
+                sorted_by=man.get("sorted_by"),
+                delivery=delivery, cross_section=cross))
+        else:                               # /1 旧件（顶层键，照读）
+            neff, fields, coords = _read_mode_group(g)
+            results.append(ModeResult(neff, fields, coords,
+                                      wavelength=float(g.attrs["wavelength"]),
+                                      sorted_by=man.get("sorted_by")))
     return ModeSweepResult([r.wavelength for r in results], results,
                            man.get("sorted_by"))
 
