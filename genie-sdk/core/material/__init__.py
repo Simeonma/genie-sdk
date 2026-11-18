@@ -364,8 +364,10 @@ def assemble_nk(fits, name=None):
     Returns
     -------
     dict
-        A lorentz node with a diagonal ``eps_inf`` triplet; already
-        validated by ``LorentzMatSpec``.
+        A lorentz node with the a16 material shape: a scalar ``eps_inf``
+        when the three diagonals are equal (iso), otherwise the three
+        per-axis named keys ``eps_inf_xx``/``eps_inf_yy``/``eps_inf_zz``;
+        already validated by ``LorentzMatSpec``.
 
     Raises
     ------
@@ -375,7 +377,7 @@ def assemble_nk(fits, name=None):
         explicitly in the message); **off-diagonal keys (xy/xz/yz) are
         rejected** — dispersive coupling is axis-only (2026-11-11
         定案: 斜向 rank-1 与复轴耦合在宽带时域都会泵能，已从线格式
-        删除; 非对角常数 ε 走 const 材料的张量路径).
+        删除; 非对角常数 ε 走 const 材料 + matrix_frame).
         ``eps_inf`` may be any real value (negative
         constants are valid rational models).
     """
@@ -408,7 +410,7 @@ def assemble_nk(fits, name=None):
                 f"assemble_nk: component {key!r} must be an NKFit from "
                 f"genie.fit_nk(...), got {type(r).__name__}")
 
-    eps_inf = [fits[c].model["eps_inf"] for c in _DIAG]
+    ei = {c: fits[c].model["eps_inf"] for c in _DIAG}
     poles = []
     for c, axis_name in zip(_DIAG, ("x", "y", "z")):
         for p in fits[c].model["poles"]:
@@ -418,7 +420,11 @@ def assemble_nk(fits, name=None):
             q["axis"] = axis_name       # 轴装（对角各向异性）
             poles.append(q)
     node = {"type": "lorentz", "name": name or "assembled",
-            "eps_inf": eps_inf, "poles": poles}
+            "poles": poles}
+    if ei["xx"] == ei["yy"] == ei["zz"]:
+        node["eps_inf"] = ei["xx"]      # iso: scalar base form
+    else:
+        node.update({f"eps_inf_{c}": ei[c] for c in _DIAG})
     _wire.LorentzMatSpec.model_validate(node)   # explicit verb: failed validation raises immediately
     return node
 

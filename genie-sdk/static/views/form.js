@@ -512,50 +512,37 @@ const FormPanel = {
     return { head, body };
   },
 
-  /* 材料场形态胶囊行（放折叠组体内；切换 live 读 cfg，不吞编辑） */
-  _matPillsRow(path, mode) {
-    const row = this._el("div", "frow matmode-row");
+  /* 材料场形态胶囊（a16 线格式：iso=标量基值 | diag=对角命名键；
+   * 张量态已随 P2-5 从线格式删除） */
+  _matPills(path, base, mode) {
     const pills = this._el("span", "mode-pills");
-    for (const [m, t] of [["iso", "各向同性"], ["diag", "对角"], ["tensor", "张量"]]) {
+    for (const [m, t] of [["iso", "各向同性"], ["diag", "对角"]]) {
       const b = this._el("button", "mode-pill" + (mode === m ? " on" : ""), t);
       b.type = "button";
-      b.addEventListener("click", () => this._matMode(path, m));
-      pills.appendChild(b);
-    }
-    row.appendChild(pills);
-    return row;
-  },
-
-  /* 材料场形态胶囊（frow 内；切换 live 读 cfg） */
-  _matPills(path, mode) {
-    const pills = this._el("span", "mode-pills");
-    for (const [m, t] of [["iso", "各向同性"], ["diag", "对角"], ["tensor", "张量"]]) {
-      const b = this._el("button", "mode-pill" + (mode === m ? " on" : ""), t);
-      b.type = "button";
-      b.addEventListener("click", () => this._matMode(path, m));
+      b.addEventListener("click", () => this._matMode(path, base, m));
       pills.appendChild(b);
     }
     return pills;
   },
 
-  /* 材料场编辑器（2026-09）：短名与输入同排左对齐；形态胶囊在值区上方
-   * 独立小行(右对齐, 紧凑)——不与高矩阵同 flex 行, 防纵向拉伸 */
-  _matEditor(path, val, name) {
+  /* 材料场编辑器（a16）：基值标量 + 对角命名键覆盖（P2-5）。
+   * path=材料节点根（materials.<i>），base=eps|mu|eps_inf|mu_inf。
+   * iso 态编辑基值；diag 态三轴各一槽，空槽=回落基值（placeholder 即
+   * 基值，清空即删命名键）。位置式三数组 / 3×3 张量不再存在。 */
+  _matEditor(path, mt, base, name) {
     const frag = document.createDocumentFragment();
-    const mode = this._matShape(val);
+    const AX = ["xx", "yy", "zz"];
+    const mode = AX.some((a) => mt[base + "_" + a] !== undefined)
+      ? "diag" : "iso";
     const pillRow = this._el("div", "frow mfield-pills");
-    pillRow.appendChild(this._matPills(path, mode));
+    pillRow.appendChild(this._matPills(path, base, mode));
     frag.appendChild(pillRow);
     const row = this._el("div", "frow mfield-row");
-    /* R17 a11y：材料场短名标签升级为真 label（与 flat 面板 .flabel 同型），
-     * iso 值输入经 htmlFor 关联；网格/矢量格各自保留格内可访问名。 */
     const lb = this._el("label", "flabel");
     lb.textContent = name;
     row.appendChild(lb);
     if (mode === "iso") {
-      const inpWrap = this._input(path,
-        typeof val === "number" ? val : undefined, "num");
-      /* P2-5 a11y：iso 值输入无可视 label（短名即身份）——补可访问名 */
+      const inpWrap = this._input(path + "." + base, mt[base] ?? 1, "num");
       const inp = inpWrap.querySelector("input");
       if (inp) {
         if (!inp.getAttribute("aria-label")) inp.setAttribute("aria-label", name);
@@ -564,7 +551,21 @@ const FormPanel = {
       }
       row.appendChild(inpWrap);
     } else {
-      row.appendChild(this._matGrid(path, val, mode));
+      const bv = mt[base] ?? 1;
+      AX.forEach((a, idx) => {
+        const key = base + "_" + a;
+        const inpWrap = this._input(path + "." + key, mt[key], "num");
+        const inp = inpWrap.querySelector("input");
+        if (inp) {
+          inp.placeholder = String(bv);   /* 空槽 = 回落基值 */
+          if (!inp.id) inp.id = "fld-" + (++this._fldSeq);
+          inp.setAttribute("aria-label", name + " " + a);
+          inp.dataset.emptyDeletes = "1"; /* 清空 = 删命名键 */
+          if (idx === 0) lb.htmlFor = inp.id;
+          inp.title = "空 = 基值 " + bv;
+        }
+        row.appendChild(inpWrap);
+      });
     }
     frag.appendChild(row);
     return frag;
@@ -643,94 +644,22 @@ const FormPanel = {
     return row;
   },
 
-  /* ═══ ε/μ 三形态编辑器（2026-09 提案：值形状即形态） ═══
-   * iso=标量 | diag=3元[xx,yy,zz] | tensor=3×3(行优先,互易对称镜像)
-   * 切形态按迁移规则重写 cfg 值；有损静默（2026-09 站长裁决：不提醒不记忆）。 */
-  _matShape(v) {
-    if (Array.isArray(v)) return Array.isArray(v[0]) ? "tensor" : "diag";
-    return "iso";
-  },
-
-  /* ε/μ 形态切换（2026-09）：live 从 cfg 读当前值——不吞组内已编辑；
-   * 静默切换（站长裁决：有损不提醒、不记忆）。 */
-  _matMode(path, to) {
-    const cur = getPath(this.cfg, path);
-    const mode = this._matShape(cur);
-    if (cur === undefined || mode === to) return;
-    const num = (x) => (typeof x === "number" && isFinite(x) ? x : null);
-    const flat = (v) => (Array.isArray(v) && !Array.isArray(v[0]) ? v : null);
-    const mat = (v) => (Array.isArray(v) && Array.isArray(v[0]) ? v : null);
-    const f = flat(cur), M = mat(cur);
-    const sv = num(cur) ?? (f ? num(f[0]) : null) ?? 1;
-    let next = null;
+  /* ═══ ε/μ 双形态（a16）：基值标量 + 对角命名键 ═══
+   * iso=只有基值 | diag=任一命名键已设（其余轴回落基值）。
+   * diag→iso 删三命名键、基值取 xx（有损静默，2026-09 站长裁决：
+   * 不提醒不记忆）；iso→diag 零写入——命名键缺省即回落基值。 */
+  _matMode(path, base, to) {
+    const mt = getPath(this.cfg, path);
+    if (!mt) return;
+    const keys = ["xx", "yy", "zz"].map((a) => base + "_" + a);
+    const cur = keys.some((k) => mt[k] !== undefined) ? "diag" : "iso";
+    if (cur === to) return;
     if (to === "iso") {
-      if (mode === "diag") next = f[0] ?? 1;
-      else if (mode === "tensor") next = num(M[0][0]) ?? 1;
-      else next = sv;
-    } else if (to === "diag") {
-      if (mode === "iso") next = [sv, sv, sv];
-      else next = [num(M[0][0]) ?? 1, num(M[1][1]) ?? 1, num(M[2][2]) ?? 1];
-    } else {  // tensor
-      if (mode === "iso") next = [[sv, 0, 0], [0, sv, 0], [0, 0, sv]];
-      else next = [[f[0] ?? 1, 0, 0], [0, f[1] ?? 1, 0], [0, 0, f[2] ?? 1]];
+      const bv = mt[keys[0]] ?? mt[base] ?? 1;
+      for (const k of keys) deletePath(this.cfg, path + "." + k);
+      setPath(this.cfg, path + "." + base, bv);
     }
-    setPath(this.cfg, path, next);
     this._rerender();
-  },
-
-  _matGrid(path, val, mode) {
-    const AX = ["x", "y", "z"];
-    const wrap = this._el("div", "tgrid");
-    const cap = this._el("span", "tgh");
-    cap.textContent = "";
-    wrap.appendChild(cap);
-    for (const a of AX) {
-      const h = this._el("span", "tgh");
-      h.textContent = a;
-      wrap.appendChild(h);
-    }
-    for (let i = 0; i < 3; i++) {
-      const rh = this._el("span", "tgh");
-      rh.textContent = AX[i];
-      wrap.appendChild(rh);
-      for (let j = 0; j < 3; j++) {
-        if (mode === "diag" && i !== j) {
-          const z = this._el("span", "tcell locked");
-          z.textContent = "0";
-          z.title = "对角模式：非对角恒 0（切「张量」可编辑）";
-          wrap.appendChild(z);
-          continue;
-        }
-        const cell = this._el("span", "tcell");
-        let v;
-        if (mode === "diag") v = Array.isArray(val) ? val[i] : undefined;
-        else v = (Array.isArray(val) && val[i]) ? val[i][j] : undefined;
-        const p = mode === "diag" ? path + "." + i : path + "." + i + "." + j;
-        const inp = this._input(p, v, "num");
-        /* P2-5 a11y：矩阵格输入无可视 label——按路径末段+行/列补可访问名 */
-        const cellInp = inp.querySelector("input");
-        if (cellInp && !cellInp.getAttribute("aria-label"))
-          cellInp.setAttribute("aria-label",
-            (path.split(".").pop() || "值") + " " + AX[i] + " " + AX[j]);
-        if (mode === "tensor" && i !== j) {
-          const q = path + "." + j + "." + i;
-          const me = inp.querySelector("input");
-          me.addEventListener("input", () => {
-            /* F1 A①：镜像格走同一写回换算（不再 parseFloat 部分解析——
-             * 表达式/单位后缀按原样字符串镜像，纯数照常换算）。 */
-            const t = writeBackValue(me.value, "num", null);
-            setPath(this.cfg, q, t);                 // 互易对称自动镜像
-            const twin = document.querySelector('[data-path="' + q + '"]');
-            if (twin) twin.value = me.value;         // 同屏镜像格即时回显
-            this._notifyMutate();
-          });
-          inp.title = "互易介质：输一侧自动镜像对称格";
-        }
-        cell.appendChild(inp);
-        wrap.appendChild(cell);
-      }
-    }
-    return wrap;
   },
 
   _writeBack(input) {
@@ -995,11 +924,11 @@ const FormPanel = {
       if (mt.type === "const") {
         const bE = this._msec("mat" + i + ":eps", "ε · 介电常数", false);
         inner.appendChild(bE.head); inner.appendChild(bE.body);
-        bE.body.appendChild(this._matEditor(`materials.${i}.eps`, mt.eps ?? 1, "ε"));
+        bE.body.appendChild(this._matEditor(`materials.${i}`, mt, "eps", "ε"));
 
         const bM = this._msec("mat" + i + ":mu", "μ · 磁导率", true);
         inner.appendChild(bM.head); inner.appendChild(bM.body);
-        bM.body.appendChild(this._matEditor(`materials.${i}.mu`, mt.mu ?? 1, "μ"));
+        bM.body.appendChild(this._matEditor(`materials.${i}`, mt, "mu", "μ"));
       } else if (mt.type === "lorentz") {
         mt.poles = mt.poles || [];
         mt.mu_poles = mt.mu_poles || [];
@@ -1171,7 +1100,7 @@ const FormPanel = {
         const bE = this._msec("mat" + i + ":eps", "ε · 介电常数（含色散）", false);
         if (mt.poles.length) bE.head.appendChild(this._el("span", "sec-badge", String(mt.poles.length)));
         inner.appendChild(bE.head); inner.appendChild(bE.body);
-        bE.body.appendChild(this._matEditor(`materials.${i}.eps_inf`, mt.eps_inf ?? 1, "ε∞"));
+        bE.body.appendChild(this._matEditor(`materials.${i}`, mt, "eps_inf", "ε∞"));
         const peList = this._el("div", "pole-list");
         mt.poles.forEach((pl, j) => peList.appendChild(poleItem("poles", pl, j)));
         bE.body.appendChild(peList);
@@ -1182,7 +1111,7 @@ const FormPanel = {
         const bM = this._msec("mat" + i + ":mu", "μ · 磁导率（含色散）", true);
         if (mt.mu_poles.length) bM.head.appendChild(this._el("span", "sec-badge", String(mt.mu_poles.length)));
         inner.appendChild(bM.head); inner.appendChild(bM.body);
-        bM.body.appendChild(this._matEditor(`materials.${i}.mu_inf`, mt.mu_inf ?? 1, "μ∞"));
+        bM.body.appendChild(this._matEditor(`materials.${i}`, mt, "mu_inf", "μ∞"));
         const pmList = this._el("div", "pole-list");
         mt.mu_poles.forEach((pl, j) => pmList.appendChild(poleItem("mu_poles", pl, j)));
         bM.body.appendChild(pmList);

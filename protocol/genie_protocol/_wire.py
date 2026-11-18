@@ -169,12 +169,16 @@ _INDEX_FIELD_SET = ("eps", "mu", "both")
 
 Range2 = tuple[float, float]
 Vec3 = tuple[float, float, float]
-# Value shapes of the material eps family: scalar = iso (same value on
-# all three axes) | 3-element = diagonal with independent axes | 3×3 =
-# full tensor (row-major nested list[list[float]]; symmetric
-# off-diagonal = reciprocal medium). Pole parameters (PoleSpec) are pure
-# scalars: iso (no axis) | axis-mounted ('x'|'y'|'z').
-NumOrTensor = Union[float, tuple[float, float, float], list[list[float]]]
+# Value shapes of the material eps family (protocol 2.0.1a16, P2-5):
+# a float base (iso, same value on all three axes) + OPTIONAL per-axis
+# diagonal named keys (``eps_xx`` / ``eps_yy`` / ``eps_zz`` — a key that
+# is absent/None falls back to the base). The positional 3-element
+# diagonal and the 3×3 full tensor are GONE from the wire: a rotated
+# diagonal goes through a named ``matrix_frame`` attribute (a15), and an
+# off-diagonal tensor is not expressible at all — the illegal shape does
+# not exist at the type level, so no shape guard is needed. Pole
+# parameters (PoleSpec) are pure scalars: iso (no axis) | axis-mounted
+# ('x'|'y'|'z').
 
 
 def _check_range(v: tuple[float, float]) -> tuple[float, float]:
@@ -186,67 +190,35 @@ def _check_range(v: tuple[float, float]) -> tuple[float, float]:
     return (lo, hi)
 
 
-def _check_tensor_sym(v, positive_diag=True):
-    """3×3 tensor guard: shape 3×3, every element finite, symmetric
-    (relative tolerance 1e-6); ``positive_diag=True`` additionally requires
-    the main diagonal > 0 (the eps/mu path).  For ``eps_inf``/``mu_inf`` the
-    diagonal may be negative — a negative constant is a valid rational model
-    (metals routinely need one).  Off-diagonal entries may always be
-    negative."""
-    if len(v) != 3 or any(len(row) != 3 for row in v):
-        raise ValueError(
-            "tensor must be 3x3 (row-major nested list[list[float]])")
-    for row in v:
-        for x in row:
-            if not math.isfinite(x):
-                raise ValueError(f"tensor elements must be finite, got {x!r}")
-    if positive_diag:
-        for i in range(3):
-            if not v[i][i] > 0:
-                raise ValueError(
-                    f"tensor main diagonal must be > 0, got v[{i}][{i}]="
-                    f"{v[i][i]!r}")
-    for i in range(3):
-        for j in range(i + 1, 3):
-            a, b = v[i][j], v[j][i]
-            if abs(a - b) > 1e-6 * max(1.0, abs(a), abs(b)):
-                raise ValueError(
-                    "tensor must be symmetric (reciprocal medium: "
-                    "e[i][j] == e[j][i], relative tolerance 1e-6)")
-    return v
-
-
 def _check_finite_pos(v):
-    """Per-element guard for the eps/mu family: scalar / 3-element diagonal =
-    **finite and > 0** (isfinite included: eps=inf passes ">0", would
-    silently build, and then NaN-pollute the whole simulation); 3×3 tensor =
-    every element finite + main diagonal > 0 + symmetric (off-diagonal may be
-    negative).  Invalid values fail with an early 422 here instead of at
-    driver time."""
-    if isinstance(v, list):          # 3×3 tensor
-        return _check_tensor_sym(v)
-    for x in (v if isinstance(v, tuple) else (v,)):
-        if not (math.isfinite(x) and x > 0):
-            raise ValueError(
-                f"must be finite and positive (scalar iso or 3-element "
-                f"diagonal, per element), got {x!r}")
+    """Per-value guard for the eps/mu family (scalar base + per-axis
+    diagonal named keys): **finite and > 0** (isfinite included: eps=inf
+    passes ">0", would silently build, and then NaN-pollute the whole
+    simulation).  Invalid values fail with an early 422 here instead of at
+    driver time.  (Protocol a16: the positional diagonal and the full
+    tensor form are gone from the wire; a rotated diagonal rides a
+    matrix_frame attribute, so positivity is checked per scalar value.)"""
+    if v is None:
+        return v
+    if not (math.isfinite(v) and v > 0):
+        raise ValueError(
+            f"must be finite and positive, got {v!r}")
     return v
 
 
 def _check_finite_real(v):
-    """Guard for ``eps_inf``/``mu_inf``: finite, **any sign**.
+    """Per-value guard for ``eps_inf``/``mu_inf`` (base + per-axis named
+    keys): finite, **any sign**.
 
     There is no physical requirement that the high-frequency constant be
     positive — a negative constant is an ordinary rational model and metals
     routinely fit to one.  Only non-finite values are rejected.
     """
-    if isinstance(v, list):          # 3×3 tensor
-        return _check_tensor_sym(v, positive_diag=False)
-    for x in (v if isinstance(v, tuple) else (v,)):
-        if not math.isfinite(x):
-            raise ValueError(
-                f"must be finite (scalar iso or 3-element diagonal, per "
-                f"element, any sign), got {x!r}")
+    if v is None:
+        return v
+    if not math.isfinite(v):
+        raise ValueError(
+            f"must be finite (any sign), got {v!r}")
     return v
 
 
@@ -572,15 +544,18 @@ class PoleSpec(_StrictModel):
 
 
 class ConstMatSpec(_Identified, _StrictModel):
-    """Constant material. eps/mu: scalar (iso, same value on all three
-    axes) |
-    3-element ``[xx, yy, zz]`` (diagonal, independent per axis) | 3×3
-    nested array (full tensor; symmetric off-diagonal = reciprocal
-    medium). The guard mirrors the local _require_positive_diagonal:
-    scalar/diagonal entries finite and > 0 element-wise (dispersionless
-    negative ε/μ is a source of numerical divergence; metals go through
-    pole/nk fitting); tensor entries finite + main diagonal > 0 +
-    symmetric (off-diagonal may be negative).
+    """Constant material (protocol a16 shape). The eps/mu family is a
+    **scalar base + optional per-axis diagonal named keys**: ``eps`` is
+    the iso base (same value on all three axes), and ``eps_xx`` /
+    ``eps_yy`` / ``eps_zz`` override their axis (a key that is absent =
+    the base). Every combination is a defined state — partial
+    specification is the compact uniaxial form — so there is no shape
+    guard to write. The positional 3-element diagonal and the 3×3 full
+    tensor are **not expressible** on the wire (P2-5: the direct
+    off-diagonal tensor entry was the P0-1 instability entry; a rotated
+    diagonal goes through a named ``matrix_frame`` attribute instead).
+    Values are finite and > 0 per scalar (dispersionless negative ε/μ is
+    a source of numerical divergence; metals go through pole/nk fitting).
 
     color: an optional color value **for display only** ("#RRGGBB").
     The GUI's 3D view colors by material — solids of the same material
@@ -592,33 +567,51 @@ class ConstMatSpec(_Identified, _StrictModel):
 
     type: Literal["const"] = "const"
     name: str = Field(min_length=1)
-    eps: NumOrTensor = 1.0
-    mu: NumOrTensor = 1.0
+    eps: float = 1.0
+    eps_xx: Optional[float] = None   # axis override; None = eps base
+    eps_yy: Optional[float] = None
+    eps_zz: Optional[float] = None
+    mu: float = 1.0
+    mu_xx: Optional[float] = None
+    mu_yy: Optional[float] = None
+    mu_zz: Optional[float] = None
     color: Optional[str] = None
 
-    _v = field_validator("eps", "mu", mode="after")(_check_finite_pos)
+    _v = field_validator(
+        "eps", "eps_xx", "eps_yy", "eps_zz",
+        "mu", "mu_xx", "mu_yy", "mu_zz", mode="after")(_check_finite_pos)
     _vc = field_validator("color", mode="after")(_check_hex_color)
 
 
 class LorentzMatSpec(_Identified, _StrictModel):
     """Lorentz/Drude dispersive material. eps_inf/mu_inf follow the same
-    shape semantics as ConstMatSpec's eps/mu (scalar iso | 3-element
-    diagonal | 3×3 tensor) but **any finite sign** is accepted: a negative
-    high-frequency constant is an ordinary rational model (metals fit to
-    one), so there is no positivity gate here. Per-pole forms of
-    poles/mu_poles are described in PoleSpec (iso | axis-mounted, purely
-    scalar parameters + optional axis). color: same as ConstMatSpec.color
-    (display only)."""
+    a16 shape semantics as ConstMatSpec's eps/mu (scalar iso base +
+    optional per-axis named keys ``eps_inf_xx``/``eps_inf_yy``/
+    ``eps_inf_zz``; absent = base) but **any finite sign** is accepted: a
+    negative high-frequency constant is an ordinary rational model
+    (metals fit to one), so there is no positivity gate here. Per-pole
+    forms of poles/mu_poles are described in PoleSpec (iso |
+    axis-mounted, purely scalar parameters + optional axis). color: same
+    as ConstMatSpec.color (display only)."""
 
     type: Literal["lorentz"] = "lorentz"
     name: str = Field(min_length=1)
-    eps_inf: NumOrTensor = 1.0
-    mu_inf: NumOrTensor = 1.0
+    eps_inf: float = 1.0
+    eps_inf_xx: Optional[float] = None   # axis override; None = base
+    eps_inf_yy: Optional[float] = None
+    eps_inf_zz: Optional[float] = None
+    mu_inf: float = 1.0
+    mu_inf_xx: Optional[float] = None
+    mu_inf_yy: Optional[float] = None
+    mu_inf_zz: Optional[float] = None
     poles: list[PoleSpec] = Field(default_factory=list)
     mu_poles: list[PoleSpec] = Field(default_factory=list)
     color: Optional[str] = None
 
-    _v = field_validator("eps_inf", "mu_inf", mode="after")(_check_finite_real)
+    _v = field_validator(
+        "eps_inf", "eps_inf_xx", "eps_inf_yy", "eps_inf_zz",
+        "mu_inf", "mu_inf_xx", "mu_inf_yy", "mu_inf_zz",
+        mode="after")(_check_finite_real)
     _vc = field_validator("color", mode="after")(_check_hex_color)
 
 
@@ -672,22 +665,73 @@ MaterialSpec = Annotated[
 
 
 # ---------------------------------------------------------------------------
-# Geometry (box/sphere/cylinder as the workhorses; +ngon_z/polygon_z
-# (regular n-gon hole arrays and arbitrary-polygon metasurface cells),
-# +ellipse_z/ring_z/polygon_swept (elliptical holes / hole rings /
-# sheared sweeps); the dialect aligns with local fdtd/api/geometry.py)
+# Attributes (protocol 2.0.1a15): named, reusable per-object properties.
+# 2026-11-18 定案（A）：材料 frame **不是**几何上的内联字段，而是命名的
+# ``matrix_frame`` attribute，几何按名引用（``attribute: "rot"``）——和
+# material 同一套「命名 + 外键」复用规则。当前只有一种 attribute；联合按
+# ``type`` 判别，第二种类型是加法式扩展。
 # ---------------------------------------------------------------------------
 
 
+def _check_matrix_frame(v):
+    """``matrix_frame`` shape guard: 3×3 nested list. Finiteness is covered
+    by _StrictModel's full isfinite walk; orthogonality is NOT required at
+    the wire (the kernel's SVD projection reports the correction) — a
+    client may submit a slightly non-unitary measured frame."""
+    if v is None:
+        return v
+    if len(v) != 3 or any(len(row) != 3 for row in v):
+        raise ValueError(
+            "matrix_frame must be 3x3 (row-major nested "
+            "list[list[float]], material frame -> lab)")
+    return v
+
+
+class MatrixFrameSpec(_Identified, _StrictModel):
+    """One named material frame: **material frame -> lab**, a real 3×3 U.
+
+    Applied as ``T_lab = U·T_mat·Uᵀ``. The attribute belongs to the
+    structure that references it, not to the material: one material may be
+    used by framed and unframed objects at the same time, and several
+    objects may share one frame. Pole axes always stay in the material
+    frame; the kernel projects U to the nearest orthogonal matrix with an
+    SVD (``model.materials.PoleFrame``) and reports the correction. With a
+    non-identity frame the material constants must be scalar or diagonal in
+    the material frame (a full tensor plus a frame would be two rotations;
+    the kernel rejects it at build).
+    """
+
+    type: Literal["matrix_frame"] = "matrix_frame"
+    name: str = Field(min_length=1)
+    matrix_frame: list[list[float]]
+
+    _matrix_frame_guard = field_validator(
+        "matrix_frame", mode="after")(_check_matrix_frame)
+
+
+AttributeSpec = Annotated[
+    Union[MatrixFrameSpec],
+    Field(discriminator="type"),
+]
+
+
 class _NamedGeo(_Identified):
-    """The **required name** of geometry objects.
+    """The **required name** of geometry objects + the attribute reference.
 
     The name is a human-readable address (forms locate by id, and the id
     does not drift on rename); the solver does not consume it (not in
     translate). Unique within a collection (SimConfig._check checks
-    duplicates)."""
+    duplicates).
+
+    ``attribute`` (protocol 2.0.1a15) references a named entry of
+    ``ModelSpec.attributes`` (today: a ``matrix_frame``); None = no
+    attribute = identity/no frame (legacy payloads validate verbatim).
+    This is the **only** way to give an object a material frame: there is
+    no inline geometry field, no second path.
+    """
 
     name: str = Field(min_length=1)
+    attribute: Optional[str] = None
 
 
 # ── 几何旋转（任务 4，2026-11-12 站长拍板：欧拉角）──────────────────
@@ -1119,12 +1163,60 @@ class TimeMonSpec(_MonitorMixin):
         return v
 
 
+class ModeExpansionSpec(_StrictModel):
+    """Mode-expansion profile attached to a freq monitor (a14).
+
+    Only what an expansion basis needs: how many modes, the search index,
+    the cross-section boundary, and the two-face rotation. The plane/window/
+    grid come from the monitor itself; ``domain``/``mesh``/``wavelength``
+    are deliberately absent (those belong to a standalone mode solver).
+    """
+
+    n_modes: int = Field(default=1, ge=1)
+    n_ref: Optional[float] = Field(default=None, gt=0.0)
+    boundary: dict[str, BoundarySpec] = Field(default_factory=dict)
+    rotate_axis: Optional[str] = None
+    rotate_angle: float = 0.0
+    rotate_radius: float = 0.0
+    #: 'center' = one solve at the monitor's middle frequency (default);
+    #: 'all' = one solve per monitor frequency.
+    freq: Literal['center', 'all'] = 'center'
+
+    @model_validator(mode='after')
+    def _check(self):
+        for face, b in self.boundary.items():
+            if face not in FACES:
+                raise ValueError(
+                    f"mode_expansion.boundary: unknown face {face!r} "
+                    f"(expected one of: {FACES})")
+            if b.kind == 'bloch':
+                raise ValueError(
+                    'mode_expansion.boundary: bloch is a source-side knob; '
+                    'the expansion cross-section takes pec/pmc/periodic/pml')
+        if self.rotate_axis is not None and self.rotate_axis not in (
+                'x', 'y', 'z'):
+            raise ValueError(
+                f"mode_expansion.rotate_axis must be x|y|z or None, got "
+                f"{self.rotate_axis!r}")
+        if not -90.0 < float(self.rotate_angle) < 90.0:
+            raise ValueError(
+                'mode_expansion.rotate_angle must be in (-90, 90) degrees; '
+                f'got {self.rotate_angle!r}')
+        if self.rotate_angle != 0.0 and not self.rotate_axis:
+            raise ValueError(
+                'mode_expansion.rotate_axis is required when rotate_angle '
+                'is non-zero')
+        return self
+
+
 class FreqMonSpec(_MonitorMixin):
     type: Literal["freq"] = "freq"
     freq: dict[str, float]  # {"center": Hz, "bw": Hz, "n": point count}
     apodize: Optional[ApodizeSpec] = None
     # Same as TimeMonSpec: defaults to 'all'.
     field: str = "all"
+    #: optional mode-expansion profile (a14); requires field='all'
+    mode_expansion: Optional[ModeExpansionSpec] = None
 
     @field_validator("field", mode="after")
     @classmethod
@@ -1177,6 +1269,16 @@ class FreqMonSpec(_MonitorMixin):
         if center - bw / 2 < 0:
             raise ValueError("freq.center - bw/2 must be >= 0")
         return {"center": float(center), "bw": float(bw), "n": n}
+
+
+    @model_validator(mode='after')
+    def _mode_expansion_needs_all_fields(self):
+        if self.mode_expansion is not None and self.field != 'all':
+            raise ValueError(
+                "freq.mode_expansion requires field='all' (the six Yee "
+                "components are the projection input); got "
+                f"field={self.field!r}")
+        return self
 
 
 class IndexMonSpec(_MonitorMixin):
@@ -1233,12 +1335,18 @@ _SOLVER_NAME = r"^[a-z][a-z0-9_]{0,31}$"
 
 
 class ModelSpec(_StrictModel):
-    """结构段（Q17 嵌套户型）：materials / geometry / parameters——
-    全求解器共享的一份结构（= SDK 的 genie 本体 = 内核 GenSim 场景）。
-    材料外键、重名守卫、参数名图案都随字段搬进这里。"""
+    """结构段（Q17 嵌套户型）：materials / geometry / attributes /
+    parameters——全求解器共享的一份结构（= SDK 的 genie 本体 = 内核
+    GenSim 场景）。材料外键、属性外键/重名、重名守卫、参数名图案都随字段
+    搬进这里。
+
+    ``attributes``（2.0.1a15）是命名、可复用的对象属性（今天只有
+    ``matrix_frame``）；None / 缺省 = 无属性，旧载荷逐字合法（不写空表——
+    SDK 提升时同样省略空表，保旧 payload / digest 不变）。"""
 
     materials: list[MaterialSpec] = Field(default_factory=list)
     geometry: list[GeometrySpec] = Field(default_factory=list)
+    attributes: Optional[list[AttributeSpec]] = None
     # Global parameters node: keys = identifiers
     # (^[A-Za-z_][A-Za-z0-9_]*$, <=64 chars), values = numbers or
     # expression strings referencing the other parameters (environment =
@@ -1294,6 +1402,23 @@ class ModelSpec(_StrictModel):
                     f"geometry references undefined material "
                     f"{g.material!r} (expected a name from materials[]: "
                     f"{sorted(known) if known else 'none defined'})")
+        # Attributes are named objects referenced by geometry (same pattern
+        # as materials): unique names, and every reference must resolve.
+        anames = [a.name for a in (self.attributes or [])]
+        if len(anames) != len(set(anames)):
+            dups = sorted({n for n in anames if anames.count(n) > 1})
+            raise ValueError(
+                f"duplicate attribute names: {dups} — attribute names are "
+                f"what geometry references; a duplicate silently shadows "
+                f"the earlier definition (rename one of them)")
+        known_attr = set(anames)
+        for g in self.geometry:
+            ref = getattr(g, "attribute", None)
+            if ref is not None and ref not in known_attr:
+                raise ValueError(
+                    f"geometry references undefined attribute {ref!r} "
+                    f"(expected a name from attributes[]: "
+                    f"{sorted(known_attr) if known_attr else 'none defined'})")
         return self
 
 

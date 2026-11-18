@@ -171,7 +171,8 @@ class _SolverHandle:
 class Genie:
     """genie = core ``Model`` + actions (semantics live in core; binding
     and action implementations live in worker). Attribute reads/writes
-    delegate to the model (structure: materials / geometry / parameters);
+    delegate to the model (structure: materials / geometry / attributes /
+    parameters);
     a declared solver name resolves to its handle (``genie.fdtd`` —
     auto-vivified default — or any name declared via
     ``genie.add_solver``); ``genie.lib`` is the package escape hatch.
@@ -196,7 +197,7 @@ class Genie:
             attr = None
         if name == "parameters":
             return _ROMapping(self._model.parameters)
-        if name in ("geometry", "materials"):
+        if name in ("geometry", "materials", "attributes"):
             return _ROCollection(attr, name)
         if attr is not None:
             return attr
@@ -256,6 +257,11 @@ class Genie:
         ``.coords`` / ``.modes[i]``; a single-λ job is the one-element
         case; zero terminal lines)."""
         return self._read_current(lambda data: data.get_modes())
+
+    def get_expansion(self, mon=None):
+        """Kernel-written mode-expansion result for ``mon`` (or the sole
+        one when omitted); eager ``ModeExpansionResult``."""
+        return self._read_current(lambda data: data.get_expansion(mon))
 
     # -- the two result-view verbs (Q4.5 public read verbs; emit structured
     # out events for the GUI, zero terminal lines). -------------------------
@@ -520,6 +526,9 @@ class Genie:
 
     def add_geometry(self, name, type):  # noqa: A002
         return self._surface.add_geometry(name, type)
+
+    def add_attribute(self, name, type="matrix_frame"):  # noqa: A002
+        return self._surface.add_attribute(name, type)
 
     def add_analysis(self, name):
         return self._surface.add_analysis(name)

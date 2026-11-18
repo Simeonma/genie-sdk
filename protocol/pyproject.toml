@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "genie-protocol"
-version = "2.0.1a13"
+version = "2.0.1a15"
 description = "GENIE wire-format protocol layer - SimConfig models, expression evaluator, resolver, estimator (single source shared by SDK client, gateway and compute kernel)"
 requires-python = ">=3.10"
 dependencies = [
@@ -53,6 +53,19 @@ dependencies = [
     #   boundary pairing into FdtdConfigSpec. Solver set stays open —
     #   unknown solvers' config passes through as a dict (deployment
     #   fact).
+    # 2.0.1a15 (2026-11-18, additive — attributes enter the wire): a new
+    #   model-level `attributes` list of named, reusable objects (today one
+    #   type: type="matrix_frame", a real 3×3 material-frame -> lab
+    #   rotation), referenced by every geometry spec via `attribute: <name>`
+    #   — the same naming + foreign-key pattern as materials. There is NO
+    #   inline geometry frame field: one representation, one path. The
+    #   attribute belongs to the object (one material may be used by framed
+    #   and unframed structures; several objects may share one frame); the
+    #   kernel projects U with an SVD and applies T_lab = U·T_mat·Uᵀ. With
+    #   a non-identity frame the material constants must be scalar/diagonal
+    #   in the material frame (full tensor + frame = two rotations =
+    #   rejected at build). `attributes` absent/None = no attributes;
+    #   legacy payloads validate verbatim (no empty list is written).
     # 2.0.1a13 (2026-11-16, additive — M3 mode source enters the wire):
     #   the fdtd source union gains type="mode" (ModeSourceSpec): temporal
     #   five (freq/bandwidth/delay/phase/name, shared with every source;

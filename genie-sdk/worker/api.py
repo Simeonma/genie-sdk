@@ -2,9 +2,9 @@
 
 One address grammar, one write verb, one read verb:
 
-    genie.add_parameter / add_material / add_geometry / add_analysis /
-    add_sweep / add_solver / <solver>.add_source / add_monitor /
-    add_mesh_refine
+    genie.add_parameter / add_material / add_geometry / add_attribute /
+    add_analysis / add_sweep / add_solver / <solver>.add_source /
+    add_monitor / add_mesh_refine
     genie.set_named(addr, **fields)      # the ONLY write channel
     genie.get_named(addr[, field])       # model fields
     genie.describe(addr)                 # field table
@@ -44,10 +44,14 @@ from genie.net import TERMINAL_OK
 _SEG = re.compile(r"^[A-Za-z][A-Za-z0-9_-]*$")
 
 #: top-level families of the user surface
-_FAMILIES = ("parameter", "material", "geometry", "analysis", "sweep")
+_FAMILIES = ("parameter", "material", "geometry", "attribute", "analysis",
+             "sweep")
 
 #: material types accepted by ``add_material`` (wire type in parentheses)
 _MAT_TYPES = {"const": "const", "lorentz": "lorentz", "library": "lorentz"}
+
+#: attribute types accepted by ``add_attribute`` (one path: named frame)
+_ATTR_TYPES = {"matrix_frame"}
 
 #: geometry types → wire kinds (same name on both sides)
 _GEO_TYPES = {"box", "sphere", "cylinder", "ngon_z", "polygon_z",
@@ -138,6 +142,8 @@ class Surface:
             return {k: ("parameter", k) for k in m.parameters}
         if family == "material":
             return {it.name: it for it in m._materials}
+        if family == "attribute":
+            return {it.name: it for it in m._attributes}
         if family == "geometry":
             return {it.name: it for it in m._geometry}
         if family == "analysis":
@@ -270,6 +276,16 @@ class Surface:
         self._model.geometry._add(type, name)
         return f"geometry.{name}"
 
+    def add_attribute(self, name, type="matrix_frame"):  # noqa: A002
+        """Named, reusable object attribute (today: ``matrix_frame``)."""
+        self._ensure_free(name, "attribute")
+        if type not in _ATTR_TYPES:
+            raise ValueError(
+                f"attribute type {type!r} is invalid (expected: "
+                f"{', '.join(sorted(_ATTR_TYPES))})")
+        self._model.attributes._add(type, name)
+        return f"attribute.{name}"
+
     def add_analysis(self, name):
         self._ensure_free(name, "analysis")
         post.add_verb(self._env, name)          # creates the empty recipe
@@ -288,11 +304,7 @@ class Surface:
         if type not in ("fdtd", "mode"):
             raise ValueError(f"solver type {type!r} is invalid (expected: "
                              f"fdtd | mode)")
-        if name != type:
-            raise ValueError(
-                f"solver address must equal its type for now ({name!r} vs "
-                f"{type!r}); use add_solver(name='{type}', type='{type}')")
-        self._model.add_solver(type)
+        self._model.add_solver(name, type)
         return name
 
     def solver(self, name):
@@ -353,6 +365,17 @@ class Surface:
                     raise ValueError(
                         f"{t.addr()}.material: material {v!r} not found "
                         f"(existing: {self._names_hint(self._family_members('material'))})")
+            if k == "attribute" and v is not None:
+                if v not in self._family_members("attribute"):
+                    raise ValueError(
+                        f"{t.addr()}.attribute: attribute {v!r} not found "
+                        f"(existing: {self._names_hint(self._family_members('attribute'))})")
+            setattr(draft, k, v)
+
+    def _set_attribute(self, t, fields):
+        draft = t.obj
+        self._only(t, fields, set(type(draft).model_fields))
+        for k, v in fields.items():
             setattr(draft, k, v)
 
     def _set_solver(self, t, fields):
@@ -414,7 +437,26 @@ class Surface:
                 band[_MON_BAND[k]] = v
             else:
                 rest[k] = v
+        from ..core.model.handle import ModeEnvelope
         for k, v in rest.items():
+            if k == "mode_expansion" and isinstance(v, dict) \
+                    and "mode_solver" in v:
+                ref = dict(v)
+                name = ref["mode_solver"]
+                env = self._model.envelope(name)
+                if not isinstance(env, ModeEnvelope):
+                    raise ValueError(
+                        f"mode_expansion.mode_solver={name!r} is kind "
+                        f"{getattr(env, 'kind', 'fdtd')!r}, not 'mode'")
+                extra = set(ref) - {"mode_solver", "freq"}
+                if extra:
+                    raise ValueError(
+                        f"mode_expansion reference has unknown key(s) "
+                        f"{sorted(extra)} (only mode_solver / freq)")
+                object.__setattr__(draft, "_mode_expansion_ref", ref)
+                continue
+            if k == "mode_expansion":
+                object.__setattr__(draft, "_mode_expansion_ref", None)
             setattr(draft, k, v)
         if band:
             draft.freq = band
@@ -516,6 +558,10 @@ class Surface:
         return {k: getattr(t.obj, k) for k in type(t.obj).model_fields
                 if getattr(t.obj, k, None) is not None}
 
+    def _get_attribute(self, t):
+        return {k: getattr(t.obj, k) for k in type(t.obj).model_fields
+                if getattr(t.obj, k, None) is not None}
+
     def _get_solver(self, t):
         env = t.obj
         out = {}
@@ -569,6 +615,8 @@ class Surface:
             self._mat_meta.pop(t.name, None)
         elif t.kind == "geometry":
             self._model.geometry.remove(t.name)
+        elif t.kind == "attribute":
+            self._model.attributes.remove(t.name)
         elif t.kind == "analysis":
             post.delete_verb(self._env, t.name)
         elif t.kind == "sweep":
@@ -633,7 +681,9 @@ class Surface:
         node = core_material.assemble_nk({"xx": fit, "yy": fit, "zz": fit},
                                          name=name)
         draft = self._family_members("material")[name]
-        draft.eps_inf = node["eps_inf"]
+        draft.eps_inf = node.get("eps_inf", 1.0)
+        for f in ("eps_inf_xx", "eps_inf_yy", "eps_inf_zz"):
+            setattr(draft, f, node.get(f))
         draft.poles = node["poles"]
         meta["band"] = band
         meta["quality"] = {k2: (float(v) if isinstance(v, (int, float)) else v)
@@ -683,9 +733,9 @@ class Surface:
         raise GenieJobError(jid, outcome["state"],
                             error=outcome.get("error"))
 
-    def run_mode(self, *, n_gpu=None):
+    def run_mode(self, name="mode", *, n_gpu=None):
         self._fit_pending()
-        return self._run_solver("mode", n_gpu=n_gpu)
+        return self._run_solver(name, n_gpu=n_gpu)
 
     def run_sweep(self, name):
         self._fit_pending()

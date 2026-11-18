@@ -89,7 +89,7 @@ def _resolve_value(ann, value, path, env, expr_at):
         nonnone = [m for m in members if m is not type(None)]
         if len(nonnone) == 1:     # unwrap Optional[X]
             return _resolve_value(nonnone[0], value, path, env, expr_at)
-        # NumOrTensor-like (numeric ∪ tuple/list): str → evaluate; sequences → element-wise
+        # sequence-shaped unions (numeric ∪ tuple/list): str → evaluate; sequences → element-wise
         if isinstance(value, str) and any(m in (float, int) for m in nonnone):
             return _eval_slot(value, path, env, expr_at)
         if isinstance(value, (list, tuple)):
@@ -142,7 +142,7 @@ def _resolve_value(ann, value, path, env, expr_at):
 
 
 def _resolve_seq_elem(v, path, env, expr_at):
-    """NumOrTensor sequence element: str → evaluate; nested lists (3×3 tensor rows) element-wise."""
+    """Sequence element: str → evaluate; nested lists element-wise."""
     if isinstance(v, str):
         return _eval_slot(v, path, env, expr_at)
     if isinstance(v, list):
@@ -225,7 +225,7 @@ def resolve_parameters(raw: dict) -> dict:
       irrelevant; cycles → ExprError("cycle") with the cycle chain; unknown
       names → lists the available names);
     - Numeric fields (including Optional / constrained Annotated / tuple
-      elements / dict values / NumOrTensor tensor elements): when the
+      elements / dict values / sequence unions): when the
       original value is a str → evaluate against the parameter environment,
       errors carrying the in-config path (e.g. ``source[0].freq``);
     - **Idempotent**: with no numeric-slot strings, the output is

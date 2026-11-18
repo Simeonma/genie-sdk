@@ -15,16 +15,18 @@ when an attribute is first touched; star imports trigger the full load per
 """
 from __future__ import annotations
 
-__version__ = "2.0.1a13"
+__version__ = "2.0.1a16"
 
 __all__ = [
     # basic type aliases
-    "Range2", "Vec3", "NumOrTensor",
+    "Range2", "Vec3",
     # Domain / Mesh
     "BoundarySpec", "DomainSpec", "RefineSpec", "MeshSpec",
     # Materials
     "PoleSpec", "ConstMatSpec", "LorentzMatSpec", "LibraryMatSpec",
     "MaterialSpec",
+    # Attributes (named, reusable per-object properties)
+    "MatrixFrameSpec", "AttributeSpec",
     # Geometry
     "BoxSpec", "SphereSpec", "CylinderSpec", "NgonZSpec", "PolygonZSpec",
     "EllipseZSpec", "RingZSpec", "GeometrySpec",
@@ -32,7 +34,7 @@ __all__ = [
     "SoftSourceSpec", "PlaneWaveSpec", "GaussianBeamSpec",
     "ModeSelectionSpec", "ModeSourceSpec", "SourceSpec",
     # Monitor
-    "DownSampleSpec", "ApodizeSpec", "TimeMonSpec", "FreqMonSpec",
+    "DownSampleSpec", "ApodizeSpec", "TimeMonSpec", "FreqMonSpec", "ModeExpansionSpec",
     "IndexMonSpec", "MonitorSpec",
     # Run and the top-level config (Q17 nested house)
     "RunSpec", "ModelSpec", "FdtdConfigSpec",

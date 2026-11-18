@@ -1947,27 +1947,11 @@ body.result-mode #bar-run-slot .run-btn svg { display: none; }
 .mode-pill + .mode-pill { border-left: 1px solid var(--border); }
 .mode-pill:hover:not(.on) { color: var(--text-primary); }
 .mode-pill.on { background: var(--bg-active); color: var(--accent-2); font-weight: 600; }
-.tgrid {
-  display: grid;
-  grid-template-columns: 1.6em repeat(3, minmax(0, 1fr));
-  gap: 4px; margin: 4px 0 10px 0; align-items: center;
-}
-.tgrid .tgh { font-size: var(--fs-xs); color: var(--text-muted); text-align: center; user-select: none; }
-.tcell { min-width: 0; }
-.tcell .inwrap { display: flex; width: 100%; }
-/* 可编辑格走全局输入观感（.inwrap input：bg-sunken）——与 iso/全界面一致；
- * 锁定格用明显禁用观感（tertiary 实底 + 虚线 + 弱化 + 禁光标） */
-.tcell input { text-align: center; padding-left: 2px; padding-right: 2px; }
-.tcell.locked {
-  background: var(--bg-tertiary); border: 1px dashed var(--border);
-  border-radius: var(--radius-sm); text-align: center; color: var(--text-muted);
-  font-size: var(--fs-xs); line-height: 24px; user-select: none; cursor: not-allowed;
-}
 
 /* ══ 材料卡折叠分组（2026-09：ε/μ/极点 分组，复用 .sec 语言；二级单 pole）══
  * 组头 margin/底 与 .card .sec-body 的最终形态由文件尾 v3「块头升级为分组带」
- * 链定案——本节早期 .card .sec-head/.sec-body 重复段已折叠删除。 */
-.matmode-row { margin: 2px 0 6px; justify-content: flex-end; }
+ * 链定案——本节早期 .card .sec-head/.sec-body 重复段已折叠删除。
+ * （a16：.tgrid 张量/对角矩阵格与 .matmode-row 已随线格式删张量态退役） */
 .mfield-row .mode-pills { margin-left: auto; }   /* 形态胶囊随行（后代级；直子级同值规则在「ε/μ 标签与输入同行」节） */
 
 .pchev { font-size: var(--fs-xs); color: var(--text-muted); transition: transform var(--dur-base); }
@@ -2061,16 +2045,6 @@ body.result-mode #bar-run-slot .run-btn svg { display: none; }
 
 /* ε/μ 标签与输入同行（2026-09）：短名左对齐，胶囊同排最右
  * R17：gap 与 flat 面板 .frow 一致(4px)，使值列左边缘对齐（label 110 + gap 4 = 114）。 */
-   /* align-items 终值 flex-start 定案于「ε/μ 编辑器比例统一」节 */
-.mfield-row > .tgrid {
-  min-width: 0;
-  max-width: 340px;
-  flex: none;
-  margin: 0;
-  width: 180px;
-  grid-template-columns: 1.4em repeat(3, minmax(0, 1fr));
-  gap: 3px;
-}
 .mfield-row > .mode-pills { margin-left: auto; }
 /* 顶对齐 / label 行高：站长反馈定案，同值终值规则在「ε/μ 编辑器比例统一」节（旧重复段折叠） */
 
@@ -2169,11 +2143,15 @@ body.result-mode #bar-run-slot .run-btn svg { display: none; }
 .mfield-row .flabel {
   text-align: left;
 }
-.mfield-row > .tgrid .tcell input {
-  padding: 0 2px;
-  font-size: var(--fs-xs);
-  text-align: center;
-  font-variant-numeric: tabular-nums;
+
+/* a16 对角命名键三槽（.mfield-row 内 3×.inwrap）：flex 均分行余宽，
+ * 与 .pi-body α/β 向量行同一 :has 规则体系；iso 单槽走 :only-of-type 130px。 */
+#config-content .mfield-row:has(> .inwrap + .inwrap) > .inwrap {
+  flex: 1 1 0; width: auto; min-width: 0; max-width: none;
+}
+#config-content .mfield-row:has(> .inwrap + .inwrap) > .inwrap input {
+  flex: 1 1 auto; width: 100%; min-width: 48px; max-width: none;
+  text-align: center; font-variant-numeric: tabular-nums;
 }
 
 /* ε/μ 编辑器 & pole 统一两栏 & 矩阵与 iso 同宽减重（2026-09，站长"都做"） */
@@ -2196,7 +2174,7 @@ body.result-mode #bar-run-slot .run-btn svg { display: none; }
   color: var(--text-secondary); font-weight: 500; line-height: 26px;
 }
 /* R17：材料场单值列统一走 flat 的 130px 紧凑刻度（label.flabel 110px 之后）。
- * 矩阵(.tgrid)/矢量(α、β 多 inwrap) 不命中 :only-of-type，保留自身体系。 */
+ * 对角三槽（a16）/矢量(α、β 多 inwrap) 不命中 :only-of-type，保留各自体系。 */
 .mfield-row > .inwrap:only-of-type,.pi-body .frow > .inwrap:only-of-type {
   flex: none; width: 130px;
 }

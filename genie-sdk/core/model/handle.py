@@ -63,6 +63,9 @@ _MAT: dict = {
     "lorentz": DRAFT_OF[_wire.LorentzMatSpec],
     "from_library": DRAFT_OF[_wire.LibraryMatSpec],
 }
+_ATTR: dict = {
+    "matrix_frame": DRAFT_OF[_wire.MatrixFrameSpec],
+}
 _SRC: dict = {
     "soft_source": DRAFT_OF[_wire.SoftSourceSpec],
     "plane_wave": DRAFT_OF[_wire.PlaneWaveSpec],
@@ -220,6 +223,15 @@ class _CollectionView:
     def add_ellipse_z(self, name=None):      return self._add("ellipse_z", name)
     def add_ring_z(self, name=None):         return self._add("ring_z", name)
 
+    def add_attribute(self, name=None, type=None):  # noqa: A002
+        """Named, reusable object attribute (today: ``matrix_frame``)."""
+        kind = type or "matrix_frame"
+        if kind not in _ATTR:
+            raise ValueError(
+                f"attribute type {kind!r} is invalid (expected: "
+                f"{', '.join(sorted(_ATTR))})")
+        return self._add(kind, name)
+
     def add_const(self, name=None, node=None):  return self._add("const", name, node)
     def add_lorentz(self, name=None, node=None): return self._add("lorentz", name, node)
     def add_from_library(self, name=None):   return self._add("from_library", name)
@@ -241,11 +253,12 @@ class Solver:
     (materials / geometry / parameters) lives on the Model and is shared
     by every solver."""
 
-    __slots__ = ("name", "domain", "mesh", "sources", "monitors",
+    __slots__ = ("name", "kind", "domain", "mesh", "sources", "monitors",
                  "_source", "_monitor")
 
     def __init__(self, owner: "Model", name: str) -> None:
         object.__setattr__(self, "name", name)
+        object.__setattr__(self, "kind", "fdtd")
         object.__setattr__(self, "domain", DomainDraft())
         object.__setattr__(self, "mesh", MeshDraft())
         self._source: list = []
@@ -277,16 +290,17 @@ class ModeEnvelope:
     赋值点拦类型/形状错，值只经 ``=``）；提升时的存在性守卫（横截面两
     轴必填、波长必填）在 validate_for_ui，draft 阶段留未填态。"""
 
-    __slots__ = ("name", "_cfg")
+    __slots__ = ("name", "kind", "_cfg")
 
     #: 包络字段（= ModeConfigSpec v2.1 的顶层；读写都路由进 config draft）。
     #: n_ref（Q20）：搜索折射率，缺省 None = 截面最大折射率（内核缺省）。
     _FIELDS = ("domain", "mesh", "boundary", "wavelength", "n_modes",
-               "n_ref")
+               "n_ref", "rotate_axis", "rotate_angle", "rotate_radius")
 
     def __init__(self, owner: "Model", name: str) -> None:
         # owner 形参与 Solver 同构（包络不回指模型——结构在 Model 上共享）
         object.__setattr__(self, "name", name)
+        object.__setattr__(self, "kind", "mode")
         cfg = ModeConfigDraft()
         cfg.domain = ModeDomainDraft()      # 急建单件：genie.mode.domain.axis 直达
         cfg.mesh = ModeMeshDraft()
@@ -325,7 +339,7 @@ class Model:
     (semantics live in core, values live in worker).
 
     - Field values enter only via ``=``; commands take only an address;
-    - structure: ``materials`` / ``geometry`` collections +
+    - structure: ``materials`` / ``geometry`` / ``attributes`` collections +
       ``parameters`` key-value pairs, shared by every solver;
     - solvers: ``add_solver(name)`` declares; the fdtd default
       auto-vivifies on access (``envelope``);
@@ -341,13 +355,17 @@ class Model:
         self._run = RunDraft()
         self._geometry: list = []
         self._materials: list = []
+        self._attributes: list = []
         self.geometry = _CollectionView(self, "geometry", self._geometry, _GEO)
         self.materials = _CollectionView(self, "materials", self._materials, _MAT)
+        self.attributes = _CollectionView(self, "attributes",
+                                          self._attributes, _ATTR)
         self._solvers: dict[str, Solver] = {}
 
     # -- solvers ------------------------------------------------------
 
-    def add_solver(self, name) -> Solver:
+    def add_solver(self, name, kind=None) -> Solver:
+        kind = kind or name
         """Declare a solver (its envelope starts empty). The name follows
         the wire ``_SOLVER_NAME`` pattern (same ruler as the protocol --
         no second regex here). Duplicate declaration is an error (it
@@ -362,7 +380,11 @@ class Model:
                 f"solver {name!r} is already declared — envelopes hold "
                 f"solver state, re-declaring would discard it "
                 f"(use the existing genie.{name})")
-        s = _ENVELOPE_OF.get(name, Solver)(self, name)
+        if kind not in ("fdtd", "mode"):
+            raise ValueError(
+                f"solver kind must be fdtd|mode, got {kind!r}")
+        cls = ModeEnvelope if kind == "mode" else Solver
+        s = cls(self, name)
         self._solvers[name] = s
         return s
 
@@ -394,6 +416,49 @@ class Model:
 
     # -- promotion ------------------------------------------------------
 
+    def _wire_monitor(self, mon) -> dict:
+        """Resolve an SDK ``mode_solver`` reference in-place for the wire.
+
+        ``mon.mode_expansion`` may be a dict ``{"mode_solver": "probe",
+        "freq": ...}``; the payload must carry the *profile*, never the
+        local name (the remote job has no document). The reference stays on
+        the draft; only the serialize is resolved.
+        """
+        me = getattr(mon, "mode_expansion", None)
+        ref = getattr(mon, "_mode_expansion_ref", None)
+        if ref is None:
+            if not (isinstance(me, dict) and "mode_solver" in me):
+                return to_wire(mon)
+            ref = me
+        ref = dict(ref)
+        name = ref.pop("mode_solver")
+        env = self.envelope(name)
+        if not isinstance(env, ModeEnvelope):
+            raise ValueError(
+                f"mode_expansion.mode_solver={name!r} is kind "
+                f"{getattr(env, 'kind', 'fdtd')!r}, not 'mode'")
+        from genie_protocol import ModeExpansionSpec
+        profile = {
+            "n_modes": int(getattr(env, "n_modes", 1) or 1),
+            "n_ref": getattr(env, "n_ref", None),
+            "boundary": dict(getattr(env, "boundary", {}) or {}),
+            "rotate_axis": getattr(env, "rotate_axis", None),
+            "rotate_angle": float(getattr(env, "rotate_angle", 0.0) or 0.0),
+            "rotate_radius": float(getattr(env, "rotate_radius", 0.0) or 0.0),
+            "freq": ref.pop("freq", "center"),
+        }
+        if ref:
+            raise ValueError(
+                f"mode_expansion reference has unknown key(s) "
+                f"{sorted(ref)} (only mode_solver / freq)")
+        resolved = DRAFT_OF[ModeExpansionSpec].model_validate(profile)
+        old = mon.mode_expansion
+        mon.mode_expansion = resolved
+        try:
+            return to_wire(mon)
+        finally:
+            mon.mode_expansion = old
+
     def to_config(self, solver: str | None = None) -> dict:
         """Promotion: draft → a dict in the **Q17 nested** SimConfig shape
         (Nones stripped) for one run of ``solver`` (default = the fdtd
@@ -414,19 +479,25 @@ class Model:
                 "domain": to_wire(s.domain),
                 "mesh": to_wire(s.mesh),
                 "source": [to_wire(i) for i in s._source],
-                "monitor": [to_wire(i) for i in s._monitor],
+                "monitor": [self._wire_monitor(i) for i in s._monitor],
             }
+        mdl = {
+            "materials": [to_wire(i) for i in self._materials],
+            "geometry": [to_wire(i) for i in self._geometry],
+            # Empty attributes are OMITTED: the wire key is additive and
+            # legacy configs must stay byte-identical (digest unchanged).
+            "parameters": dict(self.parameters),
+        }
+        if self._attributes:
+            mdl["attributes"] = [to_wire(i) for i in self._attributes]
         cfg = {
-            "model": {
-                "materials": [to_wire(i) for i in self._materials],
-                "geometry": [to_wire(i) for i in self._geometry],
-                "parameters": dict(self.parameters),
-            },
+            "model": mdl,
             "config": conf,
             "run": to_wire(self._run),
         }
-        if solver is not None and solver != DEFAULT_SOLVER:
-            cfg["solver"] = solver
+        kind = getattr(s, "kind", DEFAULT_SOLVER)
+        if kind != DEFAULT_SOLVER:
+            cfg["solver"] = kind
         return cfg
 
     @property
@@ -479,6 +550,7 @@ class Model:
         for kinds, items, src, key in (
                 (_GEO, m._geometry, model, "geometry"),
                 (_MAT, m._materials, model, "materials"),
+                (_ATTR, m._attributes, model, "attributes"),
                 (_SRC, src_items, conf, "source"),
                 (_MON, mon_items, conf, "monitor")):
             for raw in src.get(key) or []:
@@ -488,7 +560,7 @@ class Model:
                 items.append(kinds[kind].model_validate(raw))
         highest = max(
             [next_id or 0]
-            + [it.id for it in (m._geometry + m._materials + src_items
-                                + mon_items) if it.id is not None])
+            + [it.id for it in (m._geometry + m._materials + m._attributes
+                                + src_items + mon_items) if it.id is not None])
         m._alloc.raise_to(highest)
         return m

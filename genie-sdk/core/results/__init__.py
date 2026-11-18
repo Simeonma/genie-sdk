@@ -20,15 +20,16 @@ from __future__ import annotations
 
 import json
 import shutil
+from dataclasses import dataclass
 from typing import Any
 
 import h5py
 import numpy as np
 
 __all__ = ["H5_FORMAT_PREFIX", "SimData", "TimeResult", "FreqResult",
-           "IndexResult", "ModeResult", "ensure_supported_format",
-           "read_monitor", "read_modes", "modes_manifest",
-           "open_result"]
+           "IndexResult", "ModeResult", "ModeExpansionResult",
+           "ensure_supported_format", "read_monitor", "read_modes",
+           "read_expansion", "modes_manifest", "open_result"]
 
 #: Result-file format contract prefix (the kernel driver writes root attrs ``format`` =
 #: ``"genie-results-h5/<minor>"``). SDK read-verb entry points validate the prefix — a
@@ -480,6 +481,65 @@ class ModeSweepResult:
 
 # ── SimData (lazy wrapper over h5)───────────────────────────────────────────
 
+@dataclass
+class ModeExpansionResult:
+    """One mode-expansion result (kernel-derived; SDK reads it verbatim).
+
+    The kernel writes ``/mode_expansion/<monitor>/`` (a14): amplitudes are
+    normalized by sqrt(source_norm) when available; powers/fractions/residual
+    are already derived. SDK does no physics.
+    """
+    freqs: np.ndarray
+    wavelengths: np.ndarray
+    neff: np.ndarray
+    amplitudes: np.ndarray
+    powers: np.ndarray
+    fractions: np.ndarray
+    residual: np.ndarray
+    flux: np.ndarray
+    source_norm: np.ndarray | None
+    attrs: dict
+
+
+def read_expansion(h5, name: str | None = None) -> ModeExpansionResult:
+    """Read ``/mode_expansion/<name>`` from a result h5."""
+    if "mode_expansion" not in h5:
+        raise KeyError(
+            "no mode-expansion result in this h5 (the monitor did not "
+            "request mode_expansion)")
+    root = h5["mode_expansion"]
+    names = list(root.keys())
+    if name is None:
+        if len(names) != 1:
+            raise ValueError(
+                f"mode expansion: {len(names)} monitors present "
+                f"({', '.join(names) or 'none'}); pass the monitor name")
+        name = names[0]
+    if name not in root:
+        raise KeyError(
+            f"mode expansion: no monitor {name!r} (existing: "
+            f"{', '.join(names) or 'none'})")
+    g = root[name]
+    missing = [k for k in ("freqs", "wavelengths", "neff", "amplitudes",
+                           "powers", "fractions", "residual", "flux")
+               if k not in g]
+    if missing:
+        raise ValueError(
+            f"mode expansion {name!r}: missing dataset(s) {missing}")
+    return ModeExpansionResult(
+        freqs=np.asarray(g["freqs"][()]),
+        wavelengths=np.asarray(g["wavelengths"][()]),
+        neff=np.asarray(g["neff"][()]),
+        amplitudes=np.asarray(g["amplitudes"][()]),
+        powers=np.asarray(g["powers"][()]),
+        fractions=np.asarray(g["fractions"][()]),
+        residual=np.asarray(g["residual"][()]),
+        flux=np.asarray(g["flux"][()]),
+        source_norm=(np.asarray(g["source_norm"][()])
+                     if "source_norm" in g else None),
+        attrs={k: g.attrs[k] for k in g.attrs})
+
+
 class _MonitorView:
     """Single-monitor view: attribute/subscript access reaches the dataset directly (``data.tr.Ex`` → lazy Dataset).
 
@@ -567,7 +627,8 @@ class SimData:
 
     @property
     def monitors(self) -> list[str]:
-        return list(self._f.keys())
+        return [k for k in self._f.keys()
+                if _domain_of(self._f[k]) in ("f", "t", "i")]
 
     # -- parsing entry points (same canonical path as f.get_*)----------
 
@@ -585,6 +646,10 @@ class SimData:
         eager 解析路径）。单 λ 结果 = 只含一个元素；没有第二个人口、也没有
         "单 λ 结果类型"。"""
         return read_modes(self._f)
+
+    def get_expansion(self, name: str | None = None) -> ModeExpansionResult:
+        """Kernel-written mode-expansion result (``/mode_expansion/<name>``)."""
+        return read_expansion(self._f, name)
 
     def __getattr__(self, name: str):           # monitor-name direct access; underscore guard
         if name.startswith("_"):
