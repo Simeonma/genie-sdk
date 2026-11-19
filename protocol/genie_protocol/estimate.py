@@ -20,17 +20,39 @@ def _axis_cells(rng, h: float) -> int:
     return max(1, math.ceil((rng[1] - rng[0]) / h))
 
 
-def _base_spacing(domain) -> tuple[float, float, float]:
-    """domain 基础间距（dy/dz 缺省 = dx）——两把尺子共用的基准。"""
-    return (domain.dx, domain.dy or domain.dx, domain.dz or domain.dx)
+def _axis_table(rng, d, segs) -> int:
+    """Q31：段表轴的格数（逐段 ceil 求和；均匀轴回落 _axis_cells）。"""
+    if segs is None:
+        return _axis_cells(rng, d)
+    return sum(max(1, math.ceil((s.hi - s.lo) / s.d)) for s in segs)
 
 
-def _zone_factor(zone, axis: str, base: float) -> float:
-    """mesh 对象每轴有效倍率（Q30）：绝对覆盖 → base/d（浮点倍率，
-    与内核 intake 同一换算口径）；否则 factor_x/y/z（int >= 1）。
-    绝对 > base 在 wire 层已被 FdtdConfigSpec 422，这里不会见到。"""
-    d = getattr(zone, f"d{axis}")
-    return base / d if d is not None else float(getattr(zone, f"factor_{axis}"))
+def _axis_base_d(d, segs) -> float:
+    """Q31：绝对 mesh → 倍率换算的基准（段表轴取最细段——估算面保守）。"""
+    if segs is not None:
+        return min(s.d for s in segs)
+    return d
+
+
+def _base_spacing(domain) -> tuple:
+    """domain 基础间距（dy/dz 缺省 = dx；段表轴返回 None——格数走
+    _axis_table，换算基准走 _axis_base_d）。"""
+    out = []
+    for a in ("x", "y", "z"):
+        if getattr(domain, f"{a}_spacing") is not None:
+            out.append(None)
+        else:
+            out.append(getattr(domain, f"d{a}") or domain.dx)
+    return tuple(out)
+
+
+def _zone_factor(zone, axis: str, rng, d, segs) -> float:
+    """mesh 对象每轴有效倍率（Q30/Q31）：绝对覆盖 → 基准/abs（浮点
+    倍率，段表轴以最细段为基准——估算口径）；否则 factor_x/y/z。"""
+    dv = getattr(zone, f"d{axis}")
+    if dv is not None:
+        return _axis_base_d(d, segs) / dv
+    return float(getattr(zone, f"factor_{axis}"))
 
 
 def estimate_cells_domain_mesh(domain, meshes) -> int:
@@ -38,13 +60,15 @@ def estimate_cells_domain_mesh(domain, meshes) -> int:
     the named mesh objects).
 
     ``domain``/``meshes`` = wire-format models (DomainSpec — carries the
-    base spacing dx/dy/dz — and the list of MeshSpec refinement boxes,
-    attribute access).
+    base grid: per-axis uniform d or a Q31 spacing table — and the list
+    of MeshSpec refinement boxes, attribute access).
     """
+    segs = tuple(getattr(domain, f"{a}_spacing")
+                 for a in ("x", "y", "z"))
     bx, by, bz = _base_spacing(domain)
-    nx = _axis_cells(domain.x_range, bx)
-    ny = _axis_cells(domain.y_range, by)
-    nz = _axis_cells(domain.z_range, bz)
+    nx = _axis_table(domain.x_range, bx, segs[0])
+    ny = _axis_table(domain.y_range, by, segs[1])
+    nz = _axis_table(domain.z_range, bz, segs[2])
     base = nx * ny * nz
     if not meshes:
         return base
@@ -58,9 +82,9 @@ def estimate_cells_domain_mesh(domain, meshes) -> int:
 
     extra = 0
     for m in meshes:
-        mult = (_zone_factor(m, "x", bx)
-                * _zone_factor(m, "y", by)
-                * _zone_factor(m, "z", bz))
+        mult = (_zone_factor(m, "x", domain.x_range, bx, segs[0])
+                * _zone_factor(m, "y", domain.y_range, by, segs[1])
+                * _zone_factor(m, "z", domain.z_range, bz, segs[2]))
         zv = (_clip(m.x_range, domain.x_range)
               * _clip(m.y_range, domain.y_range)
               * _clip(m.z_range, domain.z_range))
@@ -71,18 +95,23 @@ def estimate_cells_domain_mesh(domain, meshes) -> int:
 def _refined_min_cell(domain, meshes) -> float:
     """min_cell = each axis's base cell size ÷ that axis's cumulative
     product of mesh factors — the single formula source for the two
-    estimation rulers: n_steps_est and dt_est must share one basis and
-    stay self-consistent under refinement (dt_est × n_steps_est ≥
-    total_time). Does not chase graded-band inflation: an estimation for
-    a guard surface that errs tight rather than loose (see the module
-    header)."""
+    estimation rulers (n_steps_est and dt_est must share one basis and
+    stay self-consistent under refinement, dt_est × n_steps_est ≥
+    total_time). Q31：段表轴的基准 = 最细段（估算口径，保守侧）；
+    mesh 绝对覆盖在此换算成等效倍率。Does not chase graded-band
+    inflation: an estimation for a guard surface that errs tight rather
+    than loose (see the module header)."""
+    segs = tuple(getattr(domain, f"{a}_spacing")
+                 for a in ("x", "y", "z"))
     bx, by, bz = _base_spacing(domain)
     fx = fy = fz = 1.0
     for m in meshes:
-        fx *= _zone_factor(m, "x", bx)
-        fy *= _zone_factor(m, "y", by)
-        fz *= _zone_factor(m, "z", bz)
-    return min(bx / fx, by / fy, bz / fz)
+        fx *= _zone_factor(m, "x", domain.x_range, bx, segs[0])
+        fy *= _zone_factor(m, "y", domain.y_range, by, segs[1])
+        fz *= _zone_factor(m, "z", domain.z_range, bz, segs[2])
+    return min(_axis_base_d(bx, segs[0]) / fx,
+               _axis_base_d(by, segs[1]) / fy,
+               _axis_base_d(bz, segs[2]) / fz)
 
 
 def _dt_estimate(domain, meshes) -> float:

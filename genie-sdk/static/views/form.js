@@ -823,6 +823,38 @@ const FormPanel = {
     sM.body.appendChild(this._row("dy (µm)", this._input("domain.dy", d.dy, "num", "len")));
     sM.body.appendChild(this._row("dz (µm)", this._input("domain.dz", d.dz, "num", "len")));
 
+    /* Q31 自动网格：auto 一键 → domain 段表（非均匀基准，几何+材料
+     * n(ω) 折影）；段表显示三轴摘要（改表走脚本 set_named——表是
+     * 普通数据）；清表回均匀 dx。 */
+    const spacing = (a) => d[`${a}_spacing`];
+    const hasTable = ["x", "y", "z"].some(spacing);
+    if (hasTable) {
+      const sT = this._sec("自动网格 · 段表（Q31）");
+      body.appendChild(sT.head); body.appendChild(sT.body);
+      const fmt = (t) => t.map((s) => `${(s.d * 1e9).toPrecision(3)}nm`).join(" | ");
+      for (const a of ["x", "y", "z"]) {
+        const t = spacing(a);
+        if (t) sT.body.appendChild(this._row(`${a}_spacing`,
+          this._el("span", "note", `${t.length} 段 · ${fmt(t)}`)));
+      }
+      sT.body.appendChild(this._el("div", "note",
+        "段表 = 非均匀基准（与 dx 互斥）；清除 = 删三张表回均匀 dx。"));
+      const clear = this._el("button", "mini danger", "清除段表");
+      clear.addEventListener("click", () => {
+        delete d.x_spacing; delete d.y_spacing; delete d.z_spacing;
+        this._rerender();
+      });
+      sT.body.appendChild(clear);
+    }
+    const auto = this._el("button", "mini", "⚡ 自动网格（按几何/材料）");
+    auto.addEventListener("click", async () => {
+      try {
+        await GenieApp.autoGrid();
+        this._rerender();
+      } catch (e) { apiNotice("自动网格：" + (e && e.message ? e.message : e), "err"); }
+    });
+    sM.body.appendChild(auto);
+
     const list = this.cfg.mesh || (this.cfg.mesh = []);
     list.forEach((m, i) => {
       const inner = document.createDocumentFragment();

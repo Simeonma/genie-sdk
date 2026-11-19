@@ -296,6 +296,12 @@ def form_intent(intent: dict) -> str:
     if coll not in _F_ATTR:
         raise ValueError(f"bad form intent: {intent!r}")
     name = intent.get("name")
+    if op == "auto_grid":
+        # Q31：auto 按钮 → 一行 auto_grid()（fit_material 同族动词；
+        # 产物 = domain 段表，随下一次 cfg 快照回显）。
+        n = intent.get("n")
+        tail = f", n={int(n)}" if n is not None else ""
+        return f"genie.auto_grid(){tail}"
     if op == "add":
         kind = intent.get("kind")
         if coll == "mesh":

@@ -686,6 +686,78 @@ class Surface:
                 self.fit_material(name)
 
     # ══════════════════════════════════════════════════════════════
+    # auto grid (Q31)
+    # ══════════════════════════════════════════════════════════════
+
+    def auto_grid(self, n=None, growth=1.2, solver=None):
+        """Q31：逐轴 1D 折影（几何 + 材料 n(ω) + 工作频段）→ domain
+        段表。fit_material 同族：一次性生成动作，产物是普通数据（三
+        张/两张段表写在该求解器的 domain 上），之后可改可删——不搞
+        提交期隐藏重算。fdtd 频段 = 源频谱并集；mode = wavelength
+        （取最短 λ），背景 = domain.n_bg。``n`` = 每波长格数（缺省
+        core.grid.DEFAULT_PPW=14）。库材先懒拟合（与 validate/run 同
+        一入口）。返回 {axis: 段数} 便于终端回显。"""
+        from ..core import grid as core_grid
+        from ..core.model.handle import ModeEnvelope
+        self._fit_pending()
+        name = solver or self._default_solver_name()
+        env = self._model.envelope(name)
+        materials = {m.name: m for m in self._model._materials}
+        geometries = list(self._model._geometry)
+        if isinstance(env, ModeEnvelope):
+            from genie_protocol._wire import _TRANSVERSE
+            t1, t2 = _TRANSVERSE[env.domain.axis]
+            lam = env.wavelength
+            lam_min = min(lam) if isinstance(lam, list) else float(lam)
+            f_hi = core_grid._C0 / lam_min
+            f_lo = f_hi / 2.0          # 单 λ：以 λ 为中心的一个倍频程
+            n_bg = float(env.domain.n_bg or 1.0)
+            ranges = {}
+            for a in (t1, t2):
+                rng = getattr(env.domain, f"{a}_range")
+                if rng is None:
+                    raise ValueError(
+                        f"auto_grid: mode domain.{a}_range is required "
+                        f"(spacing tables carry no window)")
+                ranges[a] = rng
+            out = {}
+            for a, rng in ranges.items():
+                segs = core_grid.project_axis(a, geometries, materials,
+                                              f_lo, f_hi, n_bg)
+                table = core_grid.suggest_table(rng, segs, lam_min,
+                                                core_grid.DEFAULT_PPW if n is None else n,
+                                                growth, n_bg)
+                setattr(env.domain, f"{a}_spacing", table)
+                setattr(env.domain, f"d{a}", None)   # 同轴互斥（wire 422）
+                out[a] = len(table)
+            return out
+        # fdtd：三轴，频段 = 源频谱并集（材料拟合同款取法）
+        band = self._source_band()
+        if band is None:
+            raise ValueError(
+                "auto_grid: no source band — add a simulation source "
+                "first (the grid criterion needs the working wavelength)")
+        wl_lo, wl_hi = band
+        f_lo, f_hi = core_grid._C0 / wl_hi, core_grid._C0 / wl_lo
+        lam_min = wl_lo
+        d = env.domain
+        ranges = {"x": d.x_range, "y": d.y_range, "z": d.z_range}
+        tables = core_grid.auto_grid_tables(
+            ranges, geometries, materials, (f_lo, f_hi), n_bg=1.0,
+            ppw=core_grid.DEFAULT_PPW if n is None else n, growth=growth)
+        for a, table in tables.items():
+            setattr(d, f"{a}_spacing", table)
+        # 段表与 dx 全局互斥（wire 422）：auto 产物三轴全表 → 清均匀键
+        d.dx = None
+        d.dy = None
+        d.dz = None
+        return {a: len(t) for a, t in tables.items()}
+
+    def _default_solver_name(self):
+        from ..core.model.handle import DEFAULT_SOLVER
+        return DEFAULT_SOLVER
+
+    # ══════════════════════════════════════════════════════════════
     # actions
     # ══════════════════════════════════════════════════════════════
 

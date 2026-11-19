@@ -683,6 +683,14 @@
     return intents.length;
   }
 
+  /* Q31 自动网格按钮：直接发 auto_grid 意图（不经表单 diff——按钮不是
+   * 字段编辑），产物段表随下一次 cfg 快照回显。 */
+  async function autoGrid(n) {
+    await post("/form", { op: "auto_grid", ...(n ? { n } : {}) });
+    S.origin = "patch";
+    return true;
+  }
+
   /* ── ⑥ 脚本（工作区 script.py）────────────────────────────────── */
   const getScript = () => get("/script?focus=0");
   const saveScript = (text) => post("/script", { text: String(text || "") });
@@ -739,7 +747,7 @@
     openLibraryDialog, fitPreview,
     runSweep, getSweeps,
     resultMeta, resultSeries,
-    formIntents, intentsFromOps,
+    formIntents, intentsFromOps, autoGrid,
     getScript, saveScript,
     pollOnce,
     cancel: () => post("/cancel", {}),

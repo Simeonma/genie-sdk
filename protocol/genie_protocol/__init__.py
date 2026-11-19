@@ -15,14 +15,15 @@ when an attribute is first touched; star imports trigger the full load per
 """
 from __future__ import annotations
 
-__version__ = "2.0.1a17"
+__version__ = "2.0.1a18"
 
 __all__ = [
     # basic type aliases
     "Range2", "Vec3",
-    # Domain / Mesh (Q30, 2.0.1a17: base spacing on DomainSpec, MeshSpec =
-    # named refinement-box objects; RefineSpec retired)
-    "BoundarySpec", "DomainSpec", "MeshSpec",
+    # Domain / Mesh (Q30: base grid on DomainSpec, MeshSpec = named
+    # refinement-box objects; RefineSpec retired. Q31: per-axis spacing
+    # tables — SpacingSegmentSpec)
+    "BoundarySpec", "DomainSpec", "SpacingSegmentSpec", "MeshSpec",
     # Materials
     "PoleSpec", "ConstMatSpec", "LorentzMatSpec", "LibraryMatSpec",
     "MaterialSpec",

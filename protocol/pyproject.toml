@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "genie-protocol"
-version = "2.0.1a17"
+version = "2.0.1a18"
 description = "GENIE wire-format protocol layer - SimConfig models, expression evaluator, resolver, estimator (single source shared by SDK client, gateway and compute kernel)"
 requires-python = ">=3.10"
 dependencies = [
@@ -92,6 +92,17 @@ dependencies = [
     #   per-λ serial solve with warm start + overlap branch matching
     #   (sorted_by="branch_cont"); results h5 gains the lam_### sweep
     #   layout (single-λ layout unchanged).
+    # 2.0.1a18 (2026-11-19, additive — Q31 auto-mesh groundwork, P1-11):
+    #   DomainSpec gains per-axis x/y/z_spacing tables (list of
+    #   SpacingSegmentSpec: lo/hi/d/growth_rate) — the non-uniform BASE
+    #   grid lives on domain (Q30 model-1 generalised). A table must tile
+    #   the axis with no gaps/overlaps and is mutually exclusive with dx
+    #   globally (once any axis uses a table, every axis needs its own d
+    #   or table — tables do not inherit across axes). mode: transverse
+    #   d/coords/spacing are now three-way exclusive; a table requires
+    #   the axis range. Mesh absolute-spacing coarsen guards compare
+    #   against the finest COVERED segment on table axes. estimate takes
+    #   per-segment cell counts. Legacy payloads validate verbatim.
     # 2.0.1a17 (2026-11-19, BREAKING — Q30 grid language refactor, P1-18):
     #   the base grid spacing dx/dy/dz moves from MeshSpec to DomainSpec
     #   (dy/dz still default to dx); MeshSpec dissolves into a LIST of

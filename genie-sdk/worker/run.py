@@ -554,6 +554,11 @@ class Genie:
     def fit_material(self, name):
         return self._surface.fit_material(name)
 
+    def auto_grid(self, n=None, growth=1.2, solver=None):
+        """Q31：自动网格（一次性动词，产物 = domain 段表；详见
+        Surface.auto_grid）。"""
+        return self._surface.auto_grid(n=n, growth=growth, solver=solver)
+
     def run_fdtd(self, *, n_gpu=None):
         return self._surface.run_fdtd(n_gpu=n_gpu)
 

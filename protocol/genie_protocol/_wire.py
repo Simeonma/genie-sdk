@@ -390,15 +390,58 @@ class _Identified:
     id: Optional[int] = None
 
 
-class DomainSpec(_RangeModel):
-    """fdtd 域 = 仿真世界的**全部标定**（Q30，2.0.1a17）：三轴范围 +
-    时间/CFL/边界 + **基础网格间距**（自旧 MeshSpec 搬入；mesh 段从此
-    只放带名加密区对象）。dy/dz 缺省 = dx。将来自动网格（P1-11）也落
-    这里（dx 可为 auto，按材料 n(ω) 定——地基由 P0-2 锁定）。"""
+class SpacingSegmentSpec(_StrictModel):
+    """非均匀基准网格的**一段**（Q31，2.0.1a18）：区间 [lo, hi] 内
+    用间距 ``d`` 落格，段边界两侧由 ``growth_rate`` 渐变过渡
+    （1.0 = 硬跳；几何与 refine zone 同一渐变语义）。段表 = 段的
+    有序列表，**无缝覆盖该轴全域**（守卫住 DomainSpec——洞没有
+    语义，auto_grid 的产物天然全轴覆盖）。"""
 
-    dx: float = Field(gt=0)
+    lo: float
+    hi: float                          # lo < hi 在 _check_spacing 判（域可负坐标）
+    d: float = Field(gt=0)
+    growth_rate: float = Field(default=1.2, ge=1.0)
+
+
+def _check_spacing(axis: str, segments, rng) -> None:
+    """单轴段表守卫（DomainSpec 用）：无缝覆盖 + 递增 + 段间距。"""
+    lo, hi = rng
+    for i, s in enumerate(segments):
+        if not s.lo < s.hi:
+            raise ValueError(
+                f"domain.{axis}_spacing[{i}]: lo must be < hi, got "
+                f"({s.lo:.6g}, {s.hi:.6g}) — an inverted segment")
+        if i and segments[i - 1].hi != s.lo:
+            raise ValueError(
+                f"domain.{axis}_spacing[{i}]: must tile the axis with no "
+                f"gaps/overlaps — previous segment ends at "
+                f"{segments[i - 1].hi:.6g}, this one starts at {s.lo:.6g}")
+    if segments[0].lo != lo or segments[-1].hi != hi:
+        raise ValueError(
+            f"domain.{axis}_spacing must cover the whole axis "
+            f"[{lo:.6g}, {hi:.6g}] — the table spans "
+            f"[{segments[0].lo:.6g}, {segments[-1].hi:.6g}] (holes carry "
+            f"no meaning; give a coarse segment for empty regions)")
+
+
+class DomainSpec(_RangeModel):
+    """fdtd 域 = 仿真世界的**全部标定**（Q30，2.0.1a17；Q31 a18）：三轴
+    范围 + 时间/CFL/边界 + **基础网格**。基准每轴二选一（Q31）：
+
+    - 均匀：``dx``（``dy``/``dz`` 缺省继承 dx——三轴共享一份写法）；
+    - 非均匀段表：``x/y/z_spacing`` = 段列表（区间+间距+growth），
+      **无缝覆盖全域**、与 ``dx`` 全局互斥（一旦某轴用段表，三轴各自
+      必填——段表不跨轴继承，不留"dx 部分生效"的隐晦）。
+
+    mesh 段只放带名加密区对象（叠加在基准上的手动层）。auto_grid
+    （SDK 动词，Q31）的产物 = 三张段表。"""
+
+    dx: Optional[float] = Field(default=None, gt=0)
     dy: Optional[float] = Field(default=None, gt=0)
     dz: Optional[float] = Field(default=None, gt=0)
+    x_spacing: Optional[list[SpacingSegmentSpec]] = None
+    y_spacing: Optional[list[SpacingSegmentSpec]] = None
+    z_spacing: Optional[list[SpacingSegmentSpec]] = None
     total_time: float = Field(gt=0)
     cfl: float = Field(default=0.9, gt=0, le=1)
     boundary: dict[str, BoundarySpec] = Field(default_factory=dict)
@@ -409,6 +452,32 @@ class DomainSpec(_RangeModel):
             if face not in FACES:
                 raise ValueError(
                     f"unknown face {face!r} (expected one of: {FACES})")
+        # ── Q31 基准网格守卫：每轴「均匀 d 或段表」二选一 ──
+        # dx 与任何 spacing 同给 = 422（dx 是三轴共享的均匀写法；一旦
+        # 某轴用段表，三轴各自必填——段表不跨轴继承，不留"dx 部分生
+        # 效"的隐晦）。段表必须无缝覆盖该轴全域。
+        spacings = {"x": self.x_spacing, "y": self.y_spacing,
+                    "z": self.z_spacing}
+        any_spacing = any(v is not None for v in spacings.values())
+        if any_spacing:
+            if self.dx is not None:
+                raise ValueError(
+                    "domain: dx and *_spacing are mutually exclusive — dx "
+                    "is the shared-uniform spelling; once any axis uses a "
+                    "spacing table, every axis needs its own d or spacing")
+            for a in ("x", "y", "z"):
+                if spacings[a] is None and getattr(self, f"d{a}") is None:
+                    raise ValueError(
+                        f"domain: axis {a!r} has no base grid — give d{a} "
+                        f"or {a}_spacing (spacing tables do not inherit "
+                        f"across axes)")
+        for a, segs in spacings.items():
+            if segs is not None:
+                if not segs:
+                    raise ValueError(
+                        f"domain.{a}_spacing: empty table — give at least "
+                        f"one segment (or drop the key and use d{a})")
+                _check_spacing(a, segs, getattr(self, f"{a}_range"))
         return self
 
 
@@ -1484,19 +1553,39 @@ class FdtdConfigSpec(_StrictModel):
                 f"duplicate mesh names: {dups} (mesh names must be unique "
                 f"within the solver — they are addresses)")
         # Absolute mesh spacing must not exceed the domain base on that
-        # axis: meshes refine, they do not coarsen (the generator only
-        # knows factor >= 1; a coarser override is not expressible).
-        base = (self.domain.dx, self.domain.dy or self.domain.dx,
-                self.domain.dz or self.domain.dx)
+        # axis: meshes refine, they do not coarsen. Q31：基准可能是段表
+        # ——绝对 mesh 比它**覆盖到的段的最细间距**（重置不得损失任何
+        # 被覆盖段的分辨率）；均匀轴比标量。
+        def _axis_base(a):
+            segs = getattr(self.domain, f"{a}_spacing")
+            if segs is not None:
+                return ("table", segs)
+            d = getattr(self.domain, f"d{a}") or self.domain.dx
+            return ("uniform", d)
+
         for mi, m in enumerate(self.mesh):
-            for a, b in zip(("x", "y", "z"), base):
+            for a in ("x", "y", "z"):
                 d = getattr(m, f"d{a}")
-                if d is not None and d > b:
-                    raise ValueError(
-                        f"mesh {m.name!r}: d{a}={d:.6g} is coarser than "
-                        f"the domain base d{a}={b:.6g} — a mesh refines "
-                        f"its box, it cannot coarsen it (use factor or a "
-                        f"spacing <= the base)")
+                if d is None:
+                    continue
+                kind, bv = _axis_base(a)
+                if kind == "uniform":
+                    if bv is not None and d > bv:
+                        raise ValueError(
+                            f"mesh {m.name!r}: d{a}={d:.6g} is coarser "
+                            f"than the domain base d{a}={bv:.6g} — a mesh "
+                            f"refines its box, it cannot coarsen it (use "
+                            f"factor or a spacing <= the base)")
+                else:
+                    rng = getattr(m, f"{a}_range")
+                    covered = [s.d for s in bv
+                               if s.lo < rng[1] and rng[0] < s.hi]
+                    if covered and d > min(covered):
+                        raise ValueError(
+                            f"mesh {m.name!r}: d{a}={d:.6g} is coarser "
+                            f"than the finest covered base segment "
+                            f"({min(covered):.6g}) — a mesh refines, it "
+                            f"cannot coarsen any segment it covers")
         # Monitor names unique across the whole list (a cross-type
         # duplicate would give the reader two answers).
         names = [m.name for m in self.monitor]
@@ -1536,14 +1625,16 @@ def _check_opt_range(v):
 
 class ModeDomainSpec(_StrictModel):
     """mode 包络段·域（Q18 拍②/③，2.0.1a3 断代；Q20 v2.1；Q30 2.0.1a17
-    基础网格自 ModeMeshSpec 搬入）：截面放置 + 两根**横截面真轴**的窗口
-    range 元组 + 背景 + **基础网格**（每轴间距或坐标向量二选一）。center/
-    span 拼写退役（与 fdtd 同一 range 心智）；range 元组槽位吃表达式串
-    （Q13 同一求值面）。**Q20：横轴 range 可省**——domain 给了该轴
-    coords 时窗口由坐标向量 min/max 派生（都给 = 两个真相，在
-    ModeConfigSpec 组合层 422——单段物化时没有对方判据，存在性守卫
-    跟着事实走）。**传播轴禁止任何网格字段与 range**（2D 截面不沿
-    传播轴网格化，本段._check）。"""
+    基础网格自 ModeMeshSpec 搬入；Q31 a18 段表）：截面放置 + 两根
+    **横截面真轴**的窗口 range 元组 + 背景 + **基础网格**（每横轴
+    间距 / 坐标向量 / 段表**三选一**）。center/span 拼写退役（与 fdtd
+    同一 range 心智）；range 元组槽位吃表达式串（Q13 同一求值面）。
+    **Q20：横轴 range 可省**——domain 给了该轴 coords 时窗口由坐标
+    向量 min/max 派生（都给 = 两个真相，在 ModeConfigSpec 组合层
+    422——单段物化时没有对方判据，存在性守卫跟着事实走）；**段表
+    形态下 range 必填**（段表只给间距不给窗口）。**传播轴禁止任何
+    网格字段与 range**（2D 截面不沿传播轴网格化，本段._check）。
+    auto_grid（Q31）的 mode 对称产物 = 横轴段表。"""
 
     axis: Literal["x", "y", "z"]              # 传播轴（截面法向）
     position: float                           # 截面沿传播轴的位置 [m]
@@ -1551,23 +1642,32 @@ class ModeDomainSpec(_StrictModel):
     y_range: Optional[Range2] = None
     z_range: Optional[Range2] = None
     n_bg: float = Field(default=1.0, gt=0.0)  # 背景折射率
-    # ── 基础网格（Q30 自旧 ModeMeshSpec 搬入，语义逐字保留）──
+    # ── 基础网格（Q30 自旧 ModeMeshSpec 搬入；Q31 加段表）──
     dx: Optional[float] = Field(default=None, gt=0.0)
     dy: Optional[float] = Field(default=None, gt=0.0)
     dz: Optional[float] = Field(default=None, gt=0.0)
     x_coords: Optional[list[float]] = None
     y_coords: Optional[list[float]] = None
     z_coords: Optional[list[float]] = None
+    #: Q31：非均匀基准段表（每段区间+间距+growth）。横轴与 d/coords
+    #: 三选一；无缝覆盖该轴窗口（range 必填——守卫住组合层，这里
+    #: 单段物化时窗口可能由 coords 派生缺席）。
+    x_spacing: Optional[list[SpacingSegmentSpec]] = None
+    y_spacing: Optional[list[SpacingSegmentSpec]] = None
+    z_spacing: Optional[list[SpacingSegmentSpec]] = None
 
     _v = field_validator("x_range", "y_range", "z_range",
                          mode="after")(_check_opt_range)
 
     def _axis_mesh(self, a: str):
-        """单轴网格口径 → ("spacing", v) | ("coords", v) | None。"""
+        """单轴网格口径 → ("spacing", v) | ("coords", v) | ("table", v)
+        | None。"""
         if getattr(self, f"d{a}") is not None:
             return ("spacing", getattr(self, f"d{a}"))
         if getattr(self, f"{a}_coords") is not None:
             return ("coords", getattr(self, f"{a}_coords"))
+        if getattr(self, f"{a}_spacing") is not None:
+            return ("table", getattr(self, f"{a}_spacing"))
         return None
 
     @model_validator(mode="after")
@@ -1581,18 +1681,22 @@ class ModeDomainSpec(_StrictModel):
                     getattr(self, f"{a}_range") is not None
                     or self._axis_mesh(a) is not None):
                 raise ValueError(
-                    f"domain.{a}_range / d{a} / {a}_coords: axis {a!r} "
-                    f"is the propagation axis — a mode cross-section has "
-                    f"no extent or grid along it (give the two transverse "
-                    f"axes {t1}/{t2})")
-            # 每轴间距 × 坐标向量二选一 + coords 形状（>=2 点、严格
-            # 递增）——自旧 ModeMeshSpec._check 逐字搬入。
-            d, c = getattr(self, f"d{a}"), getattr(self, f"{a}_coords")
-            if d is not None and c is not None:
+                    f"domain.{a}_range / d{a} / {a}_coords / {a}_spacing: "
+                    f"axis {a!r} is the propagation axis — a mode "
+                    f"cross-section has no extent or grid along it (give "
+                    f"the two transverse axes {t1}/{t2})")
+            # 每轴「间距 / 坐标向量 / 段表」三选一（Q31 从二选一放宽
+            # 为三选一——同轴两个非 None = 两个真相 422）+ coords 形状
+            # （>=2 点、严格递增）。
+            d = getattr(self, f"d{a}")
+            c = getattr(self, f"{a}_coords")
+            s = getattr(self, f"{a}_spacing")
+            if sum(x is not None for x in (d, c, s)) > 1:
                 raise ValueError(
-                    f"domain: axis {a!r} has both d{a} and {a}_coords — "
-                    f"spacing and coordinates are two truths for one "
-                    f"grid, give exactly one")
+                    f"domain: axis {a!r} has more than one of d{a} / "
+                    f"{a}_coords / {a}_spacing — spacing, coordinates and "
+                    f"a spacing table are two truths for one grid, give "
+                    f"exactly one")
             if c is not None:
                 if len(c) < 2:
                     raise ValueError(
@@ -1712,7 +1816,8 @@ class ModeConfigSpec(_StrictModel):
         # Q20：横轴 range × coords——每根横轴恰有一个真相：
         #   coords 在手 → range 可省（窗口由坐标 min/max 派生）；
         #   两者都给 → 422（两个真相不许并存，与间距/coords 二选一
-        #   同款铁律）；coords 也没有 → range 必填（间距离散它）。
+        #   同款铁律）；coords/段表都没有 → range 必填（间距离散它；
+        #   Q31 段表只给间距不给窗口，段表轴的 range 同样必填）。
         for a in (t1, t2):
             rng = getattr(self.domain, f"{a}_range")
             coords = getattr(self.domain, f"{a}_coords")
@@ -1725,19 +1830,25 @@ class ModeConfigSpec(_StrictModel):
                 raise ValueError(
                     f"domain.{a}_range is required unless domain.{a}_coords "
                     f"is given (axis={ax!r} → transverse axes {t1}/{t2})")
-        # 轴1（字母序在前的横轴）必须给 spacing 或 coords；轴2 缺省 =
-        # 轴1 的**间距**（向量不可继承——两轴长度各自独立）。
+            # 段表轴：无缝覆盖窗口（range 必在上面已判非 None）。
+            segs = getattr(self.domain, f"{a}_spacing")
+            if segs is not None:
+                _check_spacing(a, segs, getattr(self.domain, f"{a}_range"))
+        # 轴1（字母序在前的横轴）必须给 spacing/coords/段表之一；轴2
+        # 缺省 = 轴1 的**间距**（向量与段表都不可继承——两轴长度各自
+        # 独立；段表不跨轴继承与 fdtd 同一条铁律）。
         m1 = self.domain._axis_mesh(t1)
         m2 = self.domain._axis_mesh(t2)
         if m1 is None:
             raise ValueError(
-                f"domain: axis {t1!r} needs d{t1} or {t1}_coords (nothing "
-                f"given); d{t2} alone cannot seed the first axis")
+                f"domain: axis {t1!r} needs d{t1} or {t1}_coords or "
+                f"{t1}_spacing (nothing given); d{t2} alone cannot seed "
+                f"the first axis")
         if m2 is None and m1[0] != "spacing":
             raise ValueError(
-                f"domain: axis {t2!r} needs its own d{t2} or {t2}_coords "
-                f"(only a spacing can be inherited from {t1}, not "
-                f"coordinates)")
+                f"domain: axis {t2!r} needs its own d{t2} / {t2}_coords / "
+                f"{t2}_spacing (only a spacing can be inherited from "
+                f"{t1}, not coordinates or a table)")
         # mesh zone 守卫（Q30：带名 2D 加密区）：名字唯一；传播轴槽禁；
         # 横轴 box 完整（两根横轴 range 都给）；zone 区间 × 该轴 coords
         # = 两个真相；绝对间距 <= 该轴基础间距（mesh 只加密不粗化）。
@@ -1747,14 +1858,18 @@ class ModeConfigSpec(_StrictModel):
             raise ValueError(
                 f"duplicate mesh names: {dups} (mesh names must be unique "
                 f"within the solver — they are addresses)")
-        # 每横轴的基础间距（绝对覆盖的比对基准）：显式 d，缺省继承
-        # 轴1 间距；coords 轴没有标量基准（zone 区间与 coords 本就互斥）。
-        base = {}
-        for a in (t1, t2):
+        # 每横轴的基准（绝对 mesh 的粗化判据，Q31 段表适配）：均匀轴比
+        # 标量（缺省继承轴1 间距）；段表轴比**覆盖段的最细间距**——重置
+        # 不得损失任何被覆盖段的分辨率；coords 轴无标量基准（zone 区间
+        # 与 coords 本就互斥）。
+        def _base_of(a):
             am = self.domain._axis_mesh(a)
             if am is None and self.domain._axis_mesh(t1)[0] == "spacing":
                 am = ("spacing", self.domain._axis_mesh(t1)[1])
-            base[a] = am[1] if am is not None and am[0] == "spacing" else None
+            if am is None:
+                return None
+            return am if am[0] != "spacing" else ("uniform", am[1])
+
         for zi, z in enumerate(self.mesh):
             for a in ("x", "y", "z"):
                 rng = getattr(z, f"{a}_range")
@@ -1779,12 +1894,29 @@ class ModeConfigSpec(_StrictModel):
                             f"domain.{a}_coords are two truths for one "
                             f"axis grid — coords carry the whole axis, "
                             f"a mesh cannot apply on top")
-                    if d is not None and base[a] is not None and d > base[a]:
-                        raise ValueError(
-                            f"mesh[{zi}] ({z.name!r}): d{a}={d:.6g} is "
-                            f"coarser than the base d{a}={base[a]:.6g} — "
-                            f"a mesh refines its box, it cannot coarsen "
-                            f"it (use factor or a spacing <= the base)")
+                    if d is not None:
+                        base = _base_of(a)
+                        if base is not None:
+                            kind, bv = base
+                            if kind == "uniform":
+                                if d > bv:
+                                    raise ValueError(
+                                        f"mesh[{zi}] ({z.name!r}): d{a}="
+                                        f"{d:.6g} is coarser than the base "
+                                        f"d{a}={bv:.6g} — a mesh refines "
+                                        f"its box, it cannot coarsen it")
+                            else:      # table：比覆盖段的最细间距
+                                covered = [s.d for s in bv
+                                           if s.lo < rng[1]
+                                           and rng[0] < s.hi]
+                                if covered and d > min(covered):
+                                    raise ValueError(
+                                        f"mesh[{zi}] ({z.name!r}): d{a}="
+                                        f"{d:.6g} is coarser than the "
+                                        f"finest covered base segment "
+                                        f"({min(covered):.6g}) — a mesh "
+                                        f"refines, it cannot coarsen any "
+                                        f"segment it covers")
         # 两个面：摆放三句话的守卫（口径 = 内核 _grid.solve_grid，响亮不猜）
         import math as _m
         if self.rotate_axis is not None:
