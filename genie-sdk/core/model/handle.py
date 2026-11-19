@@ -14,10 +14,12 @@ envelope shapes:
 - **structure** (shared by every solver, one copy per model):
   ``materials`` / ``geometry`` / ``parameters``;
 - **solver envelopes** (one per declared solver, each in its own
-  vocabulary): fdtd speaks ``domain`` / ``mesh`` / ``sources`` /
-  ``monitors`` (Q15); mode speaks ``domain`` / ``mesh`` / ``boundary``
-  + top-level ``wavelength`` / ``n_modes`` (Q18 — no fake symmetry: an
-  eigenproblem takes no excitations, hence no sources/monitors);
+  vocabulary): fdtd speaks ``domain`` (base grid dx/dy/dz since Q30) /
+  ``meshes`` (named refinement boxes) / ``sources`` / ``monitors``
+  (Q15+Q30); mode speaks ``domain`` (base grid: spacing-or-coords) /
+  ``meshes`` / ``boundary`` + top-level ``wavelength`` / ``n_modes``
+  (Q18+Q30 — no fake symmetry: an eigenproblem takes no excitations,
+  hence no sources/monitors);
 - solvers are declared explicitly (``add_solver``); the default solver
   ``"fdtd"`` auto-vivifies on access (it is the wire default --
   ``solver=None`` -- and the GUI edits it before any script line could
@@ -76,6 +78,14 @@ _MON: dict = {
     "time": DRAFT_OF[_wire.TimeMonSpec],
     "freq": DRAFT_OF[_wire.FreqMonSpec],
     "index": DRAFT_OF[_wire.IndexMonSpec],
+}
+_MESH: dict = {
+    # Q30: mesh = named refinement-box object (one-kind collection — the
+    # draft carries no ``type`` discriminator; add_mesh is the only verb).
+    "mesh": DRAFT_OF[_wire.MeshSpec],
+}
+_MODE_MESH: dict = {
+    "mesh": DRAFT_OF[_wire.ModeMeshSpec],
 }
 
 
@@ -182,7 +192,7 @@ class _CollectionView:
         # draft's validate_assignment), never per-field kwargs.
         # Shorthand with node as the first argument (add_lorentz(node)):
         # a dict landing in the name slot is swapped into place -- both
-        # spellings add_lorentz(node) / add_lorentz('n', node) work.
+        # spellings add_lorentz('n', node) / add_lorentz(node) work.
         if isinstance(name, dict) and node is None:
             name, node = None, name
         if node is not None:
@@ -199,7 +209,13 @@ class _CollectionView:
                 name = node.get("name")
         if name is None:
             name = f"{kind}_{iid}"
-        item = self._kinds[kind](type=kind, name=name, id=iid)
+        cls = self._kinds[kind]
+        # ``type`` is passed only when the draft carries the field (mesh
+        # objects are one-kind collections -- no discriminator field).
+        kw = {"name": name, "id": iid}
+        if "type" in cls.model_fields:
+            kw["type"] = kind
+        item = cls(**kw)
         if node is not None:
             for k, v in node.items():
                 if k in ("type", "id", "name"):
@@ -245,24 +261,33 @@ class _CollectionView:
     def add_freq(self, name=None):           return self._add("freq", name)
     def add_index(self, name=None):          return self._add("index", name)
 
+    def add_mesh(self, name=None):
+        """Q30: a named refinement-box object (factor_x/y/z XOR absolute
+        dx/dy/dz per axis; the base grid lives on ``domain``)."""
+        return self._add("mesh", name)
+
 
 class Solver:
-    """One declared solver's envelope: ``domain`` / ``mesh`` (singletons,
-    direct assignment) + ``sources`` / ``monitors`` (collections). The
-    envelope belongs to the solver, not to the model (Q15); structure
-    (materials / geometry / parameters) lives on the Model and is shared
-    by every solver."""
+    """One declared solver's envelope: ``domain`` (singleton, direct
+    assignment — carries the base grid ``dx/dy/dz`` since Q30) +
+    ``meshes`` / ``sources`` / ``monitors`` (collections; meshes = named
+    refinement-box objects). The envelope belongs to the solver, not to
+    the model (Q15); structure (materials / geometry / parameters) lives
+    on the Model and is shared by every solver."""
 
-    __slots__ = ("name", "kind", "domain", "mesh", "sources", "monitors",
-                 "_source", "_monitor")
+    __slots__ = ("name", "kind", "domain", "meshes", "sources", "monitors",
+                 "_mesh", "_source", "_monitor")
 
     def __init__(self, owner: "Model", name: str) -> None:
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "kind", "fdtd")
         object.__setattr__(self, "domain", DomainDraft())
-        object.__setattr__(self, "mesh", MeshDraft())
+        self._mesh: list = []
         self._source: list = []
         self._monitor: list = []
+        object.__setattr__(self, "meshes",
+                           _CollectionView(owner, "meshes", self._mesh,
+                                           _MESH))
         object.__setattr__(self, "sources",
                            _CollectionView(owner, "sources",
                                            self._source, _SRC))
@@ -271,11 +296,11 @@ class Solver:
                                            self._monitor, _MON))
 
     def __setattr__(self, name, value):
-        # name / domain / mesh are plain assignment (domain / mesh swap on
-        # document open); the collection views must not be overwritten
-        if name in ("sources", "monitors"):
+        # name / domain are plain assignment (domain swaps on document
+        # open); the collection views must not be overwritten
+        if name in ("meshes", "sources", "monitors"):
             raise AttributeError(
-                f"{self.name}.sources/monitors are collection views and "
+                f"{self.name}.{name} is a collection view and "
                 f"cannot be overwritten")
         object.__setattr__(self, name, value)
 
@@ -284,45 +309,54 @@ class Solver:
 
 
 class ModeEnvelope:
-    """mode 求解器的包络（Q18）：``domain`` / ``mesh`` / ``boundary`` 三段
-    + 顶层 ``wavelength`` / ``n_modes``——**无 sources / monitors**（本征
-    问题不吃激励，不造假对称）。整段是一枚 ModeConfigDraft（反射生成、
-    赋值点拦类型/形状错，值只经 ``=``）；提升时的存在性守卫（横截面两
-    轴必填、波长必填）在 validate_for_ui，draft 阶段留未填态。"""
+    """mode 求解器的包络（Q18）：``domain`` / ``boundary`` 段 + 顶层
+    ``wavelength`` / ``n_modes`` + ``meshes`` 集合（Q30 对称迁移：带名
+    2D 加密区对象；domain 携带基础网格）——**无 sources / monitors**
+    （本征问题不吃激励，不造假对称）。整段是一枚 ModeConfigDraft
+    （反射生成、赋值点拦类型/形状错，值只经 ``=``）；提升时的存在性
+    守卫（横截面两轴必填、波长必填）在 validate_for_ui，draft 阶段留
+    未填态。"""
 
-    __slots__ = ("name", "kind", "_cfg")
+    __slots__ = ("name", "kind", "_cfg", "meshes")
 
-    #: 包络字段（= ModeConfigSpec v2.1 的顶层；读写都路由进 config draft）。
-    #: n_ref（Q20）：搜索折射率，缺省 None = 截面最大折射率（内核缺省）。
-    _FIELDS = ("domain", "mesh", "boundary", "wavelength", "n_modes",
+    #: 包络字段（= ModeConfigSpec 顶层〔mesh 除外——它是集合〕；读写都
+    #: 路由进 config draft）。n_ref（Q20）：搜索折射率，缺省 None =
+    #: 截面最大折射率（内核缺省）。
+    _FIELDS = ("domain", "boundary", "wavelength", "n_modes",
                "n_ref", "rotate_axis", "rotate_angle", "rotate_radius")
 
     def __init__(self, owner: "Model", name: str) -> None:
-        # owner 形参与 Solver 同构（包络不回指模型——结构在 Model 上共享）
+        # owner 形参与 Solver 同构（包络不回指模型——结构在 Model 上
+        # 共享；owner 只进 meshes 集合视图，换 id 分配器）。
         object.__setattr__(self, "name", name)
         object.__setattr__(self, "kind", "mode")
         cfg = ModeConfigDraft()
         cfg.domain = ModeDomainDraft()      # 急建单件：genie.mode.domain.axis 直达
-        cfg.mesh = ModeMeshDraft()
+        cfg.mesh = []                       # Q30：带名加密区对象列表
         cfg.boundary = {}
         object.__setattr__(self, "_cfg", cfg)
+        object.__setattr__(self, "meshes",
+                           _CollectionView(owner, "meshes", cfg.mesh,
+                                           _MODE_MESH))
 
     def __setattr__(self, name, value):
-        if name in ("name", "_cfg"):
+        if name in ("name", "_cfg", "meshes"):
             object.__setattr__(self, name, value)
         elif name in self._FIELDS:
             setattr(self._cfg, name, value)   # draft 在赋值点拦类型/形状错
         else:
             raise AttributeError(
                 f"mode envelope has no attribute {name!r} (envelope "
-                f"fields: {', '.join(self._FIELDS)})")
+                f"fields: {', '.join(self._FIELDS)}; meshes: the "
+                f"collection)")
 
     def __getattr__(self, name):
         if name in self._FIELDS:
             return getattr(self._cfg, name)
         raise AttributeError(
             f"mode envelope has no attribute {name!r} (envelope "
-            f"fields: {', '.join(self._FIELDS)})")
+            f"fields: {', '.join(self._FIELDS)}; meshes: the "
+            f"collection)")
 
     def __repr__(self):
         return f"<solver {self.name!r} (mode)>"
@@ -471,13 +505,14 @@ class Model:
         name = solver if solver is not None else DEFAULT_SOLVER
         s = self.envelope(name)
         if isinstance(s, ModeEnvelope):
-            # mode：包络段 = config draft 整体（Q18 v2 分段）；未填字段
-            # 自然缺省，缺必填在提升面（validate_for_ui）422。
+            # mode：包络段 = config draft 整体（Q18 v2 分段；Q30 起 mesh
+            # = 带名对象列表，draft 里的列表原样承运）；未填字段自然
+            # 缺省，缺必填在提升面（validate_for_ui）422。
             conf: dict = to_wire(s._cfg)
         else:
             conf = {
                 "domain": to_wire(s.domain),
-                "mesh": to_wire(s.mesh),
+                "mesh": [to_wire(i) for i in s._mesh],
                 "source": [to_wire(i) for i in s._source],
                 "monitor": [self._wire_monitor(i) for i in s._monitor],
             }
@@ -539,12 +574,19 @@ class Model:
         s = m.add_solver(solver_name)
         src_items: list = []
         mon_items: list = []
+        mesh_items: list = []
         if solver_name == DEFAULT_SOLVER:
             s.domain = DomainDraft.model_validate(conf.get("domain") or {})
-            s.mesh = MeshDraft.model_validate(conf.get("mesh") or {})
+            for raw in conf.get("mesh") or []:
+                s._mesh.append(MeshDraft.model_validate(raw))
+            mesh_items = s._mesh
             src_items, mon_items = s._source, s._monitor
         else:
             s._cfg = ModeConfigDraft.model_validate(conf)
+            mesh_items = s._cfg.mesh or []
+            # rebind the collection to the restored list (the view was
+            # built against the envelope's original empty list)
+            s.meshes._items = mesh_items
         m._run = RunDraft.model_validate(cfg.get("run") or {})
         m.parameters = dict(model.get("parameters") or {})
         for kinds, items, src, key in (
@@ -561,6 +603,7 @@ class Model:
         highest = max(
             [next_id or 0]
             + [it.id for it in (m._geometry + m._materials + m._attributes
-                                + src_items + mon_items) if it.id is not None])
+                                + src_items + mon_items + mesh_items)
+               if it.id is not None])
         m._alloc.raise_to(highest)
         return m

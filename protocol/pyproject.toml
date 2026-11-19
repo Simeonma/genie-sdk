@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "genie-protocol"
-version = "2.0.1a16"
+version = "2.0.1a17"
 description = "GENIE wire-format protocol layer - SimConfig models, expression evaluator, resolver, estimator (single source shared by SDK client, gateway and compute kernel)"
 requires-python = ">=3.10"
 dependencies = [
@@ -92,6 +92,22 @@ dependencies = [
     #   per-λ serial solve with warm start + overlap branch matching
     #   (sorted_by="branch_cont"); results h5 gains the lam_### sweep
     #   layout (single-λ layout unchanged).
+    # 2.0.1a17 (2026-11-19, BREAKING — Q30 grid language refactor, P1-18):
+    #   the base grid spacing dx/dy/dz moves from MeshSpec to DomainSpec
+    #   (dy/dz still default to dx); MeshSpec dissolves into a LIST of
+    #   named refinement-box objects (name + per-axis factor_x/y/z
+    #   [int >= 1, default 1] XOR absolute dx/dy/dz [must be <= the
+    #   domain base on that axis — meshes refine, never coarsen; both on
+    #   one axis = 422 when both are meaningful — factor=1 is a no-op and
+    #   legal alongside an absolute override, keeping JSON round-trip
+    #   identity]); growth_rate transition
+    #   bands carry over. Global caps max_refinement/min_cells are
+    #   DELETED (grid density is the user's responsibility). Q30 amends
+    #   Q22: an all-factor-1 mesh is now legal (a no-op box). RefineSpec
+    #   and ModeRefineSpec retire. mode migrates symmetrically in the
+    #   same round: ModeDomainSpec carries the base grid (per transverse
+    #   axis spacing XOR coords vector, prop-axis slots rejected),
+    #   ModeMeshSpec becomes the named 2D refinement-box list.
     # 2.0.1a7 (2026-11-13, additive — geometry rotation, task 4): all
     #   seven geometry specs take an optional `rotation: Vec3` (Euler
     #   angles in degrees, default (0,0,0) = unrotated; convention:

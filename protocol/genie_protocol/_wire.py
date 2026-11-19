@@ -27,9 +27,12 @@ Example wire-format JSON shape (2.0.1a1 nested house, Q17)::
       "solver": "fdtd",                # solver selection (open set; omit = fdtd)
       "config": {                      # that solver's envelope
         "domain":   {"x_range": [-1e-6, 1e-6], "y_range": [-1e-6, 1e-6],
-                      "z_range": [-1e-6, 1e-6], "total_time": 60e-15, "cfl": 0.9,
+                      "z_range": [-1e-6, 1e-6], "dx": 20e-9,
+                      "total_time": 60e-15, "cfl": 0.9,
                       "boundary": {"z_min": {"kind": "pml", "layers": 12}}},
-        "mesh":     {"dx": 20e-9, "dy": 20e-9, "dz": 20e-9},
+        "mesh":     [{"name": "core", "x_range": [-0.2e-6, 0.2e-6],
+                      "y_range": [-0.2e-6, 0.2e-6], "z_range": [-1e-6, 1e-6],
+                      "factor_x": 2, "factor_y": 2}],   # named refine boxes
         "source":   [{"type": "soft_source", "freq": 300e12, "bandwidth": 60e12,
                       "name": "s0", "center": [0, 0, -0.3e-6],
                       "polarization": [1, 0, 0]}],
@@ -372,7 +375,30 @@ class BoundarySpec(_StrictModel):
         return self
 
 
+# ---------------------------------------------------------------------------
+# Domain / Mesh
+# ---------------------------------------------------------------------------
+
+
+class _Identified:
+    """v2 item identity: a globally unique number issued by the system —
+    immutable, never reused after deletion; the item collections
+    (geometry / materials / source / monitor / mesh) share one id
+    allocator. **Not consumed by the kernel** (not in translate);
+    SDK-only bookkeeping; save / open / submit all carry it."""
+
+    id: Optional[int] = None
+
+
 class DomainSpec(_RangeModel):
+    """fdtd 域 = 仿真世界的**全部标定**（Q30，2.0.1a17）：三轴范围 +
+    时间/CFL/边界 + **基础网格间距**（自旧 MeshSpec 搬入；mesh 段从此
+    只放带名加密区对象）。dy/dz 缺省 = dx。将来自动网格（P1-11）也落
+    这里（dx 可为 auto，按材料 n(ω) 定——地基由 P0-2 锁定）。"""
+
+    dx: float = Field(gt=0)
+    dy: Optional[float] = Field(default=None, gt=0)
+    dz: Optional[float] = Field(default=None, gt=0)
     total_time: float = Field(gt=0)
     cfl: float = Field(default=0.9, gt=0, le=1)
     boundary: dict[str, BoundarySpec] = Field(default_factory=dict)
@@ -386,60 +412,60 @@ class DomainSpec(_RangeModel):
         return self
 
 
-class RefineSpec(_RangeModel):
-    factor: Optional[Union[int, list[int]]] = None
+class _NamedMesh(_Identified):
+    """mesh 对象的命名身份（Q30，2.0.1a17）：``name`` = 地址
+    （``<solver>.<name>``），集合内唯一（config 层守卫）；``id`` 与
+    其他集合共池——SDK 记账专用，内核不消费（not in translate）。"""
+
+    name: str = Field(min_length=1)
+
+
+class MeshSpec(_RangeModel, _NamedMesh):
+    """fdtd mesh = **带名加密区对象**（Q30，2.0.1a17 断代）：一个 box
+    区间（三轴 range）+ 该区间自己的间距定义——**每轴二选一**：
+
+    - 倍率 ``factor_x/y/z``：相对 domain 基础间距，>= 1，缺省 1 =
+      该轴基础间距；
+    - 绝对值 ``dx/dy/dz``：Lumerical override 式覆盖，必须 <= 该轴
+      基础间距（mesh 只加密不粗化；FdtdConfigSpec 组合层校验——
+      单段物化时没有 domain 判据）。
+
+    同轴两个**有意义**的定义同给（factor≠1 且绝对值非 None）= 两个真相
+    （422）；factor=1 是空操作，与绝对覆盖并存 = 一个真相（绝对生效）
+    ——判值不判 fields_set，JSON 往返恒等才闭合。**全 factor=1 = 合法
+    无操作区**（Q30 改裁 Q22 的「全 1 拒绝」）。全局帽
+    ``max_refinement`` / ``min_cells`` 已删除——网格密度是用户自己的
+    责任，系统不设上限。渐变过渡带沿用 refine 旧做法（``growth_rate``，
+    1.0 = 硬跳）。块结构网格（独立完整网格）不在本设计内。
+    """
+
+    factor_x: int = Field(default=1, ge=1)
+    factor_y: int = Field(default=1, ge=1)
+    factor_z: int = Field(default=1, ge=1)
+    dx: Optional[float] = Field(default=None, gt=0)
+    dy: Optional[float] = Field(default=None, gt=0)
+    dz: Optional[float] = Field(default=None, gt=0)
     growth_rate: float = Field(default=1.2, ge=1.0)
 
     @model_validator(mode="after")
     def _check(self):
-        # Q22 站长令 2026-11-12：per-axis factor=1 = 该轴不细化（波导横向
-        # 细化、传播向保持原网格）——放宽到 >=1，至少一轴 >=2（全 1 =
-        # 无意义 zone）。内核守卫同轮放宽（fdtd._grid._mesh.refine）。
-        if self.factor is None:
-            raise ValueError(
-                "refine requires factor (an int or [fx, fy, fz], "
-                "each >= 1 with at least one >= 2)")
-        fs = [self.factor] * 3 if isinstance(self.factor, int) else list(self.factor)
-        if len(fs) != 3 or any(not isinstance(f, int) or f < 1 for f in fs):
-            raise ValueError(
-                "factor must be an int >= 1 or a list of 3 ints each >= 1 "
-                "(factor=1 on an axis = no refinement along it)")
-        if all(f == 1 for f in fs):
-            raise ValueError(
-                "refine factor must have at least one axis >= 2 "
-                "(all-1 zone refines nothing — drop it instead)")
+        # 同轴互斥判「值」不判「显式给」：model_dump() 会把默认值全部
+        # 物化（factor=1 / dx=None 都进 dump），fields_set 在 JSON 往返
+        # 后失真——往返恒等是硬契约。factor=1 是空操作，与绝对覆盖并存
+        # = 一个真相（绝对生效）；两个**有意义**的定义同给才 422。
+        for a in ("x", "y", "z"):
+            if getattr(self, f"factor_{a}") != 1 and getattr(self, f"d{a}") is not None:
+                raise ValueError(
+                    f"mesh {self.name!r}: axis {a!r} has both factor_{a}="
+                    f"{getattr(self, f'factor_{a}')} and d{a} — a factor "
+                    f"and an absolute spacing are two truths for one "
+                    f"axis, give exactly one")
         return self
-
-
-class MeshSpec(_StrictModel):
-    dx: float = Field(gt=0)
-    dy: Optional[float] = Field(default=None, gt=0)
-    dz: Optional[float] = Field(default=None, gt=0)
-    refine: list[RefineSpec] = Field(default_factory=list)
-    # Refinement cap / minimum cells per axis: the guard mirrors
-    # the local Mesh setter (isinstance(int) and >=1), with the same
-    # defaults as local, 128/10. Dimensionless, not part of resource
-    # estimation (estimate_cells consumes only dx/dy/dz/refine). Note
-    # that max_refinement checks actual refinement (the graded transition
-    # band can be finer than the nominal factor, see the local
-    # Mesh.refine docstring); the guard fires at kernel build time.
-    max_refinement: int = Field(default=128, ge=1)
-    min_cells: int = Field(default=10, ge=1)
 
 
 # ---------------------------------------------------------------------------
 # Materials
 # ---------------------------------------------------------------------------
-
-
-class _Identified:
-    """v2 item identity: a globally unique number issued by the system —
-    immutable, never reused after deletion; the four item collections
-    (geometry / materials / source / monitor) share one id allocator.
-    **Not consumed by the kernel** (not in translate); SDK-only
-    bookkeeping; save / open / submit all carry it."""
-
-    id: Optional[int] = None
 
 
 class PoleSpec(_StrictModel):
@@ -481,6 +507,19 @@ class PoleSpec(_StrictModel):
     strength (a0 < 0 / ωp² < 0, bounded); b1 < 0 (= γ < 0) is not a gain
     channel and is hard-rejected by the kernel's ade_coeffs. The schema
     mirrors current values and invents no guard.
+
+    **Time-harmonic convention (P0-2, 2026-11-19, single system-wide
+    statement)**: the pole coefficients above define the real rational
+    susceptibility χ(s) — convention-free. Every frequency-domain
+    evaluation in the system reads it at **s = −jω (e^{−iωt})**, the
+    material-library data convention (N = n + ik, k > 0 for lossy):
+    the SDK fit/curve side (``genie.core.material.fit``), the kernel
+    ``eps_at`` family, the mode solver, and the fdtd DFT monitors alike.
+    A passive medium therefore has Im ε(ω) > 0 and a lossy mode Im neff
+    > 0 everywhere. (Before 2026-11-19 the mode subsystem + eps_at
+    evaluated at s = +jω; the flip conjugated that side — anchors
+    re-pinned the same day, cross-repo canonical-pole anchor:
+    optics ``internal_test/test_p02_convention.py``.)
     """
 
     kind: Literal["lorentz", "drude", "rational"]
@@ -1425,15 +1464,39 @@ class ModelSpec(_StrictModel):
 class FdtdConfigSpec(_StrictModel):
     """fdtd 包络段：domain / mesh / source / monitor——**这些属于 fdtd
     这个求解器，不属于模型**（Q17：fdtd 只是一种 solver；b8 及以前的
-    平铺户型是 fdtd 冒充模型的遗物，2.0.1a1 断代拆除）。"""
+    平铺户型是 fdtd 冒充模型的遗物，2.0.1a1 断代拆除）。2.0.1a17 起
+    domain 携带基础网格（dx/dy/dz），``mesh`` = **带名加密区对象列表**
+    （Q30；缺省空表 = 无加密区）。"""
 
     domain: DomainSpec
-    mesh: MeshSpec
+    mesh: list[MeshSpec] = Field(default_factory=list)
     source: list[SourceSpec] = Field(min_length=1)
     monitor: list[MonitorSpec] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check(self):
+        # Mesh names unique across the whole list (names are addresses —
+        # fdtd.<name>; a duplicate would give the address two answers).
+        mnames = [m.name for m in self.mesh]
+        if len(mnames) != len(set(mnames)):
+            dups = sorted({n for n in mnames if mnames.count(n) > 1})
+            raise ValueError(
+                f"duplicate mesh names: {dups} (mesh names must be unique "
+                f"within the solver — they are addresses)")
+        # Absolute mesh spacing must not exceed the domain base on that
+        # axis: meshes refine, they do not coarsen (the generator only
+        # knows factor >= 1; a coarser override is not expressible).
+        base = (self.domain.dx, self.domain.dy or self.domain.dx,
+                self.domain.dz or self.domain.dx)
+        for mi, m in enumerate(self.mesh):
+            for a, b in zip(("x", "y", "z"), base):
+                d = getattr(m, f"d{a}")
+                if d is not None and d > b:
+                    raise ValueError(
+                        f"mesh {m.name!r}: d{a}={d:.6g} is coarser than "
+                        f"the domain base d{a}={b:.6g} — a mesh refines "
+                        f"its box, it cannot coarsen it (use factor or a "
+                        f"spacing <= the base)")
         # Monitor names unique across the whole list (a cross-type
         # duplicate would give the reader two answers).
         names = [m.name for m in self.monitor]
@@ -1472,12 +1535,15 @@ def _check_opt_range(v):
 
 
 class ModeDomainSpec(_StrictModel):
-    """mode 包络段·域（Q18 拍②/③，2.0.1a3 断代；Q20 v2.1）：截面放置
-    + 两根**横截面真轴**的窗口 range 元组 + 背景。center/span 拼写退役
-    （与 fdtd 同一 range 心智）；range 元组槽位吃表达式串（Q13 同一
-    求值面）。**Q20：横轴 range 可省**——mesh 给了该轴 coords 时窗口由
-    坐标向量 min/max 派生（都给 = 两个真相，在 ModeConfigSpec 组合层
-    422——单段物化时没有对方判据，存在性守卫跟着事实走）。"""
+    """mode 包络段·域（Q18 拍②/③，2.0.1a3 断代；Q20 v2.1；Q30 2.0.1a17
+    基础网格自 ModeMeshSpec 搬入）：截面放置 + 两根**横截面真轴**的窗口
+    range 元组 + 背景 + **基础网格**（每轴间距或坐标向量二选一）。center/
+    span 拼写退役（与 fdtd 同一 range 心智）；range 元组槽位吃表达式串
+    （Q13 同一求值面）。**Q20：横轴 range 可省**——domain 给了该轴
+    coords 时窗口由坐标向量 min/max 派生（都给 = 两个真相，在
+    ModeConfigSpec 组合层 422——单段物化时没有对方判据，存在性守卫
+    跟着事实走）。**传播轴禁止任何网格字段与 range**（2D 截面不沿
+    传播轴网格化，本段._check）。"""
 
     axis: Literal["x", "y", "z"]              # 传播轴（截面法向）
     position: float                           # 截面沿传播轴的位置 [m]
@@ -1485,63 +1551,16 @@ class ModeDomainSpec(_StrictModel):
     y_range: Optional[Range2] = None
     z_range: Optional[Range2] = None
     n_bg: float = Field(default=1.0, gt=0.0)  # 背景折射率
-
-    _v = field_validator("x_range", "y_range", "z_range",
-                         mode="after")(_check_opt_range)
-
-    @model_validator(mode="after")
-    def _check(self):
-        # 传播轴 range 禁止：那是 fdtd 的 3D 域概念，mode 是 2D 问题
-        # （写了就 422，不给"静默忽略"留门）。
-        # 横轴 range 的"必填/可省"守卫住 ModeConfigSpec（要看 mesh 有没有
-        # coords——Q20）。
-        prop = getattr(self, self.axis + "_range")
-        if prop is not None:
-            t1, t2 = _TRANSVERSE[self.axis]
-            raise ValueError(
-                f"domain.{self.axis}_range is the propagation axis — a "
-                f"mode cross-section has no extent along it (give the "
-                f"two transverse ranges {t1}_range / {t2}_range)")
-        return self
-
-
-class ModeRefineSpec(_StrictModel):
-    """mode 包络段·局部加密 zone（Q23 站长拍 2026-11-12：mode 自动
-    refine；coords 定位 = fdtd 协同/专家逃生口，主入口是 refine）。
-
-    2D 截面 zone：横轴 range + 每轴 factor（Q22 语义——**每轴 >= 1**，
-    factor=1 = 该轴不细化；zone 级至少一轴 >= 2）。传播轴的 range/
-    factor 槽存在但组合层 422（截面不沿传播轴网格化）。生成器 =
-    fdtd `_grow_refined_grid` 同款算法（mode 侧复述 + 对锁测试）。"""
-
-    x_range: Optional[Range2] = None
-    y_range: Optional[Range2] = None
-    z_range: Optional[Range2] = None
-    fx: Optional[int] = Field(default=None, ge=1)
-    fy: Optional[int] = Field(default=None, ge=1)
-    fz: Optional[int] = Field(default=None, ge=1)
-    growth_rate: float = Field(default=1.2, ge=1.0)
-
-    _v = field_validator("x_range", "y_range", "z_range",
-                         mode="after")(_check_opt_range)
-
-
-class ModeMeshSpec(_StrictModel):
-    """mode 包络段·网格（Q18 拍②）：每轴**间距或坐标向量二选一**；
-    第二轴间距缺省 = 第一轴间距（同 MeshSpec 的缺省模式）；坐标向量
-    （严格递增、≥2 点）由**内核 mode 段**换算成标准网格输入——wire 只
-    承运用户自然输入，不预折叠。传播轴的任何网格字段禁止出现。"""
-
+    # ── 基础网格（Q30 自旧 ModeMeshSpec 搬入，语义逐字保留）──
     dx: Optional[float] = Field(default=None, gt=0.0)
     dy: Optional[float] = Field(default=None, gt=0.0)
     dz: Optional[float] = Field(default=None, gt=0.0)
     x_coords: Optional[list[float]] = None
     y_coords: Optional[list[float]] = None
     z_coords: Optional[list[float]] = None
-    #: 局部加密 zone（Q23）；coords 与 zone 同轴并存 = 两个真相（422，
-    #: 组合层守卫）。coords 的定位是 fdtd 协同（mode source 注入截面
-    #: 网格）+ 专家逃生口——用户面主入口是 refine。
-    refine: list[ModeRefineSpec] = Field(default_factory=list)
+
+    _v = field_validator("x_range", "y_range", "z_range",
+                         mode="after")(_check_opt_range)
 
     def _axis_mesh(self, a: str):
         """单轴网格口径 → ("spacing", v) | ("coords", v) | None。"""
@@ -1553,32 +1572,91 @@ class ModeMeshSpec(_StrictModel):
 
     @model_validator(mode="after")
     def _check(self):
+        # 传播轴 range / 网格字段禁止：那是 fdtd 的 3D 域概念，mode 是
+        # 2D 问题（写了就 422，不给"静默忽略"留门）。横轴 range 的
+        # "必填/可省"守卫住 ModeConfigSpec（要看有没有 coords——Q20）。
+        t1, t2 = _TRANSVERSE[self.axis]
         for a in ("x", "y", "z"):
+            if a == self.axis and (
+                    getattr(self, f"{a}_range") is not None
+                    or self._axis_mesh(a) is not None):
+                raise ValueError(
+                    f"domain.{a}_range / d{a} / {a}_coords: axis {a!r} "
+                    f"is the propagation axis — a mode cross-section has "
+                    f"no extent or grid along it (give the two transverse "
+                    f"axes {t1}/{t2})")
+            # 每轴间距 × 坐标向量二选一 + coords 形状（>=2 点、严格
+            # 递增）——自旧 ModeMeshSpec._check 逐字搬入。
             d, c = getattr(self, f"d{a}"), getattr(self, f"{a}_coords")
             if d is not None and c is not None:
                 raise ValueError(
-                    f"mesh: axis {a!r} has both d{a} and {a}_coords — "
+                    f"domain: axis {a!r} has both d{a} and {a}_coords — "
                     f"spacing and coordinates are two truths for one "
                     f"grid, give exactly one")
             if c is not None:
                 if len(c) < 2:
                     raise ValueError(
-                        f"mesh.{a}_coords needs >= 2 points, got {len(c)}")
+                        f"domain.{a}_coords needs >= 2 points, got "
+                        f"{len(c)}")
                 if any(c[i + 1] <= c[i] for i in range(len(c) - 1)):
                     raise ValueError(
-                        f"mesh.{a}_coords must be strictly increasing")
+                        f"domain.{a}_coords must be strictly increasing")
+        return self
+
+
+class ModeMeshSpec(_StrictModel, _NamedMesh):
+    """mode mesh = **带名 2D 加密区对象**（Q30 对称迁移，2.0.1a17 断代）：
+    两根横轴的 box 区间 + 每轴间距定义——**每轴二选一**（factor 缺省 1
+    / 绝对值 <= 该轴基础间距，组合层校验）。传播轴的任何槽（range /
+    factor / d*）在 ModeConfigSpec 组合层 422（单段物化时不知道哪根
+    轴是传播轴）。**全 factor=1 = 合法无操作区**（Q30 改裁 Q22）。
+    生成器 = fdtd `_grow_refined_grid` 同款算法（mode 侧复述 + 对锁
+    测试）。渐变过渡带沿用 refine 旧做法（growth_rate，1.0 = 硬跳）。"""
+
+    x_range: Optional[Range2] = None
+    y_range: Optional[Range2] = None
+    z_range: Optional[Range2] = None
+    factor_x: int = Field(default=1, ge=1)
+    factor_y: int = Field(default=1, ge=1)
+    factor_z: int = Field(default=1, ge=1)
+    dx: Optional[float] = Field(default=None, gt=0.0)
+    dy: Optional[float] = Field(default=None, gt=0.0)
+    dz: Optional[float] = Field(default=None, gt=0.0)
+    growth_rate: float = Field(default=1.2, ge=1.0)
+
+    _v = field_validator("x_range", "y_range", "z_range",
+                         mode="after")(_check_opt_range)
+
+    @model_validator(mode="after")
+    def _check(self):
+        # 同轴互斥判「值」不判「显式给」：model_dump() 会把默认值全部
+        # 物化（factor=1 / dx=None 都进 dump），fields_set 在 JSON 往返
+        # 后失真——往返恒等是硬契约。factor=1 是空操作，与绝对覆盖并存
+        # = 一个真相（绝对生效）；两个**有意义**的定义同给才 422。
+        for a in ("x", "y", "z"):
+            if getattr(self, f"factor_{a}") != 1 and getattr(self, f"d{a}") is not None:
+                raise ValueError(
+                    f"mesh {self.name!r}: axis {a!r} has both factor_{a}="
+                    f"{getattr(self, f'factor_{a}')} and d{a} — a factor "
+                    f"and an absolute spacing are two truths for one "
+                    f"axis, give exactly one")
         return self
 
 
 class ModeConfigSpec(_StrictModel):
-    """mode 包络段 v2（Q18，2.0.1a3 断代）：``domain / mesh / boundary``
-    三段 + 顶层 ``wavelength / n_modes``。不造假对称——**无 source /
-    monitor 段**（本征问题不吃激励）；boundary 复用 fdtd 的
-    ``BoundarySpec``（per-edge，键 = 横截面四缘真轴名；``n_pml`` 退役
-    → ``layers``）。2.0.1a1 的平铺 13 字段形（center/span_h/dh/…）作废。"""
+    """mode 包络段 v2（Q18，2.0.1a3 断代；Q30 2.0.1a17 mesh 对象化）：
+    ``domain / mesh / boundary`` 三段 + 顶层 ``wavelength / n_modes``。
+    不造假对称——**无 source / monitor 段**（本征问题不吃激励）；boundary
+    复用 fdtd 的 ``BoundarySpec``（per-edge，键 = 横截面四缘真轴名；
+    ``n_pml`` 退役 → ``layers``）。2.0.1a1 的平铺 13 字段形
+    （center/span_h/dh/…）作废。domain 携带基础网格（间距或 coords），
+    ``mesh`` = 带名 2D 加密区对象列表（Q30 对称迁移）。"""
 
     domain: ModeDomainSpec
-    mesh: ModeMeshSpec
+    #: 带名加密区对象列表（Q30 对称迁移，2.0.1a17）：缺省空表 = 无
+    #: 加密区；传播轴槽/横轴 box 完整性/coords 互斥/绝对<=基础 在
+    #: 本段组合层守卫。
+    mesh: list[ModeMeshSpec] = Field(default_factory=list)
     boundary: dict[str, BoundarySpec] = Field(default_factory=dict)
     #: 真空波长 [m]——**单字段 union**（站长拍 2026-11-13）：``float`` = 单 λ
     #: （长度 1 的特例），``list[float]`` = 多 λ（serve 升序串行逐 λ 求解）；
@@ -1628,74 +1706,85 @@ class ModeConfigSpec(_StrictModel):
 
     @model_validator(mode="after")
     def _check(self):
-        # mesh 的传播轴守卫放在这里（ModeMeshSpec 单独物化时不带 axis，
-        # 没有判据；组合进 config 才有真值——存在性守卫跟着事实走）。
+        # 组合层守卫（单段物化没有对方判据的，都住这里）。
         ax = self.domain.axis
         t1, t2 = _TRANSVERSE[ax]
-        for a in ("x", "y", "z"):
-            if a == ax and self.mesh._axis_mesh(a) is not None:
-                raise ValueError(
-                    f"mesh: axis {a!r} is the propagation axis — a mode "
-                    f"cross-section is not meshed along it (transverse "
-                    f"axes: {t1}/{t2})")
         # Q20：横轴 range × coords——每根横轴恰有一个真相：
         #   coords 在手 → range 可省（窗口由坐标 min/max 派生）；
         #   两者都给 → 422（两个真相不许并存，与间距/coords 二选一
         #   同款铁律）；coords 也没有 → range 必填（间距离散它）。
         for a in (t1, t2):
             rng = getattr(self.domain, f"{a}_range")
-            coords = getattr(self.mesh, f"{a}_coords")
+            coords = getattr(self.domain, f"{a}_coords")
             if rng is not None and coords is not None:
                 raise ValueError(
-                    f"domain.{a}_range and mesh.{a}_coords are two truths "
-                    f"for one axis window — give exactly one (coords imply "
-                    f"the extent)")
+                    f"domain.{a}_range and domain.{a}_coords are two "
+                    f"truths for one axis window — give exactly one "
+                    f"(coords imply the extent)")
             if rng is None and coords is None:
                 raise ValueError(
-                    f"domain.{a}_range is required unless mesh.{a}_coords "
+                    f"domain.{a}_range is required unless domain.{a}_coords "
                     f"is given (axis={ax!r} → transverse axes {t1}/{t2})")
         # 轴1（字母序在前的横轴）必须给 spacing 或 coords；轴2 缺省 =
         # 轴1 的**间距**（向量不可继承——两轴长度各自独立）。
-        m1 = self.mesh._axis_mesh(t1)
-        m2 = self.mesh._axis_mesh(t2)
+        m1 = self.domain._axis_mesh(t1)
+        m2 = self.domain._axis_mesh(t2)
         if m1 is None:
             raise ValueError(
-                f"mesh: axis {t1!r} needs d{t1} or {t1}_coords (nothing "
+                f"domain: axis {t1!r} needs d{t1} or {t1}_coords (nothing "
                 f"given); d{t2} alone cannot seed the first axis")
         if m2 is None and m1[0] != "spacing":
             raise ValueError(
-                f"mesh: axis {t2!r} needs its own d{t2} or {t2}_coords "
+                f"domain: axis {t2!r} needs its own d{t2} or {t2}_coords "
                 f"(only a spacing can be inherited from {t1}, not "
                 f"coordinates)")
-        # Q23 refine 守卫：传播轴槽禁；coords 与 zone 同轴 = 两个真相；
-        # factor 须有 range；zone 级至少一轴 factor >= 2。
-        for zi, z in enumerate(self.mesh.refine):
+        # mesh zone 守卫（Q30：带名 2D 加密区）：名字唯一；传播轴槽禁；
+        # 横轴 box 完整（两根横轴 range 都给）；zone 区间 × 该轴 coords
+        # = 两个真相；绝对间距 <= 该轴基础间距（mesh 只加密不粗化）。
+        znames = [z.name for z in self.mesh]
+        if len(znames) != len(set(znames)):
+            dups = sorted({n for n in znames if znames.count(n) > 1})
+            raise ValueError(
+                f"duplicate mesh names: {dups} (mesh names must be unique "
+                f"within the solver — they are addresses)")
+        # 每横轴的基础间距（绝对覆盖的比对基准）：显式 d，缺省继承
+        # 轴1 间距；coords 轴没有标量基准（zone 区间与 coords 本就互斥）。
+        base = {}
+        for a in (t1, t2):
+            am = self.domain._axis_mesh(a)
+            if am is None and self.domain._axis_mesh(t1)[0] == "spacing":
+                am = ("spacing", self.domain._axis_mesh(t1)[1])
+            base[a] = am[1] if am is not None and am[0] == "spacing" else None
+        for zi, z in enumerate(self.mesh):
             for a in ("x", "y", "z"):
                 rng = getattr(z, f"{a}_range")
-                fac = getattr(z, f"f{a}")
-                if a == ax and (rng is not None or fac is not None):
+                d = getattr(z, f"d{a}")
+                if a == ax and (rng is not None or d is not None
+                                or getattr(z, f"factor_{a}") != 1):
                     raise ValueError(
-                        f"mesh.refine[{zi}]: axis {a!r} is the propagation "
-                        f"axis — a mode cross-section is not meshed along "
-                        f"it (transverse axes: {t1}/{t2})")
-                if fac is not None and rng is None:
-                    raise ValueError(
-                        f"mesh.refine[{zi}]: f{a} given without {a}_range "
-                        f"— a zone needs the range it refines")
-                if rng is not None and fac is None:
-                    raise ValueError(
-                        f"mesh.refine[{zi}]: {a}_range given without f{a} "
-                        f"— give f{a}=1 explicitly if the axis is not "
-                        f"refined (Q22: factor=1 = no refinement)")
-                if rng is not None and getattr(self.mesh, f"{a}_coords") is not None:
-                    raise ValueError(
-                        f"mesh.refine[{zi}]: {a}_range and mesh.{a}_coords "
-                        f"are two truths for one axis grid — coords carry "
-                        f"the whole axis, refine cannot apply on top")
-            if all((getattr(z, f"f{a}") or 1) == 1 for a in (t1, t2)):
-                raise ValueError(
-                    f"mesh.refine[{zi}]: all factors are 1 — the zone "
-                    f"refines nothing (drop it or raise one axis >= 2)")
+                        f"mesh[{zi}] ({z.name!r}): axis {a!r} is the "
+                        f"propagation axis — a mode cross-section is not "
+                        f"meshed along it (transverse axes: {t1}/{t2})")
+                if a in (t1, t2):
+                    if rng is None:
+                        raise ValueError(
+                            f"mesh[{zi}] ({z.name!r}): {a}_range is "
+                            f"required — a mesh is a box on the two "
+                            f"transverse axes (factor=1 marks an axis "
+                            f"that is not refined)")
+                    if rng is not None and getattr(
+                            self.domain, f"{a}_coords") is not None:
+                        raise ValueError(
+                            f"mesh[{zi}] ({z.name!r}): {a}_range and "
+                            f"domain.{a}_coords are two truths for one "
+                            f"axis grid — coords carry the whole axis, "
+                            f"a mesh cannot apply on top")
+                    if d is not None and base[a] is not None and d > base[a]:
+                        raise ValueError(
+                            f"mesh[{zi}] ({z.name!r}): d{a}={d:.6g} is "
+                            f"coarser than the base d{a}={base[a]:.6g} — "
+                            f"a mesh refines its box, it cannot coarsen "
+                            f"it (use factor or a spacing <= the base)")
         # 两个面：摆放三句话的守卫（口径 = 内核 _grid.solve_grid，响亮不猜）
         import math as _m
         if self.rotate_axis is not None:

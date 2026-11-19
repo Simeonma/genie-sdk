@@ -107,13 +107,6 @@ _SECTION_OF = {"geom": _wire.ModelSpec, "mat": _wire.ModelSpec,
                "domain": _wire.FdtdConfigSpec, "mesh": _wire.FdtdConfigSpec,
                "src": _wire.FdtdConfigSpec, "mon": _wire.FdtdConfigSpec}
 
-#: GUI collection key → the new-syntax line prefix (Q15): structure
-#: collections live on the handle, the envelope collections on the fdtd
-#: default solver (the GUI is fdtd-bound v1).
-_F_PREFIX = {"domain": "genie.fdtd.domain", "mesh": "genie.fdtd.mesh",
-             "geom": "genie.geometry", "mat": "genie.materials",
-             "src": "genie.fdtd.sources", "mon": "genie.fdtd.monitors"}
-
 
 def _resolve_spec(coll: str, kind):
     """collection (+kind) → the protocol's Spec class (all via reflection against the source of truth)."""
@@ -146,18 +139,21 @@ def _coerce(ann, value):
     return value
 
 
-#: GUI collection → (address family prefix, add verb / solver)
+#: GUI collection → (address family prefix, add verb / solver). Q30: mesh
+#: = named refinement-box objects on the solver (``fdtd.<name>``), like
+#: sources / monitors; the base grid lives on the solver's domain.
 _ADDR_OF = {
     "geom": ("geometry", "genie.add_geometry"),
     "mat": ("material", "genie.add_material"),
     "src": ("fdtd", "genie.fdtd.add_source"),
     "mon": ("fdtd", "genie.fdtd.add_monitor"),
+    "mesh": ("fdtd", "genie.fdtd.add_mesh"),
 }
 
 
 def _addr_of(coll: str, name) -> str:
     """collection + name → the Q25 address string."""
-    if coll in ("domain", "mesh"):
+    if coll == "domain":
         return "fdtd"
     fam = _ADDR_OF[coll][0]
     if fam == "fdtd":
@@ -166,10 +162,9 @@ def _addr_of(coll: str, name) -> str:
 
 
 def _solver_field(field: str) -> str:
-    """domain./mesh. GUI paths → the solver-flattened field / nested path."""
-    for head in ("domain.", "mesh."):
-        if field.startswith(head):
-            return field[len(head):]
+    """domain. GUI paths → the solver-flattened field / nested path."""
+    if field.startswith("domain."):
+        return field[len("domain."):]
     return field
 
 
@@ -180,7 +175,7 @@ def form_delta(intent: dict) -> str:
     if coll not in _F_ATTR or not isinstance(field, str) \
             or not field.isidentifier() and "." not in field:
         raise ValueError(f"bad form intent: {intent!r}")
-    if coll in ("domain", "mesh"):
+    if coll == "domain":
         field = _solver_field(field)
         spec = None
     else:
@@ -303,6 +298,11 @@ def form_intent(intent: dict) -> str:
     name = intent.get("name")
     if op == "add":
         kind = intent.get("kind")
+        if coll == "mesh":
+            # Q30: mesh objects are one-kind — identity only, no type.
+            if not isinstance(name, str) or not name:
+                raise ValueError("add needs a name (identity only)")
+            return f"genie.fdtd.add_mesh(name={name!r})"
         if not isinstance(kind, str) or not kind.isidentifier():
             raise ValueError(f"bad add kind: {kind!r}")
         if coll == "mat":

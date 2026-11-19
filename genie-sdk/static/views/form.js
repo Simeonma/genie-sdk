@@ -809,41 +809,55 @@ const FormPanel = {
   },
 
   _mesh(body) {
-    const sM = this._sec("格距");
+    /* Q30：基础格距住 domain（dx/dy/dz，dy/dz 留空 = 继承 dx）；
+     * mesh = 带名加密区对象列表（box 区间 + 每轴 factor 或绝对间距二选一）。 */
+    const sM = this._sec("基础格距 · domain");
     body.appendChild(sM.head); body.appendChild(sM.body);
     // 网格预览工具（app.js 把常驻 DOM 挂进 mount，监听不丢）
     const mount = this._el("div");
     mount.id = "mesh-mount";
-    body.appendChild(mount);
+    sM.body.appendChild(mount);
 
-    const m = this.cfg.mesh || (this.cfg.mesh = {});
-    sM.body.appendChild(this._row("dx (µm)", this._input("mesh.dx", m.dx, "num", "len")));
-    sM.body.appendChild(this._row("dy (µm)", this._input("mesh.dy", m.dy, "num", "len")));
-    sM.body.appendChild(this._row("dz (µm)", this._input("mesh.dz", m.dz, "num", "len")));
-    sM.body.appendChild(this._row("max_refinement",
-      this._input("mesh.max_refinement", m.max_refinement ?? 128, "num")));
-    sM.body.appendChild(this._row("min_cells",
-      this._input("mesh.min_cells", m.min_cells ?? 10, "num")));
-    m.refine = m.refine || [];
-    m.refine.forEach((r, i) => {
+    const d = this.cfg.domain || (this.cfg.domain = {});
+    sM.body.appendChild(this._row("dx (µm)", this._input("domain.dx", d.dx, "num", "len")));
+    sM.body.appendChild(this._row("dy (µm)", this._input("domain.dy", d.dy, "num", "len")));
+    sM.body.appendChild(this._row("dz (µm)", this._input("domain.dz", d.dz, "num", "len")));
+
+    const list = this.cfg.mesh || (this.cfg.mesh = []);
+    list.forEach((m, i) => {
       const inner = document.createDocumentFragment();
-      inner.appendChild(this._rangeRow("x_range (µm)", `mesh.refine.${i}.x_range`, r.x_range, "len"));
-      inner.appendChild(this._rangeRow("y_range (µm)", `mesh.refine.${i}.y_range`, r.y_range, "len"));
-      inner.appendChild(this._rangeRow("z_range (µm)", `mesh.refine.${i}.z_range`, r.z_range, "len"));
-      inner.appendChild(this._row("factor",
-        undefined,
-        "⚠ 名义 factor ≠ 实际最细格（growth_rate 增长可达 26×）——以网格预览的实际格距为准（陷阱#4）",
-        this._input(`mesh.refine.${i}.factor`, r.factor, "num")));
+      inner.appendChild(this._rangeRow("x_range (µm)", `mesh.${i}.x_range`, m.x_range, "len"));
+      inner.appendChild(this._rangeRow("y_range (µm)", `mesh.${i}.y_range`, m.y_range, "len"));
+      inner.appendChild(this._rangeRow("z_range (µm)", `mesh.${i}.z_range`, m.z_range, "len"));
+      /* 每轴二选一：factor（>=1，缺省 1 = 该轴基础间距）或绝对间距
+       * （<= 基础间距；同轴两个都给有意义值 = 422）。 */
+      inner.appendChild(this._row("factor_x",
+        this._input(`mesh.${i}.factor_x`, m.factor_x ?? 1, "num")));
+      inner.appendChild(this._row("factor_y",
+        this._input(`mesh.${i}.factor_y`, m.factor_y ?? 1, "num")));
+      inner.appendChild(this._row("factor_z",
+        this._input(`mesh.${i}.factor_z`, m.factor_z ?? 1, "num")));
+      inner.appendChild(this._row("dx 绝对 (µm)",
+        undefined, "留空 = 用 factor_x；给了则覆盖该轴（须 <= 基础间距）",
+        this._input(`mesh.${i}.dx`, m.dx, "num", "len")));
+      inner.appendChild(this._row("dy 绝对 (µm)",
+        this._input(`mesh.${i}.dy`, m.dy, "num", "len")));
+      inner.appendChild(this._row("dz 绝对 (µm)",
+        this._input(`mesh.${i}.dz`, m.dz, "num", "len")));
       inner.appendChild(this._row("growth_rate",
-        this._input(`mesh.refine.${i}.growth_rate`, r.growth_rate ?? 1.2, "num")));
+        this._input(`mesh.${i}.growth_rate`, m.growth_rate ?? 1.2, "num")));
       body.appendChild(this._card(
-        [this._el("span", "tag", "refine " + (i + 1)), this._delBtn("mesh.refine", i)],
+        [this._headName(`mesh.${i}.name`, m.name, "mesh name",
+            (m.name || `mesh ${i + 1}`) + " 名称"),
+         this._el("span", "tag", "mesh"),
+         this._delBtn("mesh", i)],
         inner));
     });
-    const add = this._el("button", "mini", "+ refine 区");
+    const add = this._el("button", "mini", "+ mesh 区");
     add.addEventListener("click", () => {
-      m.refine.push({ x_range: [-2e-7, 2e-7], y_range: [-2e-7, 2e-7],
-                      z_range: [-2e-7, 2e-7], factor: 2, growth_rate: 1.2 });
+      list.push({ name: "m" + (list.length + 1),
+                  x_range: [-2e-7, 2e-7], y_range: [-2e-7, 2e-7],
+                  z_range: [-2e-7, 2e-7], factor_x: 2, growth_rate: 1.2 });
       this._rerender();
     });
     body.appendChild(add);

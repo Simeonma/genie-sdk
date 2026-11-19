@@ -100,13 +100,13 @@ class Scene2D {
     return this._cssHex(hex);
   }
 
-  /* 与 Scene3D._pmlBox 同款：每 pml 面 layers × 该轴名义格距 */
+  /* 与 Scene3D._pmlBox 同款：每 pml 面 layers × 该轴名义格距（Q30 起
+   * 基础格距住 domain） */
   _pmlBox(cfg, d) {
     const dom = cfg.domain || {};
-    const mesh = cfg.mesh || {};
-    const dx = mesh.dx || 20e-9;
-    const hs = { x_min: dx, x_max: dx, y_min: mesh.dy || dx, y_max: mesh.dy || dx,
-                 z_min: mesh.dz || dx, z_max: mesh.dz || dx };
+    const dx = dom.dx || 20e-9;
+    const hs = { x_min: dx, x_max: dx, y_min: dom.dy || dx, y_max: dom.dy || dx,
+                 z_min: dom.dz || dx, z_max: dom.dz || dx };
     const out = { xmin: d.xmin, xmax: d.xmax, ymin: d.ymin, ymax: d.ymax,
                   zmin: d.zmin, zmax: d.zmax };
     let any = false;
@@ -219,14 +219,14 @@ class Scene2D {
       ctx.stroke();
     }
 
-    // 网格线（三个远侧面，抽稀到 ≤48/轴）
+    // 网格线（三个远侧面，抽稀到 ≤48/轴；Q30 起基础格距住 domain）
     if (this.showGrid) {
-      const mesh = cfg.mesh || {};
-      const dx = mesh.dx || 20e-9;
+      const dom = cfg.domain || {};
+      const dx = dom.dx || 20e-9;
       ctx.strokeStyle = this._cssRgba(SCENE_PALETTE.GRID.CANVAS_2D, 0.35);
       ctx.lineWidth = 0.7;
       for (const [lo, hi, step, fixedAxis] of [
-        [d.xmin, d.xmax, mesh.dx || dx, "z"], [d.zmin, d.zmax, mesh.dz || dx, "x"],
+        [d.xmin, d.xmax, dom.dx || dx, "z"], [d.zmin, d.zmax, dom.dz || dx, "x"],
       ]) {
         const n = Math.floor((hi - lo) / step);
         if (n < 1) continue;

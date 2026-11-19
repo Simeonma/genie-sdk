@@ -4,7 +4,7 @@ One address grammar, one write verb, one read verb:
 
     genie.add_parameter / add_material / add_geometry / add_attribute /
     add_analysis / add_sweep / add_solver / <solver>.add_source /
-    add_monitor / add_mesh_refine
+    add_monitor / add_mesh
     genie.set_named(addr, **fields)      # the ONLY write channel
     genie.get_named(addr[, field])       # model fields
     genie.describe(addr)                 # field table
@@ -16,7 +16,8 @@ One address grammar, one write verb, one read verb:
 
 Addresses are ``<family>.<name>`` for top-level objects, ``<solver>`` for a
 solver itself, and ``<solver>.<name>`` for its children (sources, monitors,
-mesh-refine zones; one shared namespace per solver).
+mesh objects; one shared namespace per solver). Q30: the base grid dx/dy/dz
+lives on the solver's domain; ``add_mesh`` creates named refinement boxes.
 """
 from __future__ import annotations
 
@@ -61,14 +62,14 @@ _GEO_TYPES = {"box", "sphere", "cylinder", "ngon_z", "polygon_z",
 _SRC_TYPES = {"plane_wave", "soft_source", "gaussian_beam", "mode"}
 _MON_TYPES = {"time", "freq", "index"}
 
-#: solver-flattened fields: user name → (section, wire field)
+#: solver-flattened fields: user name → (section, wire field). Q30: the
+#: base grid dx/dy/dz lives on domain; the caps (max_refinement /
+#: min_cells) are deleted from the language.
 _SOLVER_FIELDS = {
     "x_range": ("domain", "x_range"), "y_range": ("domain", "y_range"),
     "z_range": ("domain", "z_range"), "total_time": ("domain", "total_time"),
     "cfl": ("domain", "cfl"), "boundary": ("domain", "boundary"),
-    "dx": ("mesh", "dx"), "dy": ("mesh", "dy"), "dz": ("mesh", "dz"),
-    "max_refinement": ("mesh", "max_refinement"),
-    "min_cells": ("mesh", "min_cells"),
+    "dx": ("domain", "dx"), "dy": ("domain", "dy"), "dz": ("domain", "dz"),
 }
 
 #: temporal source/monitor aliases (user name → wire field)
@@ -86,7 +87,7 @@ class _Target:
 
     def __init__(self, kind, family, name, obj=None, solver=None):
         self.kind = kind          # parameter|material|geometry|analysis|sweep|
-        #                           solver|source|monitor|refine
+        #                           solver|source|monitor|mesh
         self.family = family      # address prefix as typed (may be None)
         self.name = name
         self.obj = obj
@@ -108,7 +109,7 @@ class Surface:
     def __init__(self, model, env):
         state = getattr(env, "api_state", None)
         if state is None:
-            state = {"mat_meta": {}, "refines": {}}
+            state = {"mat_meta": {}}
             env.api_state = state
         object.__setattr__(self, "_model", model)
         object.__setattr__(self, "_env", env)
@@ -118,10 +119,6 @@ class Surface:
     @property
     def _mat_meta(self):
         return self._state["mat_meta"]
-
-    @property
-    def _refines(self):
-        return self._state["refines"]
 
     # ══════════════════════════════════════════════════════════════
     # address parsing / resolution
@@ -154,7 +151,7 @@ class Surface:
         return {}
 
     def _solver_children(self, solver):
-        """solver → {name: _Target} for sources / monitors / refine zones."""
+        """solver → {name: _Target} for sources / monitors / mesh objects."""
         env = self._model.envelope(solver)
         out = {}
         src = getattr(env, "_source", None)
@@ -165,12 +162,10 @@ class Surface:
         if mon is not None:
             for it in mon:
                 out[it.name] = _Target("monitor", solver, it.name, it, solver)
-        names = self._refines.get(solver, {})
-        mesh = getattr(env, "mesh", None)
-        zones = (getattr(mesh, "refine", None) or []) if mesh is not None else []
-        for nm, idx in names.items():
-            if idx < len(zones):
-                out[nm] = _Target("refine", solver, nm, zones[idx], solver)
+        meshes = getattr(env, "meshes", None)     # fdtd + mode (Q30)
+        if meshes is not None:
+            for it in meshes._items:
+                out[it.name] = _Target("mesh", solver, it.name, it, solver)
         return out
 
     def _all_candidates(self):
@@ -408,9 +403,6 @@ class Surface:
             if k in getattr(type(env.domain), "model_fields", {}):
                 setattr(env.domain, k, v)
                 continue
-            if k in getattr(type(env.mesh), "model_fields", {}):
-                setattr(env.mesh, k, v)
-                continue
             raise ValueError(
                 f"unknown field {k!r} on solver {t.addr()!r} — fields: "
                 f"{', '.join(sorted(_SOLVER_FIELDS))} (or a dotted path)")
@@ -461,7 +453,7 @@ class Surface:
         if band:
             draft.freq = band
 
-    def _set_refine(self, t, fields):
+    def _set_mesh(self, t, fields):
         draft = t.obj
         self._only(t, fields, set(type(draft).model_fields))
         for k, v in fields.items():
@@ -587,7 +579,7 @@ class Surface:
                 snap[user] = band[wire]
         return snap
 
-    def _get_refine(self, t):
+    def _get_mesh(self, t):
         return {k: getattr(t.obj, k) for k in type(t.obj).model_fields
                 if getattr(t.obj, k, None) is not None}
 
@@ -630,11 +622,8 @@ class Surface:
                 env.sources.remove(t.name)
             elif t.kind == "monitor":
                 env.monitors.remove(t.name)
-            else:
-                idx = self._refines.get(t.solver, {}).get(t.name)
-                if idx is not None:
-                    del env.mesh.refine[idx]
-                    del self._refines[t.solver][t.name]
+            else:                               # mesh object (Q30)
+                env.meshes.remove(t.name)
         return t.addr()
 
     # ══════════════════════════════════════════════════════════════
@@ -822,7 +811,7 @@ class Surface:
         except Exception:                       # noqa: BLE001 — lenient restore
             env.sweeps = {}
         object.__setattr__(self, "_model", model)
-        env.api_state = {"mat_meta": {}, "refines": {}}
+        env.api_state = {"mat_meta": {}}
         object.__setattr__(self, "_state", env.api_state)
         env._reinject_genie()
         return str(path)
@@ -924,7 +913,8 @@ class _ROMapping:
 
 
 class _SolverChildren:
-    """``genie.fdtd.add_source / add_monitor / add_mesh_refine``."""
+    """``genie.fdtd.add_source / add_monitor / add_mesh`` (mode solvers
+    expose ``add_mesh`` too — Q30 symmetric migration)."""
 
     __slots__ = ("_s", "_name")
 
@@ -956,24 +946,15 @@ class _SolverChildren:
         self._env().monitors._add(type, name)
         return f"{self._name}.{name}"
 
-    def add_mesh_refine(self, name):
+    def add_mesh(self, name):
+        """Q30: a named refinement box (factor_x/y/z XOR absolute dx/dy/dz
+        per axis; the base grid lives on the solver's domain)."""
         self._free(name)
-        env = self._env()
-        if env.mesh.refine is None:
-            env.mesh.refine = []
-        index = len(env.mesh.refine)
-        env.mesh.refine.append(_refine_draft())
-        self._s._refines.setdefault(self._name, {})[name] = index
+        self._env().meshes.add_mesh(name)
         return f"{self._name}.{name}"
 
     def __repr__(self):
         return f"<solver {self._name} children>"
-
-
-def _refine_draft():
-    from genie.core.model.draft import DRAFT_OF
-    from genie_protocol import _wire
-    return DRAFT_OF[_wire.RefineSpec]()
 
 
 def core_results_open(path, jid, scratch):

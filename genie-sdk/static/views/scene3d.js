@@ -675,13 +675,13 @@ class Scene3D {
     this.markDirty();   /* 结构重建必重画（相机不动也要） */
   }
 
-  /* PML 扩展盒：每面 layers × 该轴名义格距（dy/dz 未设回退 dx，同 schema 语义） */
+  /* PML 扩展盒：每面 layers × 该轴名义格距（dy/dz 未设回退 dx，同 schema 语义；
+   * Q30 起基础格距住 domain） */
   _pmlBox(cfg, d) {
     const dom = cfg.domain || {};
-    const mesh = cfg.mesh || {};
-    const dx = mesh.dx || 20e-9;
-    const hs = { x_min: dx, x_max: dx, y_min: mesh.dy || dx, y_max: mesh.dy || dx,
-                 z_min: mesh.dz || dx, z_max: mesh.dz || dx };
+    const dx = dom.dx || 20e-9;
+    const hs = { x_min: dx, x_max: dx, y_min: dom.dy || dx, y_max: dom.dy || dx,
+                 z_min: dom.dz || dx, z_max: dom.dz || dx };
     const bnd = dom.boundary || {};
     let any = false;
     const out = { xmin: d.xmin, xmax: d.xmax, ymin: d.ymin, ymax: d.ymax,
@@ -1194,11 +1194,12 @@ class Scene3D {
     if (this.labelGroup) this.labelGroup.visible = this.showLabels;
   }
 
-  /* 网格线：三个远侧面按名义格距画（每轴 ≤200 条，超出抽稀） */
+  /* 网格线：三个远侧面按名义格距画（每轴 ≤200 条，超出抽稀；
+   * Q30 起基础格距住 domain） */
   _updateGridLines(cfg, d) {
-    const mesh = cfg.mesh || {};
-    const dx = mesh.dx || 20e-9;
-    const steps = { x: mesh.dx || dx, y: mesh.dy || dx, z: mesh.dz || dx };
+    const dom = cfg.domain || {};
+    const dx = dom.dx || 20e-9;
+    const steps = { x: dom.dx || dx, y: dom.dy || dx, z: dom.dz || dx };
     const sp = {};
     for (const ax of ["x", "y", "z"]) {
       const lo = d[ax + "min"], hi = d[ax + "max"];
@@ -1217,26 +1218,26 @@ class Scene3D {
     this._addGridPlane(sp.y, sp.z, d.xmin, { axis: 0 }, mat);
   }
 
-  /* refine 加密区叠加（E-5/D-3 移植的本地近似）：名义格距 ÷ factor 在
-   * 加密盒三面画加密线（示意——growth_rate 渐变与服务器真实非均匀分布
-   * 不可知，真值以 mesh_preview / 提交后为准）。下一轮 clearGroup 自然清除。 */
+  /* mesh 加密区叠加（E-5/D-3 移植的本地近似；Q30 对象化重排）：基础
+   * 格距住 domain；每个 mesh 对象按「绝对间距或 factor 相对基础」得
+   * 名义格距，在加密盒三面画加密线（示意——growth_rate 渐变与服务器
+   * 真实非均匀分布不可知，真值以 mesh_preview / 提交后为准）。下一轮
+   * clearGroup 自然清除。 */
   _updateRefineLines(cfg, d) {
-    const mesh = cfg.mesh || {};
-    const dx0 = mesh.dx || 20e-9;
-    const base = { x: mesh.dx || dx0, y: mesh.dy || dx0, z: mesh.dz || dx0 };
+    const dom = cfg.domain || {};
+    const base = { x: dom.dx || 20e-9, y: dom.dy || dom.dx || 20e-9,
+                   z: dom.dz || dom.dx || 20e-9 };
     const mat = new THREE.LineBasicMaterial(
       { color: SCENE_PALETTE.GRID.REFINE, transparent: true,
         opacity: 0.75, depthTest: true });
-    for (const r of (mesh.refine || [])) {
-      const xr = r.x_range, yr = r.y_range, zr = r.z_range;
+    for (const m of (cfg.mesh || [])) {
+      if (!m || typeof m !== "object") continue;
+      const xr = m.x_range, yr = m.y_range, zr = m.z_range;
       if (!Array.isArray(xr) || !Array.isArray(yr) || !Array.isArray(zr)) continue;
-      const f = r.factor;
-      if (f == null) continue;
-      const fac = Array.isArray(f) ? f : [f, f, f];
       const step = {
-        x: base.x / Math.max(1, fac[0] | 0),
-        y: base.y / Math.max(1, fac[1] | 0),
-        z: base.z / Math.max(1, fac[2] | 0),
+        x: m.dx || base.x / Math.max(1, m.factor_x || 1),
+        y: m.dy || base.y / Math.max(1, m.factor_y || 1),
+        z: m.dz || base.z / Math.max(1, m.factor_z || 1),
       };
       const lines = (lo, hi, st) => {
         if (!(st > 0)) return [lo, hi];
@@ -1293,7 +1294,7 @@ class Scene3D {
       zmin: dom.z_range ? dom.z_range[0] : -1e-6,
       zmax: dom.z_range ? dom.z_range[1] : 1e-6,
     };
-    const nominal = (this._cfg.mesh && this._cfg.mesh.dx) || 20e-9;
+    const nominal = (this._cfg.domain && this._cfg.domain.dx) || 20e-9;
     const stepOf = (ax) =>
       (preview.axes[ax] && preview.axes[ax].spacing_min_m) || nominal;
     // 三远侧面网格线（真实格距，每轴 ≤200 条抽稀——同 _updateGridLines）

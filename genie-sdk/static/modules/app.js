@@ -602,7 +602,8 @@
   }
 
   /* ── ⑤ 表单薄意图（v1 的路径 diff → v2 意图）──────────────────── */
-  const COLL_OF = { materials: "mat", geometry: "geom", source: "src", monitor: "mon" };
+  const COLL_OF = { materials: "mat", geometry: "geom", source: "src",
+                    monitor: "mon", mesh: "mesh" };
 
   function serverItems(head) {
     /* Q17 嵌套户型：materials/geometry 住 cfg.model，source/monitor 住
@@ -634,7 +635,7 @@
         continue;
       }
       if (head === "run") continue;              /* 动作参数不属表单线 */
-      if (head === "domain" || head === "mesh") {
+      if (head === "domain") {
         intents.push({ collection: head, id: null,
                        field: parts.slice(1).join("."), value: op.value });
         continue;

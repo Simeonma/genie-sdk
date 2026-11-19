@@ -119,10 +119,10 @@ def load_sweeps(doc_path) -> dict:
 
 class _SolverHandle:
     """One declared solver seen from the script side: attribute reads and
-    writes delegate to the solver's envelope (domain / mesh / sources /
-    monitors — Q15); the action surface adds ``run`` / ``validate``, and
-    the Q25 creation verbs ``add_source`` / ``add_monitor`` /
-    ``add_mesh_refine``."""
+    writes delegate to the solver's envelope (domain / meshes / sources /
+    monitors — Q15+Q30); the action surface adds ``run`` / ``validate``,
+    and the Q25 creation verbs ``add_source`` / ``add_monitor`` /
+    ``add_mesh``."""
 
     __slots__ = ("_model", "_env", "_name", "_surface")
 
@@ -137,9 +137,9 @@ class _SolverHandle:
 
     def __getattr__(self, name):
         env = self._solver()
-        if name in ("sources", "monitors"):
+        if name in ("sources", "monitors", "meshes"):
             return _ROCollection(getattr(env, name), f"{self._name}.{name}")
-        if name in ("domain", "mesh"):
+        if name == "domain":
             return _ROItem(getattr(env, name), f"{self._name}.{name}")
         return getattr(env, name)
 
@@ -164,8 +164,8 @@ class _SolverHandle:
     def add_monitor(self, name, type):       # noqa: A002
         return self._children().add_monitor(name, type)
 
-    def add_mesh_refine(self, name):
-        return self._children().add_mesh_refine(name)
+    def add_mesh(self, name):
+        return self._children().add_mesh(name)
 
 
 class Genie:
