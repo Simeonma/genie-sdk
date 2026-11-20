@@ -562,23 +562,40 @@ window.__jobProgress = (function () {
     samples.push({ t: now, step: step });
     if (samples.length > 40) samples.shift();
     const pct = Math.min(100, Math.round(step / nTot * 100));
+    /* P1-21 叙述帧（genie-digest/1；optics docs/DIGEST.md）：ETA 优先吃
+     * 内核权威值，样本外推只作旧帧回退；能量比仅在离开注入期（<1）后
+     * 显示——衰减读数 = 「仿真在收敛」。 */
+    const dg = d.digest || null;
+    const comp = (dg && dg.compute) || {};
+    const dEta = Number(comp.eta_s);
     let eta = "";
-    const s0 = samples[0];
-    if (samples.length >= 2 && now - s0.t >= 5) {
-      const rate = (step - s0.step) / (now - s0.t);   /* 步/s（首尾滑窗） */
-      if (rate > 0) {
-        const rem = (nTot - step) / rate;
-        eta = " · 剩 " + (rem >= 90 ? Math.round(rem / 60) + " 分"
-                                    : Math.round(rem) + " s");
-      }
+    if (isFinite(dEta) && dEta >= 0) {
+      eta = dEta >= 90 ? " · 剩 " + Math.round(dEta / 60) + " 分"
+                       : " · 剩 " + Math.round(dEta) + " s";
     } else {
-      eta = " · 测速中…";
+      const s0 = samples[0];
+      if (samples.length >= 2 && now - s0.t >= 5) {
+        const rate = (step - s0.step) / (now - s0.t);   /* 步/s（首尾滑窗） */
+        if (rate > 0) {
+          const rem = (nTot - step) / rate;
+          eta = " · 剩 " + (rem >= 90 ? Math.round(rem / 60) + " 分"
+                                      : Math.round(rem) + " s");
+        }
+      } else {
+        eta = " · 测速中…";
+      }
     }
+    const eR = Number(comp.energy_ratio);
+    const eTxt = (isFinite(eR) && eR > 0 && eR < 1)
+      ? " · E↘ " + (eR < 0.001 ? eR.toExponential(0) : eR.toFixed(2)) : "";
+    const phase = ((dg && dg.job) || {}).phase;
     chip.classList.remove("hidden");
     chip.innerHTML = "";
     const wrap = document.createElement("span");
     wrap.className = "jobprog";
-    wrap.title = "作业 " + (d.job_id || "?") + " 运行中";
+    wrap.title = "作业 " + (d.job_id || "?") + " 运行中"
+      + (phase ? " · " + phase : "")
+      + (d.batch ? " · 批 " + d.batch.finished + "/" + d.batch.total : "");
     const bar = document.createElement("span");
     bar.className = "jobprog-bar";
     const fill = document.createElement("i");
@@ -586,7 +603,7 @@ window.__jobProgress = (function () {
     bar.appendChild(fill);
     const txt = document.createElement("span");
     txt.className = "jobprog-txt";
-    txt.textContent = pct + "% · " + step + "/" + nTot + " 步" + eta;
+    txt.textContent = pct + "% · " + step + "/" + nTot + " 步" + eta + eTxt;
     wrap.appendChild(bar);
     wrap.appendChild(txt);
     /* 进度态 = 作业确实在跑：撤销钮恒在（与 __jobPhase 同序位）。

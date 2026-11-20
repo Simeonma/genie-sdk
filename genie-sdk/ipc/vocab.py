@@ -35,9 +35,11 @@ OUT_KIND_PLOT = "plot"       # data = {mon, field, job_id} (a reference, not the
 OUT_KIND_ERROR = "error"     # red error line; the text is the payload
 # Rollup of the current batch (emitter = the worker/run wait loop,
 # consumer = cards):
-# data = {total, done, failed, jobs: {job_id: {state, progress?}}} —
-# progress is optional (display only, never decides terminal state);
-# a single run is a batch of length 1
+# data = {total, done, failed, jobs: {job_id: {state, progress?,
+#         digest?}}} — progress is optional (display only, never decides
+# terminal state); digest = P1-21 job narration snapshot (genie-digest/1,
+# contract in the optics repo docs/DIGEST.md; statuses carry it, SDK
+# passes it through untouched); a single run is a batch of length 1
 OUT_KIND_PROGRESS = "progress"
 # Result-view structure list (emitter = f.result_meta; consumer = the GUI's
 # result panel / plot builder). Q4.5 public read verbs:

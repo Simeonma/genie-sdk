@@ -104,6 +104,25 @@
       return;
     }
     if (typeof window.__jobProgress === "function") {
+      /* P1-21：单作业在跑且叙述快照带步进 → 喂「仿真步进」级进度（真步
+       * 数、内核权威 ETA、能量比；批进度退居 title）；多作业批/无叙述
+       * = 原批形（finished/total）。契约见 optics 仓 docs/DIGEST.md。 */
+      const running = ids.filter((id) => {
+        const st = (jobs[id] || {}).state;
+        return st !== "done" && st !== "failed" && st !== "killed"
+          && st !== "canceled";
+      });
+      const dg = running.length === 1 && jobs[running[0]]
+        && jobs[running[0]].digest || null;
+      const steps = dg && dg.compute && dg.compute.steps;
+      if (dg && steps && Number(steps.total) > 0) {
+        window.__jobProgress({
+          step: Number(steps.done) || 0, n_steps: Number(steps.total),
+          job_id: running[0], digest: dg,
+          batch: total > 1 ? { finished, total } : null,
+        });
+        return;
+      }
       window.__jobProgress({ step: finished, n_steps: total, job_id: ids[0] || "" });
     }
   }

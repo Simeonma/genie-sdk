@@ -151,6 +151,10 @@ def _progress_row(by_id: dict) -> dict:
         item = {"state": s["state"]}
         if "progress" in s:
             item["progress"] = s["progress"]
+        if "digest" in s:
+            # P1-21：作业叙述快照原样透传（genie-digest/1；契约在 optics
+            # 仓 docs/DIGEST.md）——statuses 带什么过什么，SDK 不解释。
+            item["digest"] = s["digest"]
         jobs[jid] = item
     return ipc.out(f"{done + failed}/{len(by_id)}",
                    kind=ipc.OUT_KIND_PROGRESS,

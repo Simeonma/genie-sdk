@@ -64,12 +64,16 @@ _MON_TYPES = {"time", "freq", "index"}
 
 #: solver-flattened fields: user name → (section, wire field). Q30: the
 #: base grid dx/dy/dz lives on domain; the caps (max_refinement /
-#: min_cells) are deleted from the language.
+#: min_cells) are deleted from the language. Q31: per-axis spacing
+#: tables (mutually exclusive with dx — auto_grid writes them).
 _SOLVER_FIELDS = {
     "x_range": ("domain", "x_range"), "y_range": ("domain", "y_range"),
     "z_range": ("domain", "z_range"), "total_time": ("domain", "total_time"),
     "cfl": ("domain", "cfl"), "boundary": ("domain", "boundary"),
     "dx": ("domain", "dx"), "dy": ("domain", "dy"), "dz": ("domain", "dz"),
+    "x_spacing": ("domain", "x_spacing"),
+    "y_spacing": ("domain", "y_spacing"),
+    "z_spacing": ("domain", "z_spacing"),
 }
 
 #: temporal source/monitor aliases (user name → wire field)
