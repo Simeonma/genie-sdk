@@ -171,12 +171,12 @@ def resolve_parameters_detailed(raw: dict) -> tuple[dict, dict]:
     evaluation result of expression t").
 
     Q17 nested house: the parameters table lives at
-    ``model.parameters``; the solver ``config`` (and every plan stage's
-    ``config``) is a union without a discriminator, so the generic
-    annotation walk cannot pick a member — the wire's own dispatch rule
-    (``_CONFIG_OF[solver]``, omit = fdtd) is applied here first, then
-    the generic walk handles the rest (already-resolved dicts pass
-    through untouched — idempotency anchor holds).
+    ``model.parameters``; the solver ``config`` is a union without a
+    discriminator, so the generic annotation walk cannot pick a member —
+    the wire's own dispatch rule (``_CONFIG_OF[solver]``, omit = fdtd)
+    is applied here first, then the generic walk handles the rest
+    (already-resolved dicts pass through untouched — idempotency
+    anchor holds).
     """
     from genie_protocol._wire import _CONFIG_OF
 
@@ -195,23 +195,13 @@ def resolve_parameters_detailed(raw: dict) -> tuple[dict, dict]:
         out["model"] = model
     else:
         table = {}
-    # config / plan-stage configs: explicit dispatch (no discriminator
-    # on the wire union), expressions resolved in place.
-    if out.get("plan") is None:
-        solver = out.get("solver") or "fdtd"
-        spec = _CONFIG_OF.get(solver)
-        if spec is not None and isinstance(out.get("config"), dict):
-            out["config"] = _resolve_value(spec, out["config"],
-                                           ["config"], table, expr_at)
-    else:
-        for i, st in enumerate(out["plan"]):
-            if not isinstance(st, dict):
-                continue
-            spec = _CONFIG_OF.get(st.get("solver"))
-            if spec is not None and isinstance(st.get("config"), dict):
-                st["config"] = _resolve_value(
-                    spec, st["config"], ["plan", i, "config"],
-                    table, expr_at)
+    # solver config: explicit dispatch (no discriminator on the wire
+    # union), expressions resolved in place.
+    solver = out.get("solver") or "fdtd"
+    spec = _CONFIG_OF.get(solver)
+    if spec is not None and isinstance(out.get("config"), dict):
+        out["config"] = _resolve_value(spec, out["config"],
+                                       ["config"], table, expr_at)
     _resolve_value(SimConfig, out, [], table, expr_at)
     return out, expr_at
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "genie-protocol"
-version = "2.0.1a19"
+version = "2.0.1a20"
 description = "GENIE wire-format protocol layer - SimConfig models, expression evaluator, resolver, estimator (single source shared by SDK client, gateway and compute kernel)"
 requires-python = ">=3.10"
 dependencies = [
@@ -92,6 +92,19 @@ dependencies = [
     #   per-λ serial solve with warm start + overlap branch matching
     #   (sorted_by="branch_cont"); results h5 gains the lam_### sweep
     #   layout (single-λ layout unchanged).
+    # 2.0.1a20 (2026-11-21, REMOVES FIELD — Q32 plan retirement): the
+    #   never-implemented `plan` multi-stage surface is deleted
+    #   (PlanStageSpec + SimConfig.plan + its three b6 invariants). A
+    #   b6-era leftover with zero real payloads in the 725-job history
+    #   (the 11 "plan" hits were all null shells from an old SDK
+    #   serializer); its only envisioned consumer — a mode→fdtd mode
+    #   handoff — is served better by fdtd's in-job mode solving
+    #   (same-grid consistency, no extra interpolation). A payload
+    #   carrying "plan" now 422s as an unknown field (anti-resurrection
+    #   lock in tests/protocol/test_contract.py). `solver` stays the
+    #   sole selection face. (Note: the P1-22 auto-shutoff release
+    #   shipped as 2.0.1a19 — the entry below previously mislabeled it
+    #   a20 and is corrected in the same round.)
     # 2.0.1a19 (2026-11-20, additive — P1-22 auto-shutoff): DomainSpec
     #   gains `auto_shutoff` (float | None): field-energy decay
     #   early-stop threshold — the kernel checks the digest

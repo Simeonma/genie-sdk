@@ -1979,20 +1979,6 @@ class ModeConfigSpec(_StrictModel):
 _CONFIG_OF = {"fdtd": FdtdConfigSpec, "mode": ModeConfigSpec}
 
 
-class PlanStageSpec(_StrictModel):
-    """计划的一级：谁算、叫什么、吃谁的结果、带谁的包络。
-
-    ``id`` **必填**而不给默认值：默认值在多级计划里会立刻撞成"重复 id"，
-    那是只能靠报错学会的坑；单级计划写一个 id 是诚实的成本。
-    ``config`` 的形状按 ``solver`` 分派（认识的求解器全量验证）。
-    """
-
-    solver: str = Field(pattern=_SOLVER_NAME)
-    id: str = Field(pattern=_SOLVER_NAME)
-    consumes: list[str] = Field(default_factory=list)
-    config: Optional[dict] = None
-
-
 class SimConfig(_StrictModel):
     """嵌套户型（Q17，2.0.1a1 断代）：结构一段 + 求解器选择面 + 该
     求解器的包络段 + 顶层 run。b8 及以前的平铺载荷（domain/materials/
@@ -2000,9 +1986,8 @@ class SimConfig(_StrictModel):
 
     model: ModelSpec
     # 求解器选择面：缺省 None = fdtd（声明式缺省，不是兼容垫片——
-    # 包络段 config 仍必填）。两者二选一——同时给就是两个真源。
+    # 包络段 config 仍必填）。
     solver: Optional[str] = Field(default=None, pattern=_SOLVER_NAME)
-    plan: Optional[list[PlanStageSpec]] = None
     # 包络段：dict 进、按 solver 分派验证后物化为对应 Spec 实例
     # （认识谁验谁；未列名求解者原样透传——形状归部署侧能力表）。
     config: Optional[Union[FdtdConfigSpec, ModeConfigSpec, dict]] = None
@@ -2012,39 +1997,6 @@ class SimConfig(_StrictModel):
 
     @model_validator(mode="after")
     def _check(self):
-        # ── 求解器选择面不变式（沿用 b6 三条）────────────────────
-        # ① 两个真源打架。
-        if self.solver is not None and self.plan is not None:
-            raise ValueError(
-                "solver and plan are mutually exclusive — a plan already "
-                "says which solver runs each stage; give one or the other")
-        # ② 空 plan。
-        if self.plan is not None and not self.plan:
-            raise ValueError("plan must have at least one stage (or omit it)")
-        # ③ id 唯一 + consumes 只指前面出现过的 stage：顺序即依赖；
-        #    每级自带 config 并按 solver 分派验证（Q17 拍②）。
-        if self.plan:
-            seen_ids: list[str] = []
-            for st in self.plan:
-                if st.id in seen_ids:
-                    raise ValueError(
-                        f"duplicate plan stage id {st.id!r} — ids are what "
-                        f"consumes references and must be unique")
-                for ref in st.consumes:
-                    if ref not in seen_ids:
-                        raise ValueError(
-                            f"plan stage {st.id!r} consumes {ref!r} which is "
-                            f"not an earlier stage (order is dependency; "
-                            f"self/forward references are not allowed)")
-                seen_ids.append(st.id)
-                if st.config is None:
-                    raise ValueError(
-                        f"plan stage {st.id!r} needs its solver's envelope "
-                        f"under 'config' (Q17: every stage carries its own)")
-                spec = _CONFIG_OF.get(st.solver)
-                if spec is not None:
-                    spec.model_validate(st.config)   # 422 on shape errors
-            return self
         # ── 单求解器路：config 必在、按 solver 分派验证并物化 ────
         solver = self.solver or "fdtd"
         if self.config is None:
