@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "genie-protocol"
-version = "2.0.1a18"
+version = "2.0.1a19"
 description = "GENIE wire-format protocol layer - SimConfig models, expression evaluator, resolver, estimator (single source shared by SDK client, gateway and compute kernel)"
 requires-python = ">=3.10"
 dependencies = [
@@ -92,6 +92,15 @@ dependencies = [
     #   per-λ serial solve with warm start + overlap branch matching
     #   (sorted_by="branch_cont"); results h5 gains the lam_### sweep
     #   layout (single-λ layout unchanged).
+    # 2.0.1a19 (2026-11-20, additive — P1-22 auto-shutoff): DomainSpec
+    #   gains `auto_shutoff` (float | None): field-energy decay
+    #   early-stop threshold — the kernel checks the digest
+    #   energy_ratio (total field energy incl. PML ÷ running peak) at
+    #   every progress tick and finishes gracefully
+    #   (termination="autoshutoff") once it drops below. Payload
+    #   default None = OFF (legacy payloads undisturbed, verbatim
+    #   validation); 0 is the explicit off spelling; (0,1] enables;
+    #   recommended 1e-6. Kernel side = optics P1-22.
     # 2.0.1a18 (2026-11-19, additive — Q31 auto-mesh groundwork, P1-11):
     #   DomainSpec gains per-axis x/y/z_spacing tables (list of
     #   SpacingSegmentSpec: lo/hi/d/growth_rate) — the non-uniform BASE

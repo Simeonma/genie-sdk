@@ -434,7 +434,10 @@ class DomainSpec(_RangeModel):
       必填——段表不跨轴继承，不留"dx 部分生效"的隐晦）。
 
     mesh 段只放带名加密区对象（叠加在基准上的手动层）。auto_grid
-    （SDK 动词，Q31）的产物 = 三张段表。"""
+    （SDK 动词，Q31）的产物 = 三张段表。
+
+    ``auto_shutoff``（P1-22）：场能量比早停阈值，缺省 None = 关
+    （0 同义），推荐 1e-6——判据与终报词见 docs/DIGEST.md 铁律 4。"""
 
     dx: Optional[float] = Field(default=None, gt=0)
     dy: Optional[float] = Field(default=None, gt=0)
@@ -445,6 +448,13 @@ class DomainSpec(_RangeModel):
     total_time: float = Field(gt=0)
     cfl: float = Field(default=0.9, gt=0, le=1)
     boundary: dict[str, BoundarySpec] = Field(default_factory=dict)
+    # P1-22（2.0.1a19，additive）：场能量衰减自动收工阈值——内核在每
+    # 个进度节拍对照 digest 的 energy_ratio（全域含 PML 总场能 ÷ 历史
+    # 峰，docs/DIGEST.md 铁律 4），降到阈值以下即优雅早停（终报
+    # termination="autoshutoff"，steps.done 如实 < steps.total）。
+    # **载荷缺省 None = 关**（旧载荷零扰动）；0 = 显式关；(0,1] 生效。
+    # 推荐值 1e-6（站长拍 2026-11-20）。
+    auto_shutoff: Optional[float] = Field(default=None, ge=0, le=1)
 
     @model_validator(mode="after")
     def _check_faces(self):
