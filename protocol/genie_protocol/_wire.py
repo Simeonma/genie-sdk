@@ -1062,13 +1062,28 @@ class PlaneWaveSpec(_TemporalMixin):
     theta: float = Field(default=0.0, ge=0, le=180)   # degrees
     phi: float = Field(default=0.0, ge=0, lt=360)     # degrees
     psi: float = Field(default=0.0, ge=0, lt=360)     # degrees
-    # The three slots are the global (x,y,z) transverse window; null/<=0
-    # = a non-transverse-window slot; propagation axis = the exactly one
-    # non-positive slot (default z)
+    # The three slots are the global (x,y,z) transverse window; null =
+    # a non-transverse-window slot; propagation axis = the exactly one
+    # null slot (default z). Explicit 0/negative = 422 (a zero-width
+    # transverse window is not a physical object — omit the slot instead;
+    # soft-source/monitor "0 = point" semantics do NOT apply here).
     size: Optional[tuple[Optional[float], Optional[float], Optional[float]]] = None
     propagation_axis: Optional[Literal["x", "y", "z"]] = None
     from_face: Optional[Literal["x_min", "x_max", "y_min", "y_max",
                                 "z_min", "z_max"]] = None
+
+    @field_validator("size", mode="after")
+    @classmethod
+    def _size_positive(cls, v):
+        if v is None:
+            return v
+        bad = [s for s in v if s is not None and not s > 0.0]
+        if bad:
+            raise ValueError(
+                f"plane-wave size slots must be positive lengths or null "
+                f"(the propagation slot takes null); got non-positive "
+                f"values {bad}")
+        return v
 
 
 class GaussianBeamSpec(PlaneWaveSpec):
