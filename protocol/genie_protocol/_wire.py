@@ -1440,6 +1440,10 @@ MonitorSpec = Annotated[
 
 class RunSpec(_StrictModel):
     n_gpu: Optional[Annotated[int, Field(ge=1, le=MAX_GPU_PER_RUN)]] = None  # optional cap
+    #: Q35：build 预演模式——作业在内核 build 后即收（index/格/显存/模解
+    #: neff 报告），不跑时间步。fdtd 专属（mode 无"贵的后半段"可省）；
+    #: solver=mode 带它 = 422（守卫在 SimConfig）。
+    build: bool = False
 
 
 # ── 求解器选择面 ───────────────────────────────────────────────────
@@ -2012,4 +2016,10 @@ class SimConfig(_StrictModel):
             object.__setattr__(self, "config", spec.model_validate(
                 self.config if isinstance(self.config, dict)
                 else self.config.model_dump()))
+        # ── Q35：build 预演是 fdtd 专属（mode 的本征值问题就是全部
+        # 工作，无"贵的后半段"可省）——mode 带它 = 422，唯一守卫点。
+        if self.run.build and solver == "mode":
+            raise ValueError(
+                "run.build is an fdtd-only preview mode — mode's eigen "
+                "solve IS the whole job; submit it as a normal mode job")
         return self
