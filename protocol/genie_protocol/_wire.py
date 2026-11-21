@@ -1307,10 +1307,11 @@ class ModeExpansionSpec(_StrictModel):
                 raise ValueError(
                     f"mode_expansion.boundary: unknown face {face!r} "
                     f"(expected one of: {FACES})")
-            if b.kind == 'bloch':
+            if b.kind == 'bloch' and b.from_source:
                 raise ValueError(
-                    'mode_expansion.boundary: bloch is a source-side knob; '
-                    'the expansion cross-section takes pec/pmc/periodic/pml')
+                    'mode_expansion.boundary: bloch needs an explicit k '
+                    '(3-tuple, SI) — from_source has no source here; the '
+                    'expansion profile is self-contained')
         if self.rotate_axis is not None and self.rotate_axis not in (
                 'x', 'y', 'z'):
             raise ValueError(
