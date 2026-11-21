@@ -1952,9 +1952,10 @@ class ModeConfigSpec(_StrictModel):
                 f"the solve plane contains the propagation axis, so a "
                 f"mode on it carries no flux; got {self.rotate_angle!r}")
 
-        # boundary：键 = 横截面四缘；kind 限 pec/pmc/periodic/pml
-        # （bloch 是 fdtd 的斜入射概念）；n_background 是 fdtd 侧的
-        # 边界背景——mode 的背景在 domain.n_bg（一条事实一个主人）。
+        # boundary：键 = 横截面四缘；kind 限 pec/pmc/periodic/pml/bloch
+        # （bloch 需显式 k——from_source 是 fdtd 的斜入射概念，mode 无源可读）；
+        # n_background 是 fdtd 侧的边界背景——mode 的背景在 domain.n_bg
+        # （一条事实一个主人）。
         edges = {f"{a}_{s}" for a in (t1, t2) for s in ("min", "max")}
         for face, b in self.boundary.items():
             if face not in edges:
@@ -1962,10 +1963,11 @@ class ModeConfigSpec(_StrictModel):
                     f"boundary face {face!r} is not a cross-section edge "
                     f"(expected one of {sorted(edges)}; propagation-axis "
                     f"faces belong to fdtd, not mode)")
-            if b.kind == "bloch":
+            if b.kind == "bloch" and b.from_source:
                 raise ValueError(
-                    f"boundary {face}: kind 'bloch' is not available on "
-                    f"the mode solver (pec/pmc/periodic/pml)")
+                    f"boundary {face}: bloch needs an explicit k (3-tuple, "
+                    f"SI) — from_source is an fdtd-side knob; mode has no "
+                    f"source to read")
             if b.n_background is not None:
                 raise ValueError(
                     f"boundary {face}: n_background is an fdtd knob — "
