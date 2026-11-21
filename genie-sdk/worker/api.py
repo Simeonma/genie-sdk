@@ -773,11 +773,18 @@ class Surface:
         self._fit_pending()
         return self._run_solver("fdtd", n_gpu=n_gpu)
 
-    def _run_solver(self, solver, *, n_gpu=None):
+    def build_fdtd(self, *, n_gpu=None):
+        """Q35 build 预演：run.build=true 提交，内核 build 后即收——
+        格/dt/步数、实测显存、index 监视器、mode 源 neff 一份报告，
+        不跑时间步（计费 run_s=0）。fdtd 专属（mode 无贵的后半段）。"""
+        self._fit_pending()
+        return self._run_solver("fdtd", n_gpu=n_gpu, build=True)
+
+    def _run_solver(self, solver, *, n_gpu=None, build=False):
         env = self._env
         cfg = self._model.to_config(solver)
         chain._validate([cfg])
-        jid = chain.submit(env, self._model, cfg, n_gpu=n_gpu)
+        jid = chain.submit(env, self._model, cfg, n_gpu=n_gpu, build=build)
         env.emit(ipc.out(ROW_SUBMIT_ONE.format(id=jid)))
         staged = chain.stage(env, self._model, [jid])
         staged_digest = digest(staged)
@@ -788,7 +795,8 @@ class Surface:
                                   env.client().stream_result(jid),
                                   chain.state_for(staged, self._model.last_id,
                                                   [], staged_digest))
-            post.run_post(env, jid)
+            if not build:                       # 预演无物理结果，post 链不跑
+                post.run_post(env, jid)
             return jid
         if outcome["state"] == "failed":
             env.emit(ipc.out(ROW_FAILED.format(

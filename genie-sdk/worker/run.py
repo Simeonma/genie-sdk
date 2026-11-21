@@ -562,6 +562,10 @@ class Genie:
     def run_fdtd(self, *, n_gpu=None):
         return self._surface.run_fdtd(n_gpu=n_gpu)
 
+    def build_fdtd(self, *, n_gpu=None):
+        """Q35 build 预演（与 run_fdtd 成对；fdtd 专属）。"""
+        return self._surface.build_fdtd(n_gpu=n_gpu)
+
     def run_mode(self, *, n_gpu=None):
         return self._surface.run_mode(n_gpu=n_gpu)
 

@@ -83,14 +83,18 @@ def _resolve(cfgs):
     return [resolve_parameters(cfg) for cfg in cfgs]
 
 
-def _payload(cfgs, n_gpu):
+def _payload(cfgs, n_gpu, build=False):
     """Action parameters go only into the submit payload, never written back
-    to the model (the parameter set maps one-to-one onto RunSpec fields,
-    currently just n_gpu)."""
-    if n_gpu is None:
+    to the model (the parameter set maps one-to-one onto RunSpec fields:
+    n_gpu via run_fdtd, build via build_fdtd — Q35)."""
+    run = {}
+    if n_gpu is not None:
+        run["n_gpu"] = n_gpu
+    if build:
+        run["build"] = True
+    if not run:
         return cfgs
-    return [{**c, "run": {**(c.get("run") or {}), "n_gpu": n_gpu}}
-            for c in cfgs]
+    return [{**c, "run": {**(c.get("run") or {}), **run}} for c in cfgs]
 
 
 def state_for(cfg: dict, allocator, inflight, staged_digest=None) -> dict:
@@ -126,7 +130,7 @@ def stage(env, model, ids, *, doc=None, cfg=None) -> str:
     return cfg
 
 
-def submit(env, model, cfg_or_cfgs=None, *, n_gpu=None):
+def submit(env, model, cfg_or_cfgs=None, *, n_gpu=None, build=False):
     """Submit and return handles immediately (no staging, no waiting, zero
     terminal text; single = batch of 1, same shape as the public surface).
     Staging is main-document semantics; point documents are the driver's
@@ -134,7 +138,7 @@ def submit(env, model, cfg_or_cfgs=None, *, n_gpu=None):
     single, cfgs = _normalize(model, cfg_or_cfgs)
     _validate(cfgs)
     cfgs = _resolve(cfgs)                                # expression slots → numbers (Q13)
-    ids = env.client().submit(_payload(cfgs, n_gpu))  # always batch form
+    ids = env.client().submit(_payload(cfgs, n_gpu, build))  # always batch form
     if not isinstance(ids, list):
         ids = [ids]
     env.inflight.update(ids)
