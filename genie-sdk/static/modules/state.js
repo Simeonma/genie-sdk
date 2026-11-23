@@ -1,3 +1,7 @@
+import { FormPanel } from "../views/form.js";
+import { GEO_TYPE_LABEL, previewEl } from "../views/previews.js";
+import { buildToolbar } from "./toolbar.js";
+import { renderTree } from "./tree.js";
 /* modules/state.js — 共享状态与通用 UI（cfg/displayCfg/选中态/场景柄/toast）+ 树元数据
  * G5 拆分（2026-10-14）：自 app.js 机械切出，零行为变化；
  * 经典 script 按序加载，跨模块引用为运行期全局查找。 */
@@ -17,20 +21,17 @@
 "use strict";
 
 
-/* 树标签命名公约（2026-10-21 用户定案）：「一行只一个词」。
- * 旧版每条都写成「English 中文」（Domain 域 / Materials 材料 / 场景内容…），
- * 单行信息量翻倍、树看起来啰嗦——现在结构词一律用脚本 API 的英文单名，
- * 中文留给检查器的字段标签与说明。 */
-const TREE_META = {
+export const TREE_META = {
   domain: ["domain", "Domain"], mesh: ["mesh", "Mesh"],
   materials: ["materials", "Materials"], geometry: ["geometry", "Structures"],
   structure: ["structure", "Structure"], source: ["source", "Sources"],
   monitor: ["monitor", "Monitors"],
+  analysis: ["analysis", "Analysis"],
   run: ["run", "Settings"],
   sweep: ["sweep", "Sweep"],
   params: ["params", "Parameters"],
 };
-function treePreviewKey(kind, i) {
+export function treePreviewKey(kind, i) {
   const it = (cfg && cfg[kind]) ? cfg[kind][i] : null;
   const t = it && it.type;
   if (kind === "materials")
@@ -41,24 +42,38 @@ function treePreviewKey(kind, i) {
   if (kind === "source") return t || "soft_source";
   return t || "box";
 }
-function treePreviewIcon(ic, kind, i) {
+export function treePreviewIcon(ic, kind, i) {
   ic.classList.add("tree-pv");
   ic.appendChild(previewEl(treePreviewKey(kind, i)));
 }
 
 /* ── 状态（模型每次预览整体替换；无写门） ───────────────────── */
-let cfg = null;                        // preview 模型（只读消费；v1 组件吃这个形状）
-let displayCfg = null;                 // 3D 显示副本（resolved：表达式槽已解析；缺则回退 cfg）
-let treeSel = { kind: "domain", i: null };
-let inspectorSel = { kind: "domain", i: null };
-let treeGroupOpen = {};
-let scene = null;
+export let cfg = null;                        // preview 模型（只读消费；v1 组件吃这个形状）
+export let displayCfg = null;                 // 3D 显示副本（resolved：表达式槽已解析；缺则回退 cfg）
+export let treeSel = { kind: "domain", i: null };
+export let inspectorSel = { kind: "domain", i: null };
+export let treeGroupOpen = {};
+export let scene = null;
+
+/* 2026-11-22 ESM：模块导出绑定只读——写入口收敛成 setter（写的人只有一个） */
+export function setCfg(v) { cfg = v; }
+export function setDisplayCfg(v) { displayCfg = v; }
+export function setTreeSel(v) { treeSel = v; }
+export function setInspectorSel(v) { inspectorSel = v; }
+export function setScene(v) { scene = v; }
+
+/* 文档未保存标记（2026-11-22 File 面）：任何模型改动置 true，保存/打开/新建
+ * 置 false；变化广播给 FILE 面（单一写入口 + 单一订阅者）。 */
+export let docDirty = false;
+export function setDocDirty(v) {
+  const next = !!v;
+  if (next === docDirty) return;
+  docDirty = next;
+  window.dispatchEvent(new CustomEvent("genie-doc-dirty", { detail: next }));
+}
 
 
-/* 轻提示（2026-10-21 重刻）：白卡 + 状态点 + 发丝边 + shadow-2，走 CSS 类
- * （不再用内联样式写死 #1f6feb / GitHub 色）。状态点承担"什么级别"，
- * 卡片本身保持中性——一排提示同时出现时不会变成彩条墙。 */
-function toast(msg, kind = "info") {
+export function toast(msg, kind = "info") {
   let host = document.getElementById("v2-toasts");
   if (!host) {
     host = document.createElement("div");
@@ -84,3 +99,9 @@ function toast(msg, kind = "info") {
     window.setTimeout(() => el.remove(), 200);
   }, k === "err" ? 6000 : 3500);
 }
+
+/* 模型快照的只读副本（GUI 各面读它，不持可编辑副本） */
+export function getCfg() { return structuredClone(cfg); }
+
+/* 扫参运行态（app.runSweep 写、boot 的进度回调读） */
+export const sweepRun = { name: "", total: 0 };

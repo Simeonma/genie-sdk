@@ -52,6 +52,8 @@ WHITELIST = [
     ("GET", re.compile(r"^/whoami$")),
     ("POST", re.compile(r"^/api/auth/.+$")),
     ("GET", re.compile(r"^/api/health$")),
+    # 用量/配额（2026-11-22：Studio Account 框接上；网站 /account/ 同源）
+    ("GET", re.compile(r"^/api/usage$")),
 ]
 
 

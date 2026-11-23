@@ -1,13 +1,24 @@
+import { $ } from "./util.js";
+import { submitField } from "./edit.js";
+import { FormPanel } from "../views/form.js";
+import { previewEl } from "../views/previews.js";
+import { addMonitorPlotCta, resultMode } from "./result.js";
+import { initScene } from "./scene.js";
+import { cfg, displayCfg, inspectorSel, scene, setInspectorSel, setTreeSel, toast } from "./state.js";
+import { renderSweepPane } from "./sweep.js";
+import { renderTree } from "./tree.js";
 /* modules/inspector.js — 检查器（FormPanel 只读驱动 + 参数面板 + 选中路由）
  * G5 拆分（2026-10-14）：自 app.js 机械切出，零行为变化；
  * 经典 script 按序加载，跨模块引用为运行期全局查找。 */
-function renderInspector() {
+export function renderInspector() {
   let k = inspectorSel.kind, i = inspectorSel.i;
   if (k === "params") { renderParamsPane(); return; }
   /* G182 P6：扫参页（参数页底部入口进来；不是模型节点，故不进树选择） */
   if (k === "sweep") { renderSweepPane(); return; }
+  /* 后处理配方（Q11）：模型级具名对象——编辑代码/调用行 + 跑一条 */
+  if (k === "analysis") { renderAnalysisPane(i); return; }
   if (i != null && !((cfg[k] || [])[i])) i = null;
-  inspectorSel = { kind: k, i };
+  setInspectorSel({ kind: k, i });
   if (!cfg) {
     const c = $("config-content");
     c.textContent = "";
@@ -39,34 +50,26 @@ function renderInspector() {
       /* 结果标签卡入口（监视器专属）——仅结果态渲染（2026-10-14
        * 站长裁决：编辑态 monitor 不携带数据、不提供新建 Plot；
        * 已画的 Plot 标签卡跨模式保留）。 */
-      if (window.__resultMode) addMonitorPlotCta(i);
+      if (resultMode) addMonitorPlotCta(i);
   }
 }
 
-/* 参数页（G60① R24c 收口：可编辑表）——加/删/改值走 M3b 同一通道：
- * 直接改本地 cfg.parameters → onFormMutate → diff 出 patch 增量
- * （改名 = 删后重建；非法名前端即拒，与协议校验同一正则口径）。
- *
- * 单位（2026-10-30 站长两次定稿）：**值里直接写单位**——`0.5[um]`，也接受
- * `0.5um` / `0.5 um`（落 cfg 统一成协议串 `0.5[um]`）；第三列是**只读
- * SI 显示**（本地立刻换算，不等服务端回声）——"0.5 µm 到底是几米"一眼可见。
- * 表达式（`d/4`）原样存字符串，SI 列回落到 resolved 快照，取不到显示 —。 */
-const PARAM_NUM_RE = /^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/;
+export const PARAM_NUM_RE = /^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?$/;
 /* 单位 SI 尺度（与协议 ``genie_protocol.expr._UNITS`` 的长度/时间/频率
  * 三族对齐）。GUI 要**立刻**给出 "0.5 µm = 5e-7"，不能等 resolved 回声
- * （表单改动后 displayCfg 是 raw 副本，见 edit.js onFormMutate）。 */
-const PARAM_UNIT_SCALE = {
+ * （displayCfg 是快照里的 resolved 副本）。 */
+export const PARAM_UNIT_SCALE = {
   m: 1, mm: 1e-3, um: 1e-6, nm: 1e-9, pm: 1e-12,
   s: 1, ms: 1e-3, us: 1e-6, ns: 1e-9, ps: 1e-12, fs: 1e-15,
   Hz: 1, kHz: 1e3, MHz: 1e6, GHz: 1e9, THz: 1e12, PHz: 1e15,
 };
 /* 带单位的值：数字 + （[unit] | unit），如 0.5[um] / 0.5um / 0.5 um。 */
-const PARAM_UNIT_SUFFIX_RE =
+export const PARAM_UNIT_SUFFIX_RE =
   /^([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*(?:\[\s*([A-Za-z\u00b5\u03bc]+)\s*\]|([A-Za-z\u00b5\u03bc]+))$/;
 
 /* 值文本 → {val: 要存进 cfg 的值, si: 本地可算的 SI 值}；
  * 表达式返回 {val} 无 si（SI 列由 resolved 快照补）；坏单位返回 {err}。 */
-function _parseParamInput(text) {
+export function _parseParamInput(text) {
   const t = String(text).trim();
   if (t === "") return { err: "值不能为空" };
   const m = t.match(PARAM_UNIT_SUFFIX_RE);
@@ -84,7 +87,7 @@ function _parseParamInput(text) {
   return { val: t };                    /* 表达式：单位写进字面量 */
 }
 
-function renderParamsPane() {
+export function renderParamsPane() {
   const c = $("config-content");
   if (!cfg) return;
   c.textContent = "";
@@ -100,12 +103,6 @@ function renderParamsPane() {
   const params = cfg.parameters;
   const keys = Object.keys(params);
 
-  const mutate = (fn, okMsg) => {
-    fn();
-    onFormMutate();
-    renderInspector();               /* 离散动作后重建行集 */
-    if (okMsg) toast(okMsg, "ok");
-  };
   const resolvedOf = (k) => {
     try {
       if (typeof displayCfg !== "undefined" && displayCfg
@@ -154,7 +151,7 @@ function renderParamsPane() {
         si.textContent = fmtSi(parsedSi());
         return;
       }
-      mutate(() => { params[k] = p.val; });
+      submitField("parameters." + k, p.val);
     });
     row.appendChild(v);
     row.appendChild(si);
@@ -164,14 +161,9 @@ function renderParamsPane() {
     del.textContent = "✕";
     del.title = "删除参数 " + k;
     del.addEventListener("click", () => {
-      /* v2 连线层：参数删除 = genie.parameters.pop(k)（薄意图 op=param/remove）。 */
-      GenieApp.formIntents([{ path: "parameters." + k, value: null }])
-        .then(() => {
-          delete params[k];
-          renderInspector();
-          toast("参数 " + k + " 已删除", "ok");
-        })
-        .catch((e) => toast("删除失败：" + (e && e.message ? e.message : e), "err"));
+      /* 纯投影：删除 = 一条 param/remove 意图（界面等快照回显）。 */
+      submitField("parameters." + k, null);
+      toast("已提交删除参数 " + k, "ok");
     });
     row.appendChild(del);
     body.appendChild(row);
@@ -223,10 +215,80 @@ function renderParamsPane() {
   body.appendChild(add);
 }
 
-function selectObj(kind, i) {
-  treeSel = i == null ? { kind } : { kind, i: +i };
+/* 后处理配方面板（Q11）：代码正本在档，编辑即写档（set_named script），
+ * 运行 = run_analysis（只读消费结果：白名单只许读动词，不碰模型）。 */
+export function renderAnalysisPane(i) {
+  const c = $("config-content");
+  const rec = (cfg && cfg.analysis || [])[i];
+  if (!c) return;
+  c.textContent = "";
+  if (!rec) return;
+  const body = document.createElement("div");
+  body.className = "pane-body";
+
+  const head = document.createElement("div");
+  head.className = "sec-head";
+  head.textContent = "Analysis · " + rec.name;
+  body.appendChild(head);
+  const hint = document.createElement("div");
+  hint.className = "pane-empty";
+  hint.textContent = "只读消费已有监视器结果（白名单动词）；不创建模型对象，"
+    + "不属于任何求解器。代码正本随档保存。";
+  body.appendChild(hint);
+
+  const code = document.createElement("textarea");
+  code.className = "analysis-code";
+  code.value = rec.script || "";
+  code.rows = 14;
+  code.spellcheck = false;
+  code.title = "配方代码（def 函数集；用 d / results() / get_freq 等读结果）";
+  body.appendChild(code);
+
+  const callRow = document.createElement("div");
+  callRow.className = "frow";
+  const callLabel = document.createElement("span");
+  callLabel.className = "flabel";
+  callLabel.textContent = "调用行";
+  const call = document.createElement("input");
+  call.className = "param-value";
+  call.value = rec.call || "";
+  call.placeholder = "如 calc_q(a=1e-6)；省略则运行时再给";
+  callRow.appendChild(callLabel);
+  callRow.appendChild(call);
+  body.appendChild(callRow);
+
+  const btns = document.createElement("div");
+  btns.className = "frow";
+  const save = document.createElement("button");
+  save.className = "mini";
+  save.textContent = "保存";
+  save.title = "把代码/调用行写进档（genie.set_named('analysis.<名>', …)）";
+  save.addEventListener("click", () => {
+    let cmd = "genie.set_named(" + JSON.stringify("analysis." + rec.name)
+      + ", script=" + JSON.stringify(code.value);
+    if (call.value.trim()) cmd += ", call=" + JSON.stringify(call.value.trim());
+    cmd += ")";
+    exec(cmd, { echo: false })
+      .then(() => toast("配方已保存到档", "ok"))
+      .catch((e) => toast("保存失败：" + (e && e.message ? e.message : e), "err"));
+  });
+  const run = document.createElement("button");
+  run.className = "mini";
+  run.textContent = "运行";
+  run.title = "跑这条配方（genie.run_analysis('<名>')）";
+  run.addEventListener("click", () => {
+    exec("genie.run_analysis(" + JSON.stringify(rec.name) + ")",
+                  { echo: true }).catch(() => {});
+  });
+  btns.appendChild(save);
+  btns.appendChild(run);
+  body.appendChild(btns);
+  c.appendChild(body);
+}
+
+export function selectObj(kind, i) {  setTreeSel(i == null ? { kind } : { kind, i: +i });
   renderTree();
-  inspectorSel = { kind, i: i == null ? null : +i };
+  setInspectorSel({ kind, i: i == null ? null : +i });
   renderInspector();
   /* 3D 联动高亮（2026-10-21 用户需求）：选中什么，3D 里就圈出什么。
    * 组/单例面板（domain/mesh/run/params）没有 3D 对象 → 清掉高亮。 */

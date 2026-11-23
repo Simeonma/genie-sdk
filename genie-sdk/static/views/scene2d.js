@@ -1,3 +1,7 @@
+import { updateScene } from "../modules/scene.js";
+import { Scene3D, matColor } from "./scene3d.js";
+import { SCENE_PALETTE } from "./scene_palette.js";
+import { cfg, scene } from "../modules/state.js";
 /* Genie FDTD service — 3D 预览的 Canvas 2D 等距投影降级（Phase B2，2026-08-30）
  *
  * 当浏览器 WebGL 不可用（硬件加速关闭/显卡黑名单/远程桌面）时，
@@ -11,7 +15,7 @@
  */
 "use strict";
 
-class Scene2D {
+export class Scene2D {
   constructor(containerId) {
     this.container = document.getElementById(containerId);
     this.showPml = true; this.showGrid = false; this.showWireframe = true;
@@ -84,8 +88,6 @@ class Scene2D {
             this._cy + (xr + zr) * 0.5 * this._scale - p[1] * this._scale];
   }
 
-  /* 色板 hex 数值 → CSS 字符串（画布色单源 scene_palette.js，P2-6；
-   * 本文件不再写字面色值） */
   _cssHex(hex) { return "#" + hex.toString(16).padStart(6, "0"); }
   _cssRgba(hex, a) {
     return "rgba(" + ((hex >> 16) & 255) + "," + ((hex >> 8) & 255)

@@ -187,8 +187,14 @@ def run_verb(env, model, name) -> "WorkerSweep":
              "axes": [[k, len(v)] for k, v in d["parameters"].items()],
              "jobs": []}
     for i, (cfg, jid) in enumerate(zip(cfgs, jids), start=1):
+        # Q38: point documents are slot-shaped (openable like the main
+        # document); the point's payload config rides as the single slot.
+        kind = cfg.get("solver") or "fdtd"
+        doc_cfg = {"model": cfg.get("model") or {},
+                   "solvers": [{"name": kind, "kind": kind,
+                                "config": cfg.get("config") or {}}]}
         chain.stage(env, model, [jid], doc=str(folder / doc_name(i)),
-                    cfg=cfg)
+                    cfg=doc_cfg)
     write_index(folder, index)
 
     abort_error = None

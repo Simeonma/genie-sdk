@@ -65,6 +65,21 @@ class ExecContext:
         from genie.net import Client
         return Client(self.gw_base_url, worker_token=self.worker_token)
 
+    def gui_snapshot(self) -> dict:
+        """The cfg event's model snapshot: the wire payload **plus** the
+        model-level declarations the GUI tree must show — ``solvers:
+        [{name, kind}]`` and ``analysis: [{name, script, call}]`` (Q11
+        recipes; the inspector edits the source text in place). GUI-only
+        keys; the submit payload never carries them."""
+        snap = self.model.to_config()
+        snap["solvers"] = self.model.solver_list()
+        snap["analysis"] = [
+            {"name": n,
+             "script": (rec or {}).get("code") or "",
+             "call": (rec or {}).get("script") or None}
+            for n, rec in getattr(self, "post_recipes", {}).items()]
+        return snap
+
     # -- exec (the execution plane, the only write channel)------------------------------------
 
     def exec_op(self, op: dict) -> None:
@@ -72,7 +87,7 @@ class ExecContext:
         ok, err = self._run(op["code"], op.get("fresh", False),
                             op.get("echo", True))
         # unconditional cfg snapshot: emitted even on failure (the current live model)
-        self.emit(ipc.cfg(self.model.to_config()))
+        self.emit(ipc.cfg(self.gui_snapshot()))
         self.emit(ipc.done(op["id"], ok, err))
 
     def _run(self, code: str, fresh: bool, echo: bool):

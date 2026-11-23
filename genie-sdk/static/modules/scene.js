@@ -1,9 +1,14 @@
+import { $ } from "./util.js";
+import { FormPanel } from "../views/form.js";
+import { Scene2D } from "../views/scene2d.js";
+import { Scene3D } from "../views/scene3d.js";
+import { cfg, displayCfg, scene, setScene, toast } from "./state.js";
 /* modules/scene.js — 3D 场景（WebGL→2D 降级 + 显示工具钮 + 渲染循环）
  * G5 拆分（2026-10-14）：自 app.js 机械切出，零行为变化；
  * 经典 script 按序加载，跨模块引用为运行期全局查找。 */
-function initScene() {
+export function initScene() {
   try {
-    scene = new Scene3D("three-container");
+    setScene(new Scene3D("three-container"));
     scene.init();
   } catch (e1) {
     console.warn("WebGL 不可用，降级 Canvas 2D 等距投影:", e1);
@@ -12,9 +17,9 @@ function initScene() {
       scene.renderer.domElement.parentNode.removeChild(scene.renderer.domElement);
     try { if (scene && scene.renderer && scene.renderer.dispose) scene.renderer.dispose(); }
     catch { /* 清场尽力而为 */ }
-    scene = null;
+    setScene(null);
     try {
-      scene = new Scene2D("three-container");
+      setScene(new Scene2D("three-container"));
       scene.init();
     } catch (e2) {
       console.error("Scene2D init failed:", e2);
@@ -26,8 +31,6 @@ function initScene() {
       return;
     }
   }
-  /* 显示类工具钮（纯视图开关——显示模式允许接线的类别）。
-   * 2026-10-21：PML 吸收壳改为常显，按钮退役；新增「边框坐标」与「X 光」。 */
   $("btn-fitcam").addEventListener("click", () => scene.resetCamera());
   const rulerBtn = $("btn-ruler");
   if (rulerBtn) rulerBtn.addEventListener("click", (e) => {
@@ -92,7 +95,6 @@ function initScene() {
   });
   /* 结构着色：实体 → 实体+棱线 → 纯线框（三态循环） */
   const wireBtn = $("btn-wire");
-  const WIRE_SEQ = ["edges", "wire", "solid"];
   const WIRE_LABEL = { solid: "实体", edges: "实体 + 线框", wire: "纯线框" };
   const syncWireBtn = () => {
     if (!wireBtn) return;
@@ -127,12 +129,6 @@ function initScene() {
     scene.setWireframeMode(next);
     syncWireBtn();
   });
-  const lbl = $("btn-labels");
-  if (lbl) lbl.addEventListener("click", (e) => {
-    scene.setLabels(!scene.showLabels);
-    e.currentTarget.classList.toggle("active", scene.showLabels);
-    e.currentTarget.setAttribute("aria-pressed", String(scene.showLabels));
-  });
   /* btn-shot：3D 画布导出 PNG（对称批接线）。 */
   const shotBtn = $("btn-shot");
   if (shotBtn) shotBtn.addEventListener("click", () => {
@@ -144,15 +140,7 @@ function initScene() {
     a.click();
     toast("已导出 3D 截图", "ok");
   });
-  /* results 工具钮已随抽屉退役（2026-10-10 站长裁决：结果=标签卡+信息条，
-   * 历史查看是文件管理的事）。 */
 
-  /* ── G39 能力表闸门（2026-10-21）──
-   * 2D 降级（WebGL 不可用）只画等距投影，坐标尺/线框三态/X 光/剖面/透视/
-   * 选中高亮都没有实现。以前按钮照样能点、点了没反应；现在按
-   * `scene.capabilities` 置灰并写明原因——"不可用"要看得见。
-   * （G41 2026-10-30：优先级着色按钮随存在权裁决删除——每个几何体本来
-   *   就有材料色，叠一层色阶是多余的认知负担。） */
   const cap = scene.capabilities || {};
   const gate = (id, ok, why) => {
     const b = $(id);
@@ -174,7 +162,7 @@ function initScene() {
   syncWireBtn();
 }
 
-function updateScene() {
+export function updateScene() {
   if (!scene) return;
   try { scene.updateScene(displayCfg || cfg || { domain: {}, mesh: {} }); } catch { /* 渲染失败不拦主流程 */ }
   renderRibbonMeta();
@@ -184,7 +172,7 @@ function updateScene() {
  * 域尺寸（µm）/ 对象数 / 材料数。纯显示，不接任何交互（pointer-events:none）。
  * 挂在 updateScene 上：脚本预览与表单改动都汇聚到这里，读数恒新。
  * 渲染纪律：逐节点拼装（零 innerHTML）。 */
-function renderRibbonMeta() {
+export function renderRibbonMeta() {
   const el = $("ribbon-meta");
   if (!el) return;
   if (!cfg) { el.replaceChildren(); return; }
@@ -227,8 +215,8 @@ function renderRibbonMeta() {
 /* 轻提示（右下角，自动消失）——Run/Agent/工具条操作反馈 */
 
 
-let _lastT = 0, fpsEMA = 0, fpsAccum = 0;
-function animate(t) {
+export let _lastT = 0, fpsEMA = 0, fpsAccum = 0;
+export function animate(t) {
   if (scene) {
     scene.render();
     const dt = t - _lastT;

@@ -1,23 +1,19 @@
+import { Dock } from "./dock.js";
+import { FormPanel } from "../views/form.js";
+import { renderInspector } from "./inspector.js";
+import { cfg, toast } from "./state.js";
+import { runBtnRefresh } from "./toolbar.js";
 /* modules/result.js — 结果模式 + 结果标签卡（Plot 多卡 + 折线图 + 结果卡）
  * G5 拆分（2026-10-14）：自 app.js 机械切出，零行为变化；
  * 经典 script 按序加载，跨模块引用为运行期全局查找。 */
-/* ── 结果模式（results-surface P2/P3；2026-10-09 站长裁决正名）────
- * Run → 作业终态 → 落在「结果模式」（看结果，非 layout——layout 指
- * 可编辑态）：输入件（input/select/textarea）禁用 + 工具栏四个加对象
- * 组（Material/Geometry/Source/Monitor）禁用；Simulate(=Switch to
- * setting)/Agent/左树/中间栏面板本体照常。按钮语义：结果态显示
- * Switch to setting（点了回编辑），编辑态显示 Run（点了开跑）。
- * 左树监视器右键 → 该监视器曲线（宿主 latest.h5 降采样 JSON，
- * /api/result/meta + /api/result/series——G13②：结果 = 模型状态，从
- * worker 工作区读；host 私藏管道已退役）。徽标点击 = 同 Switch to setting。*/
-window.__resultMode = false;
+export let resultMode = false;
 
 /* 结果态锁：输入件 disabled 防键盘 + 工具栏加对象按钮 disabled；
  * CSS(body.result-mode) 补 pointer-events+视觉降权；MutationObserver
  * 兜表单重渲染（树上点对象→FormPanel 重建→新输入件再上锁） */
-let __resultLockMO = null;
-const __RESULT_LOCK_TB = ["tb-mat-btns", "tb-geo-btns", "tb-src-btns", "tb-mon-btns"];
-function __lockConfigInputs() {
+export let __resultLockMO = null;
+export const __RESULT_LOCK_TB = ["tb-mat-btns", "tb-geo-btns", "tb-src-btns", "tb-mon-btns"];
+export function __lockConfigInputs() {
   const c = document.getElementById("config-content");
   if (c) {
     /* 扫参面（参数页底部的入口 + 扫参页本身）是**只读模型上的新动作**：
@@ -41,14 +37,14 @@ function __lockConfigInputs() {
     if (g) g.querySelectorAll("button").forEach(b => { b.disabled = true; });
   }
 }
-function __startResultLock() {
+export function __startResultLock() {
   __lockConfigInputs();
   const c = document.getElementById("config-content");
   if (!c || __resultLockMO) return;
   __resultLockMO = new MutationObserver(__lockConfigInputs);
   __resultLockMO.observe(c, { childList: true, subtree: true });
 }
-function __stopResultLock() {
+export function __stopResultLock() {
   if (__resultLockMO) { __resultLockMO.disconnect(); __resultLockMO = null; }
   renderInspector();   // 重建当前表单 → 恢复各控件的本来 disabled 逻辑
   for (const id of __RESULT_LOCK_TB) {
@@ -57,10 +53,10 @@ function __stopResultLock() {
   }
 }
 
-function enterResult(silent = false) {
-  if (window.__resultMode) return;   /* 已在结果态：刷新 chip 即可，勿重弹 */
+export function enterResult(silent = false) {
+  if (resultMode) return;   /* 已在结果态：刷新 chip 即可，勿重弹 */
   document.body.classList.add("result-mode");
-  window.__resultMode = true;
+  resultMode = true;
   renderInspector();        /* CTA 仅结果态（2026-10-14）——重渲染现身 */
   __startResultLock();
   runBtnRefresh();          /* 模式状态由按钮文案(Switch to setting⇄Run)
@@ -70,46 +66,43 @@ function enterResult(silent = false) {
     toast("已切结果模式——树选监视器 → 检查器「新建 Plot」；Switch to setting 回编辑", "ok");
 }
 
-function exitResult() {
+export function exitResult() {
   document.body.classList.remove("result-mode");
-  window.__resultMode = false;
+  resultMode = false;
   __stopResultLock();
   runBtnRefresh();
   toast("已回编辑模式——点 Run 开始新仿真（Plot 标签常驻可看）", "ok");
 }
 
-/* ── Visualize 模块页签（2026-10 站长裁决：Plot 升格为与 3D/文件同级
- * 的面板）────────────────────────────────────────────────────
- * 页签条只管 Plot（每个 Plot 一签，可关）；3D Scene 不再是页签——
- * 场景区回归纯 3D，dock 层负责模块切换。右端 chip = 作业摘要/流水进度。
- * 建 Plot：左树选中监视器 → 检查器「新建 Plot」→ Dock.activatePanel
- * 顶起 Visualize。Plot 规格常驻（编辑模式也显示）；本期固定格式
- * （峰值格点 |场| 曲线，数据 = /api/result/series 降采样）。 */
-window.__plots = [];        /* [{id, name, mon, field}] */
-window.__lastJobId = "";    /* 最近完成的作业（job-done 事件维护）*/
-window.__plotSeq = 0;
-window.__activeTab = null;
+export let resultStatus = null;
+export let lastJobId = "";
+export function setResultStatus(v) { resultStatus = v; }
+export function setLastJobId(v) { lastJobId = v; }
+export let plots = [];      /* [{id, name, mon, field}] */
+lastJobId = "";    /* 最近完成的作业（job-done 事件维护）*/
+export let plotSeq = 0;
+export let activeTab = null;
 
-function plotDefaultField(mon) {
-  const st = window.__resultStatus;
+export function plotDefaultField(mon) {
+  const st = resultStatus;
   const m = st && st.ok && (st.monitors || []).find(x => x.name === mon);
   return (m && m.fields && m.fields[0]) || "Ex";
 }
 
-async function pickDefaultField(mon, job) {
+export async function pickDefaultField(mon, job) {
   /* G148 产品走查修正（R24c）：字母序首字段可能是正交偏振的**零场**
    * （实测：y 偏振源下 Ex 全零，缺省 Plot 成 0..1 平线——站长截图质询）。
    * 缺省场 = 各场峰值最大者（每场一条 32 点探测曲线，本地零成本）；
    * 探测失败回退字母序首。 */
   try {
-    const st = window.__resultStatus;
+    const st = resultStatus;
     const m = st && st.ok && (st.monitors || []).find(x => x.name === mon);
     const fields = (m && m.fields) || [];
     if (fields.length <= 1) return fields[0] || "Ex";
     let best = null, bestPeak = -1;
     for (const fld of fields) {
       /* v2 连线：genie.visualize(...) 的 series 事件带 peak（全量数组，不降采样） */
-      const d = await GenieApp.resultSeries({ mon, field: fld }).catch(() => null);
+      const d = await resultSeries({ mon, field: fld }).catch(() => null);
       const pk = d && d.ok ? Number(d.peak || 0) : -1;
       if (pk > bestPeak) { bestPeak = pk; best = fld; }
     }
@@ -117,7 +110,7 @@ async function pickDefaultField(mon, job) {
   } catch { return plotDefaultField(mon); }
 }
 
-function addMonitorPlotCta(i) {
+export function addMonitorPlotCta(i) {
   const m = ((cfg && cfg.monitor) || [])[i];
   if (!m || !m.name) return;
   const c = document.getElementById("config-content");
@@ -134,29 +127,27 @@ function addMonitorPlotCta(i) {
   hint.textContent = "…";
   bar.appendChild(b); bar.appendChild(hint);
   c.appendChild(bar);
-  /* 数据态提示：Plot 画的是最近一次 Run 的 latest.h5——新加的监视器
-   * 必须重新 Run 才有数据（2026-10-10 站长实测困惑点，标出来） */
   const ready = (st) => {
     const hit = st && st.ok && (st.monitors || []).some(x => x.name === m.name);
     hint.textContent = hit ? "✓ 数据就绪（最近一次 Run）"
       : "⚠ 不在最近一次结果里——重新 Run 后可画";
   };
-  const st = window.__resultStatus;
+  const st = resultStatus;
   if (st && st.ok) { ready(st); return; }
-  if (!window.__lastJobId) { hint.textContent = ""; return; }   /* 从未 Run：不发空查询 */
-  GenieApp.resultMeta()
-    .then(s2 => { window.__resultStatus = s2; if (s2.ok) refreshResultChip(); ready(s2); })
+  if (!lastJobId) { hint.textContent = ""; return; }   /* 从未 Run：不发空查询 */
+  resultMeta()
+    .then(s2 => { resultStatus = s2; if (s2.ok) refreshResultChip(); ready(s2); })
     .catch(() => { hint.textContent = ""; });
 }
 
-async function addPlot(mon, field, jobId) {
+export async function addPlot(mon, field, jobId) {
   /* v2：结果只有"当下那份"——job 参数只用于提示，取数始终是当前结果。 */
-  const job = jobId || window.__lastJobId;
-  let st = window.__resultStatus;
+  const job = jobId || lastJobId;
+  let st = resultStatus;
   if (!st || !st.ok || (job && st.job_id !== job)) {
     if (!job) { toast("暂无结果数据——先 Run 一次", "warn"); return; }
-    st = await GenieApp.resultMeta().catch(() => null);
-    window.__resultStatus = st;
+    st = await resultMeta().catch(() => null);
+    resultStatus = st;
     if (st && st.ok) refreshResultChip();
   }
   if (!st || !st.ok) { toast("暂无结果数据——先 Run 一次", "warn"); return; }
@@ -164,24 +155,24 @@ async function addPlot(mon, field, jobId) {
     toast("「" + mon + "」不在作业 " + job + " 的结果里——Plot 画的是那次 Run 的数据", "warn");
     return;
   }
-  const spec = { id: "plot" + (++window.__plotSeq),
-                 name: "Plot " + window.__plotSeq,
+  const spec = { id: "plot" + (++plotSeq),
+                 name: "Plot " + plotSeq,
                  mon, field: field || await pickDefaultField(mon, job),
                  jobId: job,
                  mode: "1d", xAxis: null, yAxis: null, slices: {} };
-  window.__plots.push(spec);
+  plots.push(spec);
   renderTabbar();
   if (typeof Dock !== "undefined") Dock.activatePanel("visualize-panel");   /* 顶起模块 */
   activateTab(spec.id);
   toast(spec.name + "：" + spec.mon + " · |" + spec.field + "|", "ok");
 }
 
-function closePlot(id) {
-  window.__plots = window.__plots.filter(p => p.id !== id);
-  const next = window.__plots[0];
+export function closePlot(id) {
+  plots = plots.filter(p => p.id !== id);
+  const next = plots[0];
   if (next) { activateTab(next.id); return; }
   /* 全关 = 空态（引导页），页签条清空 */
-  window.__activeTab = null;
+  activeTab = null;
   const pv = document.getElementById("plot-view");
   if (pv) pv.classList.add("hidden");
   const empty = document.getElementById("viz-empty");
@@ -189,15 +180,15 @@ function closePlot(id) {
   renderTabbar();
 }
 
-function renderTabbar() {
+export function renderTabbar() {
   const bar = document.getElementById("view-tabs");
   if (!bar) return;
   bar.innerHTML = "";
   const mk = (id, label, closable) => {
     const t = document.createElement("div");
-    t.className = "view-tab" + (window.__activeTab === id ? " active" : "");
+    t.className = "view-tab" + (activeTab === id ? " active" : "");
     t.setAttribute("role", "tab");
-    t.setAttribute("aria-selected", window.__activeTab === id ? "true" : "false");
+    t.setAttribute("aria-selected", activeTab === id ? "true" : "false");
     const sp = document.createElement("span");
     sp.textContent = label;
     t.appendChild(sp);
@@ -210,21 +201,21 @@ function renderTabbar() {
     }
     t.addEventListener("click", () => activateTab(id));
     bar.appendChild(t);
-    if (window.__activeTab === id)
+    if (activeTab === id)
       t.scrollIntoView({ block: "nearest", inline: "nearest" });
   };
-  for (const p of window.__plots) mk(p.id, p.name, true);
+  for (const p of plots) mk(p.id, p.name, true);
   /* 无 Plot = 页签条隐藏（chip 仍挂在 tabbar 右端），空态引导页现身 */
   bar.classList.toggle("single", bar.children.length === 0);
   const empty = document.getElementById("viz-empty");
-  if (empty) empty.classList.toggle("hidden", window.__plots.length > 0);
+  if (empty) empty.classList.toggle("hidden", plots.length > 0);
 }
 
-function activateTab(id) {
-  const spec = window.__plots.find(p => p.id === id);
+export function activateTab(id) {
+  const spec = plots.find(p => p.id === id);
   const pv = document.getElementById("plot-view");
   if (!spec || !pv) return;
-  window.__activeTab = id;
+  activeTab = id;
   pv.classList.remove("hidden");
   const empty = document.getElementById("viz-empty");
   if (empty) empty.classList.add("hidden");
@@ -232,7 +223,7 @@ function activateTab(id) {
   renderTabbar();
 }
 
-function renderPlotInto(view, spec) {
+export function renderPlotInto(view, spec) {
   /* G148 轴分配表单（R24c 走查后重做，站长定）：列出全部变量轴，
    * 用户给每条轴指派角色（x 轴 / y 轴 / 切片）——选一条 x = 1D，
    * x+y = 2D，其余轴是切片：勾"手动"出滑块，缺省"峰"= 服务端
@@ -242,7 +233,7 @@ function renderPlotInto(view, spec) {
   view.innerHTML = "";
   view.style.display = "flex";
   view.style.flexDirection = "column";
-  const st = window.__resultStatus;
+  const st = resultStatus;
   const mon = st && st.ok && (st.monitors || []).find(m => m.name === spec.mon);
   const fields = (mon && mon.fields) || [spec.field];
   const L = (mon && mon.axes_len) || {};
@@ -308,7 +299,6 @@ function renderPlotInto(view, spec) {
       const cand = AXES.find(k => k !== a && r[k] !== "y" && (L[k] || 1) >= 1);
       if (cand) r[cand] = "x";
     }
-    /* 手动切片记录跟着角色走：不再是切片轴的记录清掉 */
     for (const k in r)
       if (r[k] !== "slice" && spec.slices[k] != null)
         delete spec.slices[k];
@@ -393,7 +383,7 @@ function renderPlotInto(view, spec) {
     updHead(roleTxt);
     cv.textContent = "";
     /* v2 连线：genie.visualize(...) → 环上的 series 事件（全量数组） */
-    GenieApp.resultSeries(params)
+    resultSeries(params)
       .then(d => {
         if (!d || !d.ok) { toast((d && d.detail) || "无数据", "warn"); return; }
         if (d.dim === 2) _plotHeat(cv, d.x, d.y, d.z,
@@ -412,16 +402,16 @@ function renderPlotInto(view, spec) {
   load();
 }
 
-function refreshResultChip() {
+export function refreshResultChip() {
   const chip = document.getElementById("result-chip");
   if (!chip) return;
-  if (!window.__lastJobId) { chip.classList.add("hidden"); chip.innerHTML = ""; return; }
-  GenieApp.resultMeta()
+  if (!lastJobId) { chip.classList.add("hidden"); chip.innerHTML = ""; return; }
+  resultMeta()
     .then(st => {
-      window.__resultStatus = st;
+      resultStatus = st;
       if (!chip) return;
       if (!st || !st.ok) { chip.classList.add("hidden"); chip.innerHTML = ""; return; }
-      if (st.job_id) window.__lastJobId = window.__lastJobId || st.job_id;
+      if (st.job_id) lastJobId = lastJobId || st.job_id;
       chip.classList.remove("hidden");
       chip.innerHTML = "";
       const sp = document.createElement("span");
@@ -439,12 +429,6 @@ function refreshResultChip() {
 renderTabbar();
 refreshResultChip();
 
-/* ── 运行中进度（方案 A：result-chip 原位变形，2026-10-15 站长定案）──
- * 数据链：内核 runner stdout 泵 → status.json(step/n_steps) → SDK 轮询
- * → worker job-progress 事件 → term.js 转喂本入口。ETA = 首尾样本步速
- * 外推（样本跨 ≥5s 才开口，之前显示"测速中…"）；job_id 变了=新作业，
- * 样本清零。收尾无需显式清理——job-done 事件路径的 refreshResultChip
- * 整体覆写 chip 内容，进度形态自然切回摘要+下载。 */
 /* ── 仿真流水进度（2026-10 架构收敛：阶段 = worker state 事件的事实）──
  * 提交（上传 payload）→ 排队（云端繁忙）→ 计算（步进%）→ 取回（下载）。
  * 阶段由 worker state 事件 / output 快照驱动（term.js 转喂本入口）；
@@ -453,7 +437,7 @@ refreshResultChip();
 /* ── 取消按钮（G4b 2026-10-21）：queue/run 态可取消作业 ──
  * 链路：浏览器 → 宿主 POST /api/jobs/{id}/cancel（登录闸 + key 回退）
  * → 网关 → 内核 runner.cancel（queued 落 killed / running killpg）。 */
-function _cancelJobButton(jobId) {
+export function _cancelJobButton(jobId) {
   const b = document.createElement("button");
   b.className = "jobprog-cancel";
   b.textContent = "✕ 取消";
@@ -466,52 +450,15 @@ function _cancelJobButton(jobId) {
     b.textContent = "取消请求已发送…";
     /* v2 连线层：取消 = 与 genie.cancel 同一扇门（session 拦截 → /gw 直拨，
      * 整批一颗；逐作业取消不公开）。 */
-    GenieApp.cancel()
+    cancel()
       .then(() => { b.textContent = "等待作业终态…"; })
       .catch(() => { b.disabled = false; b.textContent = "✕ 取消(重试)"; });
   };
   return b;
 }
 
-/* ── 排队 ETA 文案（G30，站长定案）──
- * 排队态只回答"还要等多久"，**不显示"第几位"**——位置对用户没有行动价值，
- * 反而让人盯着数字。数据源 = 宿主 /api/jobs/{id} 代理的网关状态（内核
- * status 带 eta_range，单位秒）；拿不到就退回裸标签，绝不编数字。 */
-function _etaText(lo, hi) {
-  const hasLo = typeof lo === "number" && isFinite(lo) && lo >= 0;
-  const hasHi = typeof hi === "number" && isFinite(hi) && hi >= 0;
-  if (!hasLo && !hasHi) return "";
-  const a = hasLo ? lo : hi;
-  const b = hasHi ? hi : lo;
-  if (b < 60) return "还需不到 1 分钟";
-  const useHour = b >= 3600;
-  const unit = useHour ? " 小时" : " 分钟";
-  const conv = (s) => (useHour ? s / 3600 : Math.round(s / 60));
-  const fmtN = (n) => (useHour ? (n >= 10 ? String(Math.round(n)) : n.toFixed(1)) : String(n));
-  const A = conv(a), B = conv(b);
-  if (B - A < (useHour ? 0.2 : 1)) return "还需约 " + fmtN(B) + unit;
-  return "还需约 " + fmtN(A) + "–" + fmtN(B) + unit;
-}
-window.__queueEtaText = _etaText;   /* 单测/自检入口 */
 
-/* 从任意形状的状态里捞 ETA：eta_range / queue.eta_range / status.* / eta_s */
-function _etaFromStatus(st) {
-  if (!st || typeof st !== "object") return [NaN, NaN];
-  const cands = [st.eta_range, st.queue && st.queue.eta_range,
-                 st.status && st.status.eta_range, st.eta_s, st.eta_seconds,
-                 st.queue_eta_s, st.queue && st.queue.eta_s];
-  for (const c of cands) {
-    if (Array.isArray(c)) return [Number(c[0]), Number(c[1])];
-    if (typeof c === "number") return [Number.NaN, c];
-    if (typeof c === "string" && c.trim()) {
-      const m = c.match(/(\d+(?:\.\d+)?)\s*(?:s|秒)?(?:\s*[-~]\s*(\d+(?:\.\d+)?))?/);
-      if (m) return [Number.NaN, Number(m[2] || m[1])];
-    }
-  }
-  return [NaN, NaN];
-}
-
-window.__jobPhase = (function () {
+export const jobPhase = (function () {
   let phase = "idle", job = "";
   let timer = null, probed = "";
   const LABEL = { submit: "提交作业中…", queue: "云端排队中",
@@ -520,8 +467,6 @@ window.__jobPhase = (function () {
     if (timer) { clearInterval(timer); timer = null; }
     probed = "";
   };
-  /* v2：排队期 ETA 面随 v1 的 /api/jobs 代理一起退役——phase 只到
-   * run/idle（环投影），不再探测网关状态。 */
   function probe(jobId, txt) { return; }
   return function (d) {
     const chip = document.getElementById("result-chip");
@@ -551,7 +496,7 @@ window.__jobPhase = (function () {
   };
 })();
 
-window.__jobProgress = (function () {
+export const jobProgress = (function () {
   let job = "", samples = [];   /* [{t, step}] */
   return function (d) {
     const chip = document.getElementById("result-chip");
@@ -606,10 +551,6 @@ window.__jobProgress = (function () {
     txt.textContent = pct + "% · " + step + "/" + nTot + " 步" + eta + eTxt;
     wrap.appendChild(bar);
     wrap.appendChild(txt);
-    /* 进度态 = 作业确实在跑：撤销钮恒在（与 __jobPhase 同序位）。
-     * 2026-10-25 修：这里原来引用了 __jobPhase 闭包里的 `phase`——不是本
-     * 函数的变量，每个进度事件都抛 ReferenceError（真机 G82 亲验抓到，
-     * 页面功能看着正常、控制台每次滚一条）；同时 cancel 钮被 append 了两次。 */
     wrap.appendChild(_cancelJobButton(d.job_id));
     chip.appendChild(wrap);
   };
@@ -621,10 +562,10 @@ window.__jobProgress = (function () {
  * 定宽进度条（总量已知，与单作业的样本外推不同）；逐点进度条/弹窗
  * 裁决不做（诊断入口 = 终端每点一行终态 + 扫描终态汇总行的失败点名，
  * 低频信息走低频通道）。终态事件交还 chip 给结果摘要。 */
-window.__sweepProgress = function (d) {
+export const sweepProgress = function (d) {
   /* G182 P6：扫参页也吃这一份（含"根本没跑起来"的 error 事件——它在
    * 下面的 sweep_id 守卫之前，页面靠它把 Run 态收回来）。 */
-  if (typeof window.__sweepPaneEvent === "function") window.__sweepPaneEvent(d);
+  sweepPaneEvent(d);
   const chip = document.getElementById("result-chip");
   if (!chip || !d || !d.sweep_id) return;
   const total = Number(d.total) || 0;
@@ -655,19 +596,12 @@ window.__sweepProgress = function (d) {
   chip.appendChild(wrap);
 };
 
-/* ── 极简折线图（结果标签卡曲线）：坐标轴 + 悬停读数卡 ──────────
- * 2026-10-10 站长实测踩坑修复：旧版 mousemove 增量叠画（连续移动=
- * 游标线/读数残影涂抹成一片），mouseleave 又 clearRect 曲线区（曲线
- * 被擦没）。改为 redraw(hover) 全量重绘闭包——每帧先清屏，游标和
- * 读数作为参数画进去，两个鼠标事件都走它，天然幂等。
- * G148 美学整备（R24c）：虚线网格 + 曲线下淡色面积填充 + 圆角读数卡
- * （替代顶行裸文本）+ 轴名随行标注。 */
-function _fmtTick(v) {
+export function _fmtTick(v) {
   const a = Math.abs(v);
   if (a !== 0 && (a >= 1e4 || a < 1e-2)) return v.toExponential(1);
   return String(Math.round(v * 1000) / 1000);
 }
-function _drawTip(g, mx, my, text, W, H) {
+export function _drawTip(g, mx, my, text, W, H) {
   g.font = "11px sans-serif";
   const w = g.measureText(text).width + 14, h = 22;
   let tx = mx + 12;
@@ -681,7 +615,7 @@ function _drawTip(g, mx, my, text, W, H) {
   g.fillStyle = "#1f2328"; g.textAlign = "left";
   g.fillText(text, tx + 7, ty + 15);
 }
-function _plotLine(canvas, xs, ys, xLabel, yLabel) {
+export function _plotLine(canvas, xs, ys, xLabel, yLabel) {
   const dpr = window.devicePixelRatio || 1;
   const W = canvas.clientWidth || 320, H = canvas.clientHeight || 170;
   canvas.width = W * dpr; canvas.height = H * dpr;
@@ -765,15 +699,15 @@ function _plotLine(canvas, xs, ys, xLabel, yLabel) {
  * 降采样（峰值结构保留）。绘制幂等闭包与 _plotLine 同款：redraw(hover)
  * 全量重绘。G148 美学整备（R24c）：离屏 ImageData + 平滑缩放（双线性
  * 手感，替代马赛克块）+ 渐变圆角色标 + 十字准星 + 读数卡。 */
-const _HEAT_STOPS = [[0, 0, 0.35], [0, 0.55, 0.85], [0.1, 0.8, 0.5],
+export const _HEAT_STOPS = [[0, 0, 0.35], [0, 0.55, 0.85], [0.1, 0.8, 0.5],
                      [0.95, 0.85, 0.2], [0.75, 0.05, 0.05]];
-function _heatColor(t) {
+export function _heatColor(t) {
   t = Math.max(0, Math.min(1, t)) * (_HEAT_STOPS.length - 1);
   const i = Math.min(_HEAT_STOPS.length - 2, Math.floor(t)), f = t - i;
   const a = _HEAT_STOPS[i], b = _HEAT_STOPS[i + 1];
   return [0, 1, 2].map(k => Math.round((a[k] + (b[k] - a[k]) * f) * 255));
 }
-function _plotHeat(canvas, xs, ys, z, xLabel, yLabel, vLabel) {
+export function _plotHeat(canvas, xs, ys, z, xLabel, yLabel, vLabel) {
   const dpr = window.devicePixelRatio || 1;
   const W = canvas.clientWidth || 480, H = canvas.clientHeight || 300;
   canvas.width = W * dpr; canvas.height = H * dpr;

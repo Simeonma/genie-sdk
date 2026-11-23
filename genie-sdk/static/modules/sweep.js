@@ -1,27 +1,14 @@
-/* modules/sweep.js — 扫参页（G182 P6 / G4a 剩件；2026-10-30）
- *
- * 形态（2026-10-30 站长裁）：左树 Run 组的 **Sweep** 节点（与 Settings
- * 并列）→ 中间栏**扫参页**；每条
- * 轴 = 一个参数 + 一组取值（线性 / 对数(10^x) / 显式列表），总点数 =
- * 各轴点数之积。参数页本身保持"单次仿真的单值表"，不做内联扫参。
- *
- * 数据链（零新概念）：
- *   Run  → POST /api/sweep → worker `genie.sweep(axes).wait()`（与终端同一条
- *          原语）；进度吃既有 `sweep-progress` 事件（term.js 转喂
- *          __sweepProgress，本页在它旁边再吃一份）。
- *   Plot → POST /api/sweep/plot → worker 把最近一次扫描的**合并结果**
- *          （数据多 k 维）落结果目录并发 `plot` 事件——面板零改动：
- *          参数轴就是轴分配表里的普通一行（freqs × 第一个参数 = 二维图，
- *          其余参数 = 切片/滑条）。
- *
- * 依赖的运行期全局：cfg / $ / toast / inspectorSel / renderInspector /
- * selectObj / apiFailText（经典 script 按序加载，见 index.html）。 */
+import { $ } from "./util.js";
+
+import { renderInspector, selectObj } from "./inspector.js";
+import { getSweeps, runSweep } from "./app.js";
+import { cfg, toast } from "./state.js";
 "use strict";
 
-const SWEEP_AXIS_LIMIT = 32;      /* 协议面：≤32 轴 */
-const SWEEP_POINT_LIMIT = 512;    /* 协议面：缺省 ≤512 点 */
+export const SWEEP_AXIS_LIMIT = 32;      /* 协议面：≤32 轴 */
+export const SWEEP_POINT_LIMIT = 512;    /* 协议面：缺省 ≤512 点 */
 
-const sweepState = {
+export const sweepState = {
   axes: [],
   onFailure: "continue",
   plotMon: "",
@@ -31,13 +18,13 @@ const sweepState = {
   _runBtn: null, _plotBtn: null, _statusEl: null, _totalEl: null,
 };
 
-function _sweepNewAxis() {
+export function _sweepNewAxis() {
   return { name: "", mode: "linspace", a: "", b: "", n: "5", values: "" };
 }
 
 /* 扫参页由左树 Run 组的「Sweep」节点打开（selectObj("sweep") →
  * renderInspector 的 kind 分发）——与 Settings 并列，参数页不放入口。 */
-function _sweepLab(text, cls) {
+export function _sweepLab(text, cls) {
   const el = document.createElement("span");
   el.className = cls || "flabel";
   el.textContent = text;
@@ -45,7 +32,7 @@ function _sweepLab(text, cls) {
 }
 
 /* 轴 → genie.sweep 的轴规格；不完整 → null（页面本地先拦，错误远离原因） */
-function sweepAxisPayload(a) {
+export function sweepAxisPayload(a) {
   if (!a || !a.name) return null;
   if (a.mode === "values") {
     const vals = String(a.values || "").split(/[,;\s]+/)
@@ -61,13 +48,13 @@ function sweepAxisPayload(a) {
     : { name: a.name, linspace: [x, y, n] };
 }
 
-function sweepAxisCount(a) {
+export function sweepAxisCount(a) {
   const p = sweepAxisPayload(a);
   if (!p) return 0;
   return p.values ? p.values.length : (p.linspace || p.logspace)[2];
 }
 
-function sweepTotal() {
+export function sweepTotal() {
   let t = 1;
   for (const a of sweepState.axes) {
     const n = sweepAxisCount(a);
@@ -77,7 +64,7 @@ function sweepTotal() {
   return t;
 }
 
-function sweepUpdateTotal() {
+export function sweepUpdateTotal() {
   const el = sweepState._totalEl;
   if (!el) return;
   const total = sweepTotal();
@@ -85,7 +72,7 @@ function sweepUpdateTotal() {
   el.classList.toggle("over", total > SWEEP_POINT_LIMIT);
 }
 
-function sweepUpdateControls() {
+export function sweepUpdateControls() {
   const run = sweepState._runBtn, plot = sweepState._plotBtn,
         st = sweepState._statusEl;
   if (run) {
@@ -97,7 +84,7 @@ function sweepUpdateControls() {
 }
 
 /* 事件入口（result.js 的 __sweepProgress 先喂这里一份） */
-function sweepPaneEvent(d) {
+export function sweepPaneEvent(d) {
   if (!d || typeof d !== "object") return;
   if (d.error) {                        /* 根本没跑起来（规格/模型问题） */
     sweepState.running = false;
@@ -112,8 +99,6 @@ function sweepPaneEvent(d) {
   const finished = Math.max(0, total - pending);
   const bad = Math.max(0, finished - (r.succeeded || 0));
   const terminal = d.state && d.state !== "running" && d.state !== "pending";
-  /* 只有"有成功点"的扫描才值得 Plot（全失败 → 立方没有一片真数据；
-     但跑完后从历史回放里恢复"最近一次可画"的扫描是想要的行为）。 */
   if (!terminal || (r.succeeded || 0) > 0) sweepState.sweepId = d.sweep_id;
   if (terminal) {
     sweepState.running = false;
@@ -126,9 +111,8 @@ function sweepPaneEvent(d) {
   }
   sweepUpdateControls();
 }
-window.__sweepPaneEvent = sweepPaneEvent;
 
-async function sweepRun() {
+export async function sweepRun() {
   if (sweepState.running) return;
   if (!Object.keys((cfg && cfg.parameters) || {}).length) {
     toast("参数表是空的——先在参数页加一个参数", "warn");
@@ -164,7 +148,7 @@ async function sweepRun() {
   try {
     /* v2 连线层：按钮 = worker 里 genie.add_param_sweep(...) + genie.run_param_sweep(...)
      * 一句 exec（linspace/logspace 在层里展开成值列表；进度走同一环投影）。 */
-    await GenieApp.runSweep({
+    await runSweep({
       axes,
       onFailure: sweepState.onFailure,
       name: "gui",
@@ -178,12 +162,12 @@ async function sweepRun() {
   sweepUpdateControls();
 }
 
-async function sweepPlot() {
+export async function sweepPlot() {
   /* Q4.5 拍 C：数值曲线挂账——扫参结果面先只出点文档/账本清单。 */
   toast("扫参曲线挂账（Q4.5-C）——点文档已落 parameter_sweep_gui/", "warn");
 }
 
-function _sweepAxisRow(i, names) {
+export function _sweepAxisRow(i, names) {
   const a = sweepState.axes[i];
   const box = document.createElement("div");
   box.className = "sweep-axis";
@@ -272,7 +256,7 @@ function _sweepAxisRow(i, names) {
   return box;
 }
 
-function renderSweepPane() {
+export function renderSweepPane() {
   const c = $("config-content");
   if (!c) return;
   if (!sweepState.axes.length) sweepState.axes = [_sweepNewAxis()];
@@ -336,8 +320,6 @@ function renderSweepPane() {
 
   const optRow = document.createElement("div");
   optRow.className = "frow";
-  /* v2 无「并行档」：一个 sweep = 一批提交（worker 串行收敛），并发是
-   * 网关/内核的事，不是面板旋钮——此控件已删，别让它再装成能动。 */
   optRow.appendChild(_sweepLab("失败", "sweep-lab"));
   const fail = document.createElement("select");
   fail.className = "param-value sweep-opt";
@@ -400,7 +382,7 @@ function renderSweepPane() {
 }
 
 /* 扫参账清单：目录名 + 点数 + 完成/失败 + 点文档列表（host 读 index.json） */
-function _renderSweepAccounts(body) {
+export function _renderSweepAccounts(body) {
   const wrap = document.createElement("div");
   wrap.className = "sweep-accounts";
   const head = document.createElement("div");
@@ -422,7 +404,7 @@ function _renderSweepAccounts(body) {
   async function load() {
     list.textContent = "";
     try {
-      const r = await GenieApp.getSweeps();
+      const r = await getSweeps();
       const sweeps = (r && r.sweeps) || [];
       if (!sweeps.length) {
         list.className = "pane-empty";

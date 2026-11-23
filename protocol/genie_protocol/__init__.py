@@ -1,5 +1,6 @@
 """genie_protocol — the single source of truth for the SimConfig wire
-format (an independently distributed package, lazy-import shell).
+format (a top-level package shipped inside the genie-sdk wheel, lazy-import
+shell).
 
 pydantic v2, zero other runtime dependencies. The trio:
 
@@ -15,7 +16,7 @@ when an attribute is first touched; star imports trigger the full load per
 """
 from __future__ import annotations
 
-__version__ = "2.0.2a1"
+__version__ = "2.0.3a1"
 
 __all__ = [
     # basic type aliases

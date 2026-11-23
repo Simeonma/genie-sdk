@@ -8,25 +8,25 @@ document → custom `post_analyze` post-processing travels with it.
 
 Requires Python ≥ 3.10.
 
-`genie-sdk` depends on `genie-protocol` (the wire-format models). The two are
-released together from the same tag, so install them **from the same place** —
-both wheels, one command:
+One download, one install. Each release ships a single zip that contains one
+wheel (the wire-format protocol `genie_protocol` is inside it — there is no
+second package):
+
+- Windows: unzip, double-click `install.bat`
+- macOS / Linux: unzip, `bash install.sh`
+
+Both scripts run `pip install genie_sdk-<ver>-py3-none-any.whl` against the
+Tsinghua PyPI mirror. Prefer plain pip:
 
 ```
-pip install genie_sdk-<ver>-py3-none-any.whl genie_protocol-<ver>-py3-none-any.whl
+pip install genie_sdk-<ver>-py3-none-any.whl
 ```
 
-Once both distributions are on an index, `pip install genie-sdk` pulls the
-matching `genie-protocol` automatically.
-
-From a source checkout (the tree ships `protocol/` next to the SDK sources),
-install the protocol wheel first, then the SDK without dependency resolution
-— the remaining third-party dependencies are ordinary PyPI packages:
+From a source checkout (the tree ships `protocol/` next to the SDK sources;
+`pyproject.toml` maps both roots into the same wheel):
 
 ```
-pip install genie_protocol-<ver>-py3-none-any.whl
-pip install --no-deps git+https://github.com/Simeonma/genie-sdk.git
-pip install "pydantic>=2,<3" numpy h5py mcp
+pip install .
 ```
 
 ## Connect to the cloud

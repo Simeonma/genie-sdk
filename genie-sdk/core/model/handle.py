@@ -40,7 +40,6 @@ from .draft import DRAFT_OF, to_wire
 
 DomainDraft = DRAFT_OF[_wire.DomainSpec]
 MeshDraft = DRAFT_OF[_wire.MeshSpec]
-RunDraft = DRAFT_OF[_wire.RunSpec]
 ModeDomainDraft = DRAFT_OF[_wire.ModeDomainSpec]
 ModeMeshDraft = DRAFT_OF[_wire.ModeMeshSpec]
 ModeConfigDraft = DRAFT_OF[_wire.ModeConfigSpec]
@@ -187,7 +186,7 @@ class _CollectionView:
     def _add(self, kind: str, name, node=None) -> str:
         iid = self._model._alloc.issue()
         # Narrow exception: material add accepts a
-        # **whole node** -- only the output form of mat_from_nk /
+        # **whole node** -- only the output form of
         # assemble_nk (type check + fields set whole, guarded by the
         # draft's validate_assignment), never per-field kwargs.
         # Shorthand with node as the first argument (add_lorentz(node)):
@@ -199,7 +198,7 @@ class _CollectionView:
             if not isinstance(node, dict):
                 raise TypeError(
                     f"add_{kind}: node must be a dict (a material node "
-                    f"from genie.mat_from_nk / genie.assemble_nk), got "
+                    f"from genie.assemble_nk), got "
                     f"{type(node).__name__}")
             if node.get("type") != kind:
                 raise ValueError(
@@ -386,7 +385,6 @@ class Model:
     def __init__(self) -> None:
         self._alloc = _Allocator()
         self.parameters: dict = {}
-        self._run = RunDraft()
         self._geometry: list = []
         self._materials: list = []
         self._attributes: list = []
@@ -448,6 +446,13 @@ class Model:
         """The declared solver names (insertion order; read-only)."""
         return tuple(self._solvers)
 
+    def solver_list(self) -> list:
+        """The declared solvers as ``[{"name", "kind"}]`` (the GUI tree's
+        one fact source — solvers are model declarations, not wire payload,
+        so they ride the cfg snapshot and never the submit payload)."""
+        return [{"name": n, "kind": getattr(s, "kind", DEFAULT_SOLVER)}
+                for n, s in self._solvers.items()]
+
     # -- promotion ------------------------------------------------------
 
     def _wire_monitor(self, mon) -> dict:
@@ -499,23 +504,40 @@ class Model:
         default, whose payload omits the wire ``solver`` field): structure
         under ``model``, that solver's envelope under ``config`` (shape
         follows the solver — fdtd: domain/mesh/source/monitor; mode: Q18
-        v2 sections), ``run`` at the top level. The caller must then go through
+        v2 sections). **No ``run`` section** (Q38): resources are action
+        parameters assembled into the payload at submit, never document
+        state. The caller must then go through
         ``genie_protocol.resolve.validate_for_ui`` (the single
         validation surface)."""
         name = solver if solver is not None else DEFAULT_SOLVER
         s = self.envelope(name)
-        if isinstance(s, ModeEnvelope):
-            # mode：包络段 = config draft 整体（Q18 v2 分段；Q30 起 mesh
-            # = 带名对象列表，draft 里的列表原样承运）；未填字段自然
-            # 缺省，缺必填在提升面（validate_for_ui）422。
-            conf: dict = to_wire(s._cfg)
-        else:
-            conf = {
-                "domain": to_wire(s.domain),
-                "mesh": [to_wire(i) for i in s._mesh],
-                "source": [to_wire(i) for i in s._source],
-                "monitor": [self._wire_monitor(i) for i in s._monitor],
-            }
+        conf = self._envelope_conf(s)
+        cfg = {
+            "model": self._document_model(),
+            "config": conf,
+        }
+        kind = getattr(s, "kind", DEFAULT_SOLVER)
+        if kind != DEFAULT_SOLVER:
+            cfg["solver"] = kind
+        return cfg
+
+    def to_document(self) -> dict:
+        """The **authoring document** (the ``simconfig.json`` member of a
+        ``.gensim``): shared structure + **every declared solver envelope,
+        by name** — nothing is silently dropped on save. Solvers never
+        declared (the fdtd default auto-vivifies only on access) are
+        absent. This is SDK-private shape: the wire payload is always
+        :meth:`to_config` (one solver), and resources are NOT document
+        state (Q38 — run is assembled at submit from action args)."""
+        mdl = self._document_model()
+        solvers = []
+        for name, s in self._solvers.items():
+            solvers.append({"name": name,
+                            "kind": getattr(s, "kind", DEFAULT_SOLVER),
+                            "config": self._envelope_conf(s)})
+        return {"model": mdl, "solvers": solvers}
+
+    def _document_model(self) -> dict:
         mdl = {
             "materials": [to_wire(i) for i in self._materials],
             "geometry": [to_wire(i) for i in self._geometry],
@@ -525,15 +547,22 @@ class Model:
         }
         if self._attributes:
             mdl["attributes"] = [to_wire(i) for i in self._attributes]
-        cfg = {
-            "model": mdl,
-            "config": conf,
-            "run": to_wire(self._run),
+        return mdl
+
+    def _envelope_conf(self, s) -> dict:
+        """One solver envelope → its ``config`` section (fdtd four-part /
+        mode Q18 v2 whole-draft; Nones stripped by ``to_wire``)."""
+        if isinstance(s, ModeEnvelope):
+            # mode：包络段 = config draft 整体（Q18 v2 分段；Q30 起 mesh
+            # = 带名对象列表，draft 里的列表原样承运）；未填字段自然
+            # 缺省，缺必填在提升面（validate_for_ui）422。
+            return to_wire(s._cfg)
+        return {
+            "domain": to_wire(s.domain),
+            "mesh": [to_wire(i) for i in s._mesh],
+            "source": [to_wire(i) for i in s._source],
+            "monitor": [self._wire_monitor(i) for i in s._monitor],
         }
-        kind = getattr(s, "kind", DEFAULT_SOLVER)
-        if kind != DEFAULT_SOLVER:
-            cfg["solver"] = kind
-        return cfg
 
     @property
     def last_id(self) -> int:
@@ -545,56 +574,71 @@ class Model:
 
     @classmethod
     def from_config(cls, cfg: dict, *, next_id: int | None = None) -> "Model":
-        """Open a document: **Q17 nested** wire-format dict → Model. The
-        single config is restored as its own solver's envelope — fdtd
-        default or mode (Q18; a solver without an SDK envelope fails
-        loudly: restoring it as fdtd would silently mis-shape it). The
-        multi-solver slot layout stays deferred (Q15 挂账①). Flat legacy
-        documents (b8 and earlier, domain/materials/… at the top level)
-        fail loudly — the 2.0.1a1 breaking cut, no migration shim. The id
+        """Open a document (the **Q38 slot layout**): ``{model, solvers:
+        [{name, kind, config}, …]}`` → Model with **every** declared
+        envelope restored by name — a save/open round-trip loses nothing
+        (the Q15① multi-solver slots, finally). Documents without a
+        ``solvers`` section (the 2.0.1a1–2.0.2a1 single-config shape) and
+        pre-2.0.1a1 flat documents fail loudly — the Q38 breaking cut, no
+        migration shim. A kind without an SDK envelope fails loudly
+        (restoring it as fdtd would silently mis-shape it). The id
         allocator takes max(next_id, highest item id) (next_id is the
         value recorded in state.json, preventing reuse after the highest
         id is removed)."""
-        if "model" not in cfg or "config" not in cfg:
+        if "model" not in cfg or "solvers" not in cfg:
             raise ValueError(
-                "not a 2.0.1a1 nested document (no 'model'/'config' "
-                "section) — pre-2.0.1a1 flat documents are not openable "
-                "after the Q17 breaking cut; rebuild the model or use an "
-                "older SDK to convert")
+                "not a Q38 slot document (no 'model'/'solvers' section) — "
+                "older documents (single-config or flat) are not openable "
+                "after the Q38 breaking cut; rebuild the model")
         model = cfg.get("model") or {}
-        conf = cfg.get("config") or {}
-        solver_name = cfg.get("solver") or DEFAULT_SOLVER
-        if solver_name != DEFAULT_SOLVER and solver_name not in _ENVELOPE_OF:
-            raise ValueError(
-                f"solver {solver_name!r} has no SDK envelope (known: "
-                f"{DEFAULT_SOLVER}, {', '.join(sorted(_ENVELOPE_OF))}) — "
-                f"the wire passes it through, but this SDK cannot edit "
-                f"that envelope shape")
+        slots = cfg.get("solvers") or []
         m = cls()
-        s = m.add_solver(solver_name)
-        src_items: list = []
-        mon_items: list = []
-        mesh_items: list = []
-        if solver_name == DEFAULT_SOLVER:
-            s.domain = DomainDraft.model_validate(conf.get("domain") or {})
-            for raw in conf.get("mesh") or []:
-                s._mesh.append(MeshDraft.model_validate(raw))
-            mesh_items = s._mesh
-            src_items, mon_items = s._source, s._monitor
-        else:
-            s._cfg = ModeConfigDraft.model_validate(conf)
-            mesh_items = s._cfg.mesh or []
-            # rebind the collection to the restored list (the view was
-            # built against the envelope's original empty list)
-            s.meshes._items = mesh_items
-        m._run = RunDraft.model_validate(cfg.get("run") or {})
+        all_meshes: list = []
+        all_src: list = []
+        all_mon: list = []
+        for slot in slots:
+            name = slot.get("name")
+            kind = slot.get("kind") or DEFAULT_SOLVER
+            conf = slot.get("config") or {}
+            if kind != DEFAULT_SOLVER and kind not in _ENVELOPE_OF:
+                raise ValueError(
+                    f"solver {name!r} (kind {kind!r}) has no SDK envelope "
+                    f"(known: {DEFAULT_SOLVER}, "
+                    f"{', '.join(sorted(_ENVELOPE_OF))}) — the wire passes "
+                    f"it through, but this SDK cannot edit that envelope "
+                    f"shape")
+            s = m.add_solver(name, kind)
+            if kind == DEFAULT_SOLVER:
+                s.domain = DomainDraft.model_validate(conf.get("domain") or {})
+                for raw in conf.get("mesh") or []:
+                    s._mesh.append(MeshDraft.model_validate(raw))
+                for raw in conf.get("source") or []:
+                    if raw.get("type") not in _SRC:
+                        raise ValueError(
+                            f"source: unknown item type {raw.get('type')!r}")
+                    s._source.append(_SRC[raw["type"]].model_validate(raw))
+                for raw in conf.get("monitor") or []:
+                    if raw.get("type") not in _MON:
+                        raise ValueError(
+                            f"monitor: unknown item type "
+                            f"{raw.get('type')!r}")
+                    s._monitor.append(
+                        _MON[raw["type"]].model_validate(raw))
+                all_meshes += s._mesh
+                all_src += s._source
+                all_mon += s._monitor
+            else:
+                s._cfg = ModeConfigDraft.model_validate(conf)
+                mesh_items = s._cfg.mesh or []
+                # rebind the collection to the restored list (the view was
+                # built against the envelope's original empty list)
+                s.meshes._items = mesh_items
+                all_meshes += mesh_items
         m.parameters = dict(model.get("parameters") or {})
         for kinds, items, src, key in (
                 (_GEO, m._geometry, model, "geometry"),
                 (_MAT, m._materials, model, "materials"),
-                (_ATTR, m._attributes, model, "attributes"),
-                (_SRC, src_items, conf, "source"),
-                (_MON, mon_items, conf, "monitor")):
+                (_ATTR, m._attributes, model, "attributes")):
             for raw in src.get(key) or []:
                 kind = raw.get("type")
                 if kind not in kinds:
@@ -603,7 +647,7 @@ class Model:
         highest = max(
             [next_id or 0]
             + [it.id for it in (m._geometry + m._materials + m._attributes
-                                + src_items + mon_items + mesh_items)
+                                + all_src + all_mon + all_meshes)
                if it.id is not None])
         m._alloc.raise_to(highest)
         return m

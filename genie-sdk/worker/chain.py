@@ -39,7 +39,7 @@ __all__ = ["submit", "wait", "as_completed", "cancel", "stage",
 _POLL_S = 1.0
 
 #: Document format version (the state.json format field)
-_FORMAT = 2
+_FORMAT = 3
 
 # The five terminal lines (the single copy; the fifth is emitted only when
 # post fails, zero lines on success)
@@ -119,7 +119,7 @@ def stage(env, model, ids, *, doc=None, cfg=None) -> str:
     opened; no recipe member: the authoritative copy stays in the main
     document). Returns the staged cfg."""
     if cfg is None:
-        cfg = model.to_config()
+        cfg = model.to_document()
     allocator = model.last_id if doc is None else 0
     recipes = env.post_recipes if doc is None else None
     sweeps = env.sweeps if doc is None else None

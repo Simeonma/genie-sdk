@@ -73,7 +73,7 @@ def main(read_lines=None, emit=None, env=None) -> None:
     ctx.sweeps = load_sweeps(doc_path)          # sweep definitions too (the document is the authoritative copy)
 
     emit(ipc.ready())
-    emit(ipc.cfg(ctx.model.to_config()))          # initial emission right after ready
+    emit(ipc.cfg(ctx.gui_snapshot()))          # initial emission right after ready
 
     for line in read_lines:                       # one JSON per line (guaranteed by the session)
         line = line.strip()

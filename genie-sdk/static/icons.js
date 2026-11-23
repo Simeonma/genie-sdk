@@ -1,3 +1,4 @@
+import { cfg } from "./modules/state.js";
 /* 树/检查器图标（2026-09 UI 打磨）：内联 SVG 矢量图标集合。
  *
  * 统一 16×16 viewBox、fill=none、stroke=currentColor——颜色由 CSS
@@ -11,7 +12,7 @@
  */
 "use strict";
 
-const ICON_PATHS = {
+export const ICON_PATHS = {
   /* 域：斜立方体线框 */
   domain: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5.5 L8 3 L13.5 5.5 L13.5 11 L8 13.5 L2.5 11 Z"/><path d="M2.5 5.5 L8 8 L13.5 5.5"/><path d="M8 8 L8 13.5"/></svg>',
   /* 网格：外框 + 井字 */
@@ -19,16 +20,11 @@ const ICON_PATHS = {
   /* 材料：棱镜 + 折射光线——光学材料最直观的表达（2026-09-02
    * 站长反馈三层堆叠看不懂；光进入材料被折射 = 材料的光学性质） */
   materials: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5 L13.5 8 L8 13.5 L2.5 8 Z"/><path d="M3.5 4.5 L6.8 8.3"/><path d="M9.2 7.7 L12.5 4.5"/></svg>',
-  /* 几何：单个三角形——简洁的"几何体"抽象（2026-09-02 站长定案；
-   * 与 structure 的一堆三角形形成「单个 vs 集合」语义） */
   geometry: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.8 L13.8 11.8 L2.2 11.8 Z"/></svg>',
-  /* 结构：一堆三角形（品字形三个小三角）——"一组几何体"的集合感
-   * （2026-09-02 站长定案；与 geometry 单个三角形呼应） */
   structure: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5 L11.2 7.2 L4.8 7.2 Z"/><path d="M3.8 10.2 L7 14.9 L0.6 14.9 Z"/><path d="M12.2 10.2 L15.4 14.9 L9 14.9 Z"/></svg>',
   /* 源：点源 + 同心涟漪——看得出"从中心向外辐射"（2026-09-02
    * 站长反馈原半弧波纹看不出形状，改完整圆环） */
   source: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8.5" r="1.5"/><circle cx="8" cy="8.5" r="3.4"/><circle cx="8" cy="8.5" r="5.3"/></svg>',
-  /* 监视器：屏幕 + 支架 + 底座（2026-09-02 站长反馈要"屏幕"） */
   monitor: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2" width="11" height="8" rx="1.2"/><path d="M4.5 5 L11.5 5"/><path d="M8 10 L8 12.5"/><path d="M5.5 12.5 L10.5 12.5"/></svg>',
   /* 作业：列表卡片 */
   jobs: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><path d="M5.5 5.5 L10.5 5.5 M5.5 8 L10.5 8 M5.5 10.5 L8.5 10.5"/></svg>',
@@ -36,9 +32,6 @@ const ICON_PATHS = {
   run: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 3.5 L11.5 8 L5.5 12.5 Z"/></svg>',
   /* 参数扫描（2026-09 sweep 树栏）：双滑杆 = 轴×取值 */
   sweep: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5 H13.5 M2.5 11 H13.5"/><circle cx="10.5" cy="5" r="1.8" fill="currentColor" stroke="none"/><circle cx="5.5" cy="11" r="1.8" fill="currentColor" stroke="none"/></svg>',
-  /* 参数系统批 2（2026-10）：全局参数节（COMSOL 式 name/value 表）
-   * 2026-10-21：旧字形画的是字母 A + S 曲线（远看读成「As」）——改双滑杆
-   * + 滑块：参数面板的通用语义，与「运行参数」滑杆图标同族。 */
   params: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2.6 5.2 H13.4 M2.6 10.8 H13.4"/><circle cx="5.8" cy="5.2" r="1.9"/><circle cx="10.2" cy="10.8" r="1.9"/></svg>',
 
   /* ══ 工具栏一键添加的形状图标（2026-09-02g）══ */
@@ -79,6 +72,11 @@ const ICON_PATHS = {
   mat_library: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2.6" y="4.2" width="3.2" height="7.6" rx="0.7"/><rect x="6.4" y="2.8" width="3.2" height="9" rx="0.7"/><rect x="10.2" y="5.4" width="3.2" height="6.4" rx="0.7"/></svg>',
   /* 工作台布局：窗口外框 + 三格分栏 */
   layout: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2.4" y="3.2" width="11.2" height="9.6" rx="1.1"/><path d="M2.4 6.2 H13.6"/><path d="M6.4 6.2 V12.8 M10.6 6.2 V12.8"/></svg>',
+
+  /* 品牌标记（20-market final7，2026-11-22）：左实心半圆 + 镜面缝 +
+   * 空心弧 + 弁柄红点——固定色（不随 currentColor），viewBox 已收紧到
+   * 图形本体（68,86–444,426），小尺寸不留空边。树空态引导用它。 */
+  brandmark: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="68 86 376 340" width="18" height="17"><path d="M 238 86 A 170 170 0 0 0 238 426 Z" fill="#1E2A38"/><path d="M 274 86 A 170 170 0 0 1 274 426" fill="none" stroke="#A8B6C2" stroke-width="26"/><circle cx="352" cy="256" r="30" fill="#9E3D2E"/></svg>',
 
   /* 许愿星芒（2026-09 聊天欢迎横幅：替代 🪔 emoji——四芒星 = make a wish，
    * 同 16 viewBox 圆角细线系；颜色随 currentColor（横幅内 = --warning）） */
@@ -131,8 +129,6 @@ const ICON_PATHS = {
    * 靠固定色相识别（py=品牌蓝 / cfg=琥珀 / log=绿），主题色随动会
    * 消灭这层「这是什么文件」的语义，故此处 fill/stroke 写死。 */
   /* file_py：蓝折角 .py 文档，‹/› 代码徽记（打开/下载脚本共用） */
-  /* 打开/存储仿真（2026-10）：与 ribbon 同族的 slate 线稿——文档片 +
-   * 动作箭头，stroke currentColor（File 组曾用橙色彩色线稿，全灰化后突兀） */
   file_open: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 4.5 L6 2.5 L13.5 2.5 V10.5 H10"/><path d="M2.5 4.5 V13.5 H6.5"/><path d="M6 2.5 V5 H8.5"/><path d="M13.5 6.5 L8.5 6.5"/><path d="M11 4.5 L13.5 6.5 L11 8.5"/></svg>',
   file_save: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 3.5 H10.5 L13.5 6.5 V13.5 H2.5 Z"/><path d="M4.5 3.5 V6.5 H9.5 V3.5"/><rect x="4.5" y="9" width="7" height="4.5" rx="0.5"/><path d="M13.5 9.5 L11 12 L8.5 9.5"/></svg>',
   file_py: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 1.5 H9.5 L12.5 4.5 V14.5 H3.5 Z" fill="#F8FAFC" stroke="#94A3B8" stroke-width="1.1"/><path d="M9.5 1.5 V4.5 H12.5 Z" fill="#1F62B0" stroke="#1F62B0" stroke-width="1.1"/><path d="M5.7 7.4 L4.1 9.0 L5.7 10.6 M7.3 7.4 L8.9 9.0 L7.3 10.6" stroke="#1F62B0" stroke-width="1.2"/></svg>',
@@ -142,12 +138,12 @@ const ICON_PATHS = {
   file_log: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 1.5 H9.5 L12.5 4.5 V14.5 H3.5 Z" fill="#F8FAFC" stroke="#94A3B8" stroke-width="1.1"/><path d="M9.5 1.5 V4.5 H12.5 Z" fill="#15803D" stroke="#15803D" stroke-width="1.1"/><path d="M5.3 7.2 H10.7 M5.3 9.6 H10.7 M5.3 12.0 H8.3" stroke="#15803D" stroke-width="1.2"/></svg>',
 };
 
-const _iconCache = {};
+export const _iconCache = {};
 
 /* 取一个图标元素（克隆自缓存；未知 key 回退 geometry）。
  * 返回的 <svg> 一律 aria-hidden（装饰性图标：语义由所在按钮的
  * aria-label / 相邻文本承担），随 clone 每次设置。 */
-function iconEl(key) {
+export function iconEl(key) {
   const svg = ICON_PATHS[key] || ICON_PATHS.geometry;
   if (!_iconCache[key]) {
     _iconCache[key] = new DOMParser()

@@ -1,26 +1,41 @@
+import { runScript } from "./script.js";
+import { login, logout, status } from "./app.js";
+import { exec } from "../core/bus.js";
+import { SessionSync } from "./term.js";
+import { onBatch, pollOnce } from "../core/ring.js";
+import { jobProgress, refreshResultChip, resultStatus, setLastJobId,
+         setResultStatus } from "./result.js";
+import { sweepRun } from "./state.js";
+import { sweepPaneEvent } from "./sweep.js";
+
+import { $ } from "./util.js";
+import { post } from "../core/bus.js";
+import { genieForgetUser } from "./api.js";
+import { Dock } from "./dock.js";
+import { FormPanel } from "../views/form.js";
+import { iconEl } from "../icons.js";
+import { renderInspector, selectObj } from "./inspector.js";
+import { previewEl } from "../views/previews.js";
+import { animate, initScene } from "./scene.js";
+import { renderPythonHighlight } from "./script.js";
+import { cfg, docDirty, scene, setDocDirty, toast } from "./state.js";
+
+import { buildToolbar, syncViewMirror } from "./toolbar.js";
+import { renderTree } from "./tree.js";
 /* modules/boot.js — 接线与启动（FormPanel/工具条/场景 init、gutter、快捷键、连接框、开屏对齐、自动恢复）
  * G5 拆分（2026-10-14）：自 app.js 机械切出，零行为变化；
  * 经典 script 按序加载，跨模块引用为运行期全局查找。 */
 
-/* ── 登录态 fetch 包装（v2：已断线）──
- * v1 的 X-API-Key 补头随 v1 后端一起退役；页面只与连线层（modules/app.js）
- * 定义的 v2 端点通信，接线层自管凭据（云 token 只住 host）。 */
 
 
 /* ══ 接线（显示链路 + 表单编辑通道；工具条等器官仍不接线） ══════ */
 /* 阶段 5b 单模式：表单编辑实时写入活动 SimConfig 并刷新全部视图；
  * 「模型已改」徽标提示与脚本分叉（重跑脚本即整体重建，语义如此）。 */
-FormPanel.init("config-content", { onMutate: onFormMutate });
+FormPanel.init("config-content");
 
 buildToolbar();
 initScene();
 Dock.init();   /* dock 工作台（2026-10-15）：面板收养 + splitter + 布局持久化 */
-/* Layout 预设 + 用户命名布局（2026-10-15 站长提议；2026-10-17 收敛为
- * 单一菜单 chip）：按钮标签 = 当前布局名，菜单内 = 内置预设 / 用户自存
- * 布局 / Save layout… / Delete layout。原 select+Save+Del 三件套的问题：
- * 视觉层级不一、Save 与 File>Save 撞名、≤1280 组内换行、1024 被右缘
- * 裁切、原生 select 的焦点环被全局 input 规则压掉——单一菜单全解。
- * 选项 = 内置预设 + 用户自存布局（genie.dock.saved.v1，只存浏览器）。 */
 (() => {
   const btn = document.getElementById("dock-layout-btn");
   const menu = document.getElementById("dock-layout-menu");
@@ -128,9 +143,6 @@ Dock.init();   /* dock 工作台（2026-10-15）：面板收养 + splitter + 布
   build();
   setLabel();
 })();
-/* ══ 功能区页签（2026-10-17 站长裁决：Lumerical 式 FILE/VIEW/DESIGN/FDTD）══
- * 默认 Design（站长裁决）；选择存 localStorage（只存"脸的摆法"）。
- * 键盘：←/→ 巡航、Home/End 首末（WAI-ARIA tablist 惯例）。 */
 (() => {
   const TABS = ["file", "view", "design", "fdtd"];
   const KEY = "genie.tab.v1";
@@ -148,7 +160,7 @@ Dock.init();   /* dock 工作台（2026-10-15）：面板收养 + splitter + 布
     for (const [k, p] of pages) if (p) p.hidden = k !== name;
     try { localStorage.setItem(KEY, name); } catch {}
     /* VIEW 页的 3D 开关镜像以真身 aria-pressed 为准，切页时回填 */
-    if (name === "view" && typeof window.syncViewMirror === "function") window.syncViewMirror();
+    if (name === "view") syncViewMirror();
     if (focus) document.getElementById("tab-" + name)?.focus();
   };
   for (const t of tabs) t.addEventListener("click", () => activate(t.dataset.page));
@@ -159,7 +171,6 @@ Dock.init();   /* dock 工作台（2026-10-15）：面板收养 + splitter + 布
     else if (e.key === "Home") { e.preventDefault(); activate(TABS[0], true); }
     else if (e.key === "End") { e.preventDefault(); activate(TABS[TABS.length - 1], true); }
   });
-  window.genieSetTab = (name) => activate(name);
   let saved = null;
   try { saved = localStorage.getItem(KEY); } catch {}
   activate(TABS.includes(saved) ? saved : "design");
@@ -264,7 +275,6 @@ $("code-editor").addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === "Enter") { e.preventDefault(); runScript(); }
   if ((e.ctrlKey || e.metaKey) && (e.key === "s" || e.key === "S")) { e.preventDefault(); }
 });
-/* 无害 QoL：下载（复制钮已退役——2026-10-14 精简） */
 $("download-py").addEventListener("click", () => {
   const blob = new Blob([$("code-editor").value], { type: "text/x-python" });
   const a = document.createElement("a");
@@ -273,79 +283,64 @@ $("download-py").addEventListener("click", () => {
   a.click();
   URL.revokeObjectURL(a.href);
 });
-/* ── 仿真文件 .gensim（2026-10 站长裁决转正，承 G14）───────────
- * 「存储/打开仿真」取代「导出/导入状态」：一个 .gensim（zip 容器）
- * = simconfig.json + 工作区快照（脚本+结果），用户感知 = 一个文件
- * 就是一个仿真。服务端 /api/sim/export 打包、/api/sim/import 先验
- * cfg（genie.models 同一双手）再解包；GUI 拿到 cfg 后仍走
- * onFormMutate()（同一防抖通道推进 worker 里的 f）+ 工作区面板刷新。
- * importCfgText 保留 = 纯 JSON 校验+推进（e2e 函数面直驱用）。 */
-/* 存储文件名记忆（2026-10 站长定案补全）：localStorage 记上次名字，
- * 下次「存储仿真」默认存回去。路径选择 = File System Access API 的
- * showSaveFilePicker（Chrome 系原生「另存为」对话框，用户自选目录，
- * API 自己记忆上次位置）；无此 API 的浏览器回退 prompt 问名 +
- * a.download（落浏览器下载目录）。askName=false = 函数面直驱
- * （e2e headless 无对话框），走老下载通道。 */
-const _SIM_NAME_KEY = "genie-sim-filename";
-const _SIM_NAME_DEFAULT = "genie_sim.gensim";
+/* ── FILE：项目 I/O（2026-11-22 重构，站长批）────────────────────
+ * New / Open… / Save / Save As… / Open folder。原生文件对话框由 host 弹
+ * （POST /pick，ctypes comdlg32——浏览器拿不到真实路径）；新建/打开/保存
+ * 都走 worker 动词（genie._new / genie.open / genie.save），文档路径与
+ * 未保存标记常显：用户不该猜文件在哪、有没有存。 */
+let _wsRoot = "";
+let _docPath = null;
 
-async function exportCfg(askName = true) {
-  /* v2：Save = worker 里跑一句 genie.save()（Q4.3：路径归 host——有文档
-   * 路径写原路径，否则 <工作区>/genie.gensim；落位/自动存同一机器）。 */
+function docTarget() {
+  if (_docPath) return _docPath;
+  return _wsRoot ? (_wsRoot.replace(/[\\/]+$/, "") + "\\genie.gensim") : "";
+}
+
+function renderDocState() {
+  const el = $("file-doc-path");
+  if (!el) return;
+  const name = _docPath ? _docPath.split(/[\\/]/).pop() : "Untitled";
+  el.textContent = name + (docDirty ? " •" : "");
+  el.title = _docPath
+    ? "当前文档：" + _docPath + (docDirty ? "（有未保存改动）" : "")
+    : "未命名文档（Save 时落到工作区 genie.gensim）";
+  el.classList.toggle("dirty", docDirty);
+}
+window.addEventListener("genie-doc-dirty", renderDocState);
+
+export async function fileNew() {
   try {
-    await GenieApp.exec("genie.save()", { fresh: false, echo: false });
-    toast("已保存（genie.save()）", "ok");
+    if (docDirty) {
+      const t = docTarget();
+      if (!t) return fileSaveAs();             /* 没路径：让用户先选位置 */
+      await _doSave(t);
+    }
+    await exec("genie._new()", { fresh: false, echo: false });
+    _docPath = null;
+    setDocDirty(false);
+    renderDocState();
+    toast("新建空白项目", "ok");
     return true;
   } catch (e) {
-    toast("保存失败：" + e.message, "err");
-    return null;
+    toast("新建失败：" + e.message, "err");
+    return false;
   }
 }
 
-async function importCfgText(text) {
-  /* v2：整份换模型只走 worker（编辑器跑脚本 / genie._open）；此钩子不再直推。 */
-  toast("整份导入随文档线（用 Open 输路径或写 genie.open('path')）", "warn");
-  return false;
-}
-
-function importCfg() {
-  /* 文件上传导入随文档线（v2 的 Open 用路径；上传 = host 收字节落 temp 再 genie._open） */
-  toast("导入 .gensim 随文档线（先用 Open 输路径，或写 genie.open('path')）", "warn");
-}
-
-/* e2e 钩子（headless 无下载/文件选择对话框——直接调函数面） */
-window.__g14 = { exportCfg, importCfgText };
-window.__g60 = { exportScript };   /* File → Export .py（askName=false 走下载通道） */
-
-/* ── 当前模型 → Python 脚本（G60 出口，2026-10-30 站长裁）──────────
- * File → Export .py：把**当前模型**（与「存储仿真」同一个取值面
- * window.getCfg）渲染成脚本并下载。渲染器 = 服务端 core/script.render
- * （golden 字节锁定的唯一一份）——参数保留为变量、表达式槽保留为
- * 表达式，文件可独立运行重建同一模型。
- * 语义边界（与 R1/G57 一致）：**只下载、不碰编辑器**——脚本是脚本、
- * 仿真是仿真；这是"模型→代码"的一次性交接，不做任何同步。 */
-async function exportScript(askName = true) {
-  /* Q6.8：v2 不建「模型→脚本」渲染（模型不回写脚本）。 */
-  toast("模型→脚本渲染已裁（Q6.8）——脚本请直接在编辑器里写", "warn");
-  return null;
-}
-
-/* ── 打开仿真（2026-11-01 裁：Open = 载入模型 + 钉存档，**不动工作区**）。
- * 工作区是位置属性，只能由用户显式切换（File → Workspace…）。
- * 浏览器拿不到真实路径，所以先走服务端原生文件对话框（/api/sim/open）；
- * 本机没有系统对话框时退回浏览器上传（importCfg）。 */
-async function openSimulation() {
-  /* v2：Open = worker 里跑一句 genie.open(<path>)（整份换模型 + 路径跟随；
-   * 失败原因由 worker 的红行进终端）。浏览器拿不到 worker 文件系统，
-   * 路径用 prompt 承接。 */
-  const asked = window.prompt("打开 .gensim（工作区路径）：", "genie.gensim");
-  if (asked === null) return null;
-  const path = asked.trim();
-  if (!path) return null;
+export async function fileOpen() {
   try {
-    await GenieApp.exec("genie.open(" + JSON.stringify(path) + ")",
+    const j = await post("/pick", {
+      mode: "open", label: "Genie simulation", pattern: "*.gensim",
+      initial: _docPath || docTarget() || undefined,
+    });
+    const p = j && j.path;
+    if (!p) return null;                       /* 用户取消 */
+    await exec("genie.open(" + JSON.stringify(p) + ")",
                         { fresh: false, echo: false });
-    toast("已提交 genie.open(" + path + ")——结果见终端", "ok");
+    _docPath = p;
+    setDocDirty(false);
+    renderDocState();
+    toast("已打开 " + p, "ok");
     return true;
   } catch (e) {
     toast("打开失败：" + e.message, "err");
@@ -353,44 +348,85 @@ async function openSimulation() {
   }
 }
 
-/* 直钮绑定（File▾ 下拉已删）：处理器零事件参数依赖，直接挂 */
-$("file-save-btn").addEventListener("click", exportCfg);
-$("file-open-btn").addEventListener("click", openSimulation);
-$("file-script-btn").addEventListener("click", () => exportScript(true));
-
-/* ── 工作区（G4a 2026-10-30 站长定案）：常显当前路径 + 原生文件夹对话框 ──
- * 机器级持久设置（服务端 ~/.genie/workspace.json）：换根后 worker 自动重挂，
- * 之后的结果/脚本/自动存档 .gensim 都落这里。路径常显（用户不该猜）。 */
-function setFileWorkspacePath(root) {
-  const el = $("file-workspace-path");
-  if (!el) return;
-  el.textContent = root || "";
-  el.title = root ? "当前工作区：" + root : "";
+async function _doSave(target) {
+  await exec("genie.save(" + JSON.stringify(target) + ")",
+                      { fresh: false, echo: false });
+  _docPath = target;
+  setDocDirty(false);
+  renderDocState();
+  toast("已保存到 " + target, "ok");
+  return target;
 }
-async function loadFileWorkspace() {
-  /* v2：工作区 = 启动 genie studio 时的目录（进程属性，只读展示）。 */
+
+export async function fileSave() {
+  const target = docTarget();
+  if (!target) return fileSaveAs();            /* 工作区未知 → 让用户选位置 */
+  try {
+    return await _doSave(target);
+  } catch (e) {
+    toast("保存失败：" + e.message, "err");
+    return null;
+  }
+}
+
+export async function fileSaveAs() {
+  try {
+    const j = await post("/pick", {
+      mode: "save", label: "Genie simulation", pattern: "*.gensim",
+      initial: docTarget() || undefined,
+    });
+    const p = j && j.path;
+    if (!p) return null;
+    return await _doSave(p);
+  } catch (e) {
+    toast("保存失败：" + e.message, "err");
+    return null;
+  }
+}
+
+export async function fileReveal() {
+  try {
+    await post("/reveal", { path: docTarget() || _wsRoot });
+  } catch (e) {
+    toast("打开文件夹失败：" + e.message, "err");
+  }
+}
+
+$("file-new-btn").addEventListener("click", () => fileNew());
+$("file-open-btn").addEventListener("click", () => fileOpen());
+$("file-save-btn").addEventListener("click", () => fileSave());
+$("file-saveas-btn").addEventListener("click", () => fileSaveAs());
+$("file-folder-btn").addEventListener("click", () => fileReveal());
+
+export function setFileWorkspacePath(root) {
+  _wsRoot = root || "";
+  const el = $("file-workspace-path");
+  if (el) {
+    el.textContent = _wsRoot;
+    el.title = _wsRoot ? "工作区：" + _wsRoot : "";
+  }
+  renderDocState();                           /* 工作区决定未命名文档的落点 */
+}
+export async function loadFileWorkspace() {
+  let root = "";
   try {
     const r = await fetch("/workspace");
-    const j = await r.json();
-    setFileWorkspacePath(j.root || "");
+    root = (await r.json()).root || "";
   } catch { /* 状态面失败不拦页面 */ }
+  setFileWorkspacePath(root);   /* 渲染在 try 外：渲染错不能被网络 catch 吞掉 */
 }
-async function pickFileWorkspace() {
-  /* v2：工作区随进程（spawn cwd）——不支持运行时切换（换台 = 换目录重启）。 */
-  toast("工作区 = 启动 genie studio 的目录（换工作区请在新目录启动）", "warn");
-}
-$("file-workspace-btn").addEventListener("click", pickFileWorkspace);
 loadFileWorkspace();
+
 /* load-py 本机文件上岗（G17 走查补漏 2026-10-16）：f4d1e23 只上了钮
  * 没接线——出生即死钮。语义同工作区点行载入：File API 读用户笔记本
  * （零上传），ed.value + input 事件（未存态，Run 前必存进工作区）。 */
-function loadPyText(text, name) {
+export function loadPyText(text, name) {
   const ed = $("code-editor");
   ed.value = text;
   ed.dispatchEvent(new Event("input", { bubbles: true }));
   toast("Loaded " + (name || "local file") + "（未存态——Run 前必存）", "info");
 }
-function loadPyLocal() {
+export function loadPyLocal() {
   const inp = document.createElement("input");
   inp.type = "file";
   inp.accept = ".py,text/x-python";
@@ -401,23 +437,17 @@ function loadPyLocal() {
   });
   inp.click();
 }
-window.__loadPyText = loadPyText;      /* e2e 钩子 */
 $("load-py").addEventListener("click", loadPyLocal);
 /* 账号对话框（M1）：Sign in（未登录）/ Account（已登录）/ 子视图
  * （Create account、Reset password、Change password）。
  * 视觉：统一 gc-* 类（一次注入 style，替代散落 inline style）；
  * 主状态不设标题（内容自明），子视图保留小标题区分上下文。
  * 交互全走 wrap 事件委托（closest 分发）。 */
-const GC_STYLE_ID = "v2-conn-style";
-function ensureConnStyle() {
+export const GC_STYLE_ID = "v2-conn-style";
+export function ensureConnStyle() {
   if (document.getElementById(GC_STYLE_ID)) return;
   const st = document.createElement("style");
   st.id = GC_STYLE_ID;
-  /* 全部使用界面设计 token（--radius/--accent/--border-*…）——
-   * 形状/配色与主界面同源，全局换肤对话盒自动跟随。
-   * 2026-10-21：加上「铭牌式」头（eyebrow + 标题 + 发丝线），输入/按钮
-   * 全部落到 30px 刻度与 3px 圆角；链接改静默墨色（不再是三条并列亮蓝，
-   * 旧观感像 GitHub 登录页而非仪器控件）。 */
   st.textContent = `
 #v2-conn{position:fixed;inset:0;z-index:10000;background:rgba(16,21,26,.34);
   display:flex;align-items:center;justify-content:center;
@@ -437,13 +467,8 @@ function ensureConnStyle() {
   border-color:var(--border,#DCE0E6)}
 #v2-conn .gc-head{padding:18px 0 12px;margin-bottom:14px;
   border-bottom:1px solid var(--border-soft,#EDEFF2)}
-#v2-conn .gc-eyebrow{font-size:var(--fs-2xs,11px);font-weight:600;letter-spacing:.1em;
-  text-transform:uppercase;color:var(--text-muted,#5E6A76);line-height:1}
 #v2-conn .gc-title{font-size:var(--fs-xl,17px);font-weight:600;margin:6px 0 0;
   letter-spacing:.01em;color:var(--text-primary,#10151A)}
-#v2-conn #v2-view-register .gc-title,#v2-conn #v2-view-recover .gc-title,
-#v2-conn #v2-view-passwd .gc-title{margin:18px 0 14px;padding-bottom:12px;
-  border-bottom:1px solid var(--border-soft,#EDEFF2)}
 #v2-conn .gc-field{margin-top:13px}
 #v2-conn .gc-field:first-of-type{margin-top:0}
 #v2-conn .gc-label{display:flex;justify-content:space-between;align-items:baseline;
@@ -475,6 +500,7 @@ function ensureConnStyle() {
   text-underline-offset:2px}
 #v2-conn .gc-actions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;
   margin-top:18px}
+#v2-conn .gc-actions-btns{display:flex;gap:8px}
 /* 退出确认（2026-10-21）：一句话说清"重新登录=空模型"，不吓人但要看见。 */
 #v2-conn .gc-warn{margin-top:14px;padding:10px 12px;border-radius:var(--radius-sm,3px);
   background:#FDF6EC;border:1px solid #E8C9A0}
@@ -498,13 +524,30 @@ function ensureConnStyle() {
 #v2-conn .gc-muted{color:var(--text-muted,#5E6A76);font-size:var(--fs-2xs,11px)}
 #v2-conn .gc-note{color:var(--text-muted,#5E6A76);font-size:var(--fs-xs,12px);
   line-height:1.55;margin:0 0 4px}
+/* 本月账（2026-11-22）：key-value 三列行——量 / 配额 / 笔数；发丝线分行，
+  等宽数字，不占输入框的形。 */
+#v2-conn .gc-usage-head{margin:2px 0 6px;font-size:var(--fs-2xs,11px);
+  font-weight:600;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--text-muted,#5E6A76)}
+#v2-conn .gc-usage{border:1px solid var(--border-soft,#EDEFF2);
+  border-radius:var(--radius-sm,3px);overflow:hidden}
+#v2-conn .gc-usage-row{display:grid;grid-template-columns:52px 1fr auto;
+  gap:10px;align-items:baseline;padding:6px 9px;
+  border-top:1px solid var(--border-soft,#EDEFF2);font-size:var(--fs-xs,12px)}
+#v2-conn .gc-usage-row:first-child{border-top:0}
+#v2-conn .gc-usage-row .k{color:var(--text-muted,#5E6A76);
+  font-weight:600;letter-spacing:.04em}
+#v2-conn .gc-usage-row .v{color:var(--text-primary,#10151A);
+  font-variant-numeric:tabular-nums;text-align:right}
+#v2-conn .gc-usage-row .n{color:var(--text-muted,#5E6A76);
+  font-variant-numeric:tabular-nums;min-width:52px;text-align:right}
 `;
   document.head.appendChild(st);
 }
 
 /* ── 登出（v2 语义）：只撤 host 的云凭据（Q2.1），模型与脚本保留。 ── */
 
-function connDialog(initialView) {
+export function connDialog(initialView) {
   ensureConnStyle();
   const old = document.getElementById("v2-conn");
   if (old) old.remove();
@@ -512,7 +555,7 @@ function connDialog(initialView) {
   const wrap = document.createElement("div");
   wrap.id = "v2-conn";
   /* v2：登录态只认 host（GET /auth），浏览器没有 token 可看。 */
-  const loggedIn = !!(window.__genieAuth && window.__genieAuth.logged_in);
+  const loggedIn = !!(_genieAuth && _genieAuth.logged_in);
   wrap.innerHTML = `
     <div class="gc-box">
       <button class="gc-x" id="v2-conn-x" type="button" aria-label="Close" title="Close (Esc)">
@@ -521,7 +564,6 @@ function connDialog(initialView) {
       </button>
       <div id="v2-view-login">
         <div class="gc-head">
-          <div class="gc-eyebrow">GENIE ACCOUNT</div>
           <div class="gc-title">Sign in</div>
         </div>
         <div class="gc-field">
@@ -531,14 +573,14 @@ function connDialog(initialView) {
         </div>
         <div class="gc-field">
           <label class="gc-label" for="v2-conn-pass">Password
-            <a id="v2-recover-switch" class="gc-link">Forgot password?</a></label>
+            <a class="gc-link" href="https://genie-optics.com/account/reset/" target="_blank" rel="noopener">Forgot password?</a></label>
           <input id="v2-conn-pass" class="gc-input" type="password"
             autocomplete="current-password">
         </div>
         <div id="v2-conn-msg"></div>
         <div class="gc-links" style="justify-content:space-between">
-          <a id="v2-cp-switch" class="gc-link">Change password</a>
-          <a id="v2-reg-switch" class="gc-link">Create account →</a>
+          <a class="gc-link" href="https://genie-optics.com/account/reset/" target="_blank" rel="noopener">Change password</a>
+          <a class="gc-link" href="https://genie-optics.com/account/register/" target="_blank" rel="noopener">Create account →</a>
         </div>
         <div class="gc-actions">
           <button id="v2-conn-cancel" class="gc-btn secondary">Cancel</button>
@@ -547,109 +589,32 @@ function connDialog(initialView) {
       </div>
       <div id="v2-view-account" style="display:none">
         <div class="gc-head">
-          <div class="gc-eyebrow">GENIE ACCOUNT</div>
           <div class="gc-title">Account</div>
         </div>
-        <!-- 账本区块（记账三件套③，2026-10-31）：本月卡时/笔数/配额；
-             拿不到（老 worker / 免登录形态）整块隐去，不留半截。 -->
-        <div class="gc-field" id="v2-acct-usage" style="display:none">
-          <label class="gc-label" for="v2-acct-usage-line">本月 GPU 卡时</label>
-          <div id="v2-acct-usage-line" class="gc-input"
-               style="display:flex;align-items:center"></div>
-        </div>
-        <div class="gc-links" style="justify-content:flex-start">
-          <a id="v2-acct-cp" class="gc-link">Change password</a>
-        </div>
-        <div class="gc-actions">
-          <button id="v2-acct-cancel" class="gc-btn secondary">Cancel</button>
-          <button id="v2-acct-signout" class="gc-btn primary">Sign out</button>
-        </div>
-      </div>
-      <div id="v2-view-register" style="display:none">
-        <div class="gc-title">Create account</div>
-        <div class="gc-field">
-          <label class="gc-label" for="v2-reg-email">Email</label>
-          <input id="v2-reg-email" class="gc-input" type="email" autocomplete="email"
-            placeholder="you@example.com">
-        </div>
-        <div class="gc-field">
-          <label class="gc-label" for="v2-reg-code">Verification code
-            <span class="gc-muted">10 min</span></label>
-          <div class="gc-row">
-            <input id="v2-reg-code" class="gc-input" maxlength="6"
-              autocomplete="one-time-code" placeholder="6 digits">
-            <button id="v2-reg-send" class="gc-btn secondary">Send code</button>
+        <!-- 账本区块（2026-11-22 接通）：key-value 行，不是输入框 -->
+        <div id="v2-acct-usage" style="display:none">
+          <div class="gc-usage-head" id="v2-acct-usage-head">Usage</div>
+          <div class="gc-usage">
+            <div class="gc-usage-row">
+              <span class="k">GPU</span>
+              <span class="v" id="v2-u-gpu">—</span>
+              <span class="n" id="v2-u-gpu-n"></span>
+            </div>
+            <div class="gc-usage-row">
+              <span class="k">CPU</span>
+              <span class="v" id="v2-u-cpu">—</span>
+              <span class="n" id="v2-u-cpu-n"></span>
+            </div>
           </div>
         </div>
-        <div class="gc-field">
-          <label class="gc-label" for="v2-reg-name">Username</label>
-          <input id="v2-reg-name" class="gc-input" autocomplete="username">
-          <div id="v2-name-hint" class="gc-hint"></div>
-        </div>
-        <div class="gc-field">
-          <label class="gc-label" for="v2-reg-pass">Password
-            <span class="gc-muted">min 8 characters</span></label>
-          <input id="v2-reg-pass" class="gc-input" type="password"
-            autocomplete="new-password">
-        </div>
-        <div id="v2-reg-msg"></div>
-        <div class="gc-links"><a id="v2-login-switch" class="gc-link">← Back to sign in</a></div>
-        <div class="gc-actions">
-          <button id="v2-reg-cancel" class="gc-btn secondary">Cancel</button>
-          <button id="v2-reg-save" class="gc-btn primary">Register &amp; sign in</button>
-        </div>
-      </div>
-      <div id="v2-view-recover" style="display:none">
-        <div class="gc-title">Reset password</div>
-        <div class="gc-note">Enter your account email — we'll send a code.
-          Resetting revokes all existing sessions.</div>
-        <div class="gc-field">
-          <label class="gc-label" for="v2-rec-email">Email</label>
-          <input id="v2-rec-email" class="gc-input" type="email" autocomplete="email"
-            placeholder="you@example.com">
-        </div>
-        <div class="gc-field">
-          <label class="gc-label" for="v2-rec-code">Verification code
-            <span class="gc-muted">10 min</span></label>
-          <div class="gc-row">
-            <input id="v2-rec-code" class="gc-input" maxlength="6"
-              autocomplete="one-time-code" placeholder="6 digits">
-            <button id="v2-rec-send" class="gc-btn secondary">Send code</button>
-          </div>
-        </div>
-        <div class="gc-field">
-          <label class="gc-label" for="v2-rec-new">New password
-            <span class="gc-muted">min 8 characters</span></label>
-          <input id="v2-rec-new" class="gc-input" type="password"
-            autocomplete="new-password">
-        </div>
-        <div id="v2-rec-msg"></div>
-        <div class="gc-links"><a id="v2-rec-back" class="gc-link">← Back</a></div>
-        <div class="gc-actions">
-          <button id="v2-rec-cancel" class="gc-btn secondary">Cancel</button>
-          <button id="v2-rec-save" class="gc-btn primary">Reset password</button>
-        </div>
-      </div>
-      <div id="v2-view-passwd" style="display:none">
-        <div class="gc-title">Change password</div>
-        <div class="gc-note">Changing your password revokes all existing sessions —
-          you will stay signed in on this device with a fresh token.</div>
-        <div class="gc-field">
-          <label class="gc-label" for="v2-pwd-old">Current password</label>
-          <input id="v2-pwd-old" class="gc-input" type="password"
-            autocomplete="current-password">
-        </div>
-        <div class="gc-field">
-          <label class="gc-label" for="v2-pwd-new">New password
-            <span class="gc-muted">min 8 characters</span></label>
-          <input id="v2-pwd-new" class="gc-input" type="password"
-            autocomplete="new-password">
-        </div>
-        <div id="v2-pwd-msg"></div>
-        <div class="gc-links"><a id="v2-pwd-back" class="gc-link">← Back</a></div>
-        <div class="gc-actions">
-          <button id="v2-pwd-cancel" class="gc-btn secondary">Cancel</button>
-          <button id="v2-pwd-save" class="gc-btn primary">Change password</button>
+        <div class="gc-actions" style="justify-content:space-between">
+          <a id="v2-acct-cp" class="gc-link"
+             href="https://genie-optics.com/account/reset/"
+             target="_blank" rel="noopener">Change password</a>
+          <span class="gc-actions-btns">
+            <button id="v2-acct-cancel" class="gc-btn secondary">Cancel</button>
+            <button id="v2-acct-signout" class="gc-btn primary">Sign out</button>
+          </span>
         </div>
       </div>
     </div>`;
@@ -658,15 +623,13 @@ function connDialog(initialView) {
   let onKey = null;
   const close = () => {
     if (onKey) document.removeEventListener("keydown", onKey);
-    if (nameTimer) clearTimeout(nameTimer);
-    if (recTimer) clearTimeout(recTimer);
     onKey = null;
     wrap.remove();
   };
-  onKey = (e) => { if (e.key === "Escape" && !window.__authGate) close(); };
+  onKey = (e) => { if (e.key === "Escape" && !_authGate) close(); };
   document.addEventListener("keydown", onKey);
   /* 闸门态：登录框不可关（没有可用的工作区可回） */
-  if (window.__authGate) {
+  if (_authGate) {
     const x = $("v2-conn-x");
     if (x) x.style.display = "none";
     const c = $("v2-conn-cancel");   /* 没有必要给"取消"——没登录没有可去的地方 */
@@ -678,25 +641,31 @@ function connDialog(initialView) {
     m.textContent = t; m.style.display = "block";
   };
   const msg = msgOf("v2-conn-msg");
-  const regMsg = msgOf("v2-reg-msg");
-  const pwdMsg = msgOf("v2-pwd-msg");
-  const recMsg = msgOf("v2-rec-msg");
-  /* 账本区块：v2 暂未接用量面（host 无对应端点）——静默隐藏。 */
+  /* 账本区块（2026-11-22 接通）：host `/usage` → 网关 `/api/usage`（唯一
+   * 拨号在 host）。key-value 三列行（量 / 配额 / 笔数），等宽数字右对齐；
+   * 拿不到（未登录 / 网关不在 / 老宿主）整块隐去，不留半截。 */
   function fillAcctUsage() {
     const box = $("v2-acct-usage");
-    if (box) box.style.display = "none";
-  }
-  /* v2：账号子视图（注册/改密/找回）随宿主模式，本地 Studio 不提供——
-   * 入口一律明说，不发任何 /api/auth/* 请求（旧端点在 v2 已退役）。 */
-  function accountUnsupported() {
-    toast("本地 Studio 不支持账号注册 / 改密 / 找回（随宿主模式提供）", "warn");
+    if (!box) return;
+    box.style.display = "none";
+    /* 配额 ≥999999 = 不限（与网关硬闸同约定）：分母写 ∞，与有限配额同列 */
+    const cap = (v, c) => (typeof v === "number" ? v.toFixed(2) : "—")
+      + (Number(c) >= 999999 ? " / ∞" : (" / " + (typeof c === "number" ? c : "?")));
+    fetch("/usage").then((r) => r.json()).then((u) => {
+      if (!u || u.gateway === false || u.logged_in === false) return;
+      const q = u.quota || {};
+      $("v2-u-gpu").textContent = cap(u.gpu_hours, q.gpu_hours_monthly) + " h";
+      $("v2-u-cpu").textContent = cap(u.cpu_hours, q.cpu_hours_monthly) + " h";
+      $("v2-u-gpu-n").textContent =
+        typeof u.count === "number" ? u.count + " jobs" : "";
+      $("v2-u-cpu-n").textContent =
+        typeof u.cpu_count === "number" ? u.cpu_count + " jobs" : "";
+      $("v2-acct-usage-head").textContent = "Usage · " + (u.month || "this month");
+      box.style.display = "block";
+    }).catch(() => { /* 拿不到就不显示：不编数字 */ });
   }
   const showView = (v) => {
-    if (v === "register" || v === "passwd" || v === "recover") {
-      accountUnsupported();
-      v = "login";
-    }
-    ["login", "register", "passwd", "recover", "account"].forEach((k) => {
+    ["login", "account"].forEach((k) => {
       const el = $("v2-view-" + k);
       if (el) el.style.display = k === v ? "block" : "none";
     });
@@ -707,7 +676,7 @@ function connDialog(initialView) {
   async function doLogin(u, p) {
     if (!u || !p) { msg("Enter your username and password"); return false; }
     try {
-      const j = await GenieApp.login(u, p);
+      const j = await login(u, p);
       if (j && j.ok) { close(); location.reload(); return true; }
       msg(j && j.detail ? j.detail : "Sign-in failed");
     } catch (e) { msg("Login request failed: " + e); }
@@ -719,69 +688,20 @@ function connDialog(initialView) {
     doLogin(u, p);
   }
 
-  /* ── Register ── */
-  let sendLeft = 0, sendTimer = null, nameTimer = null, nameOk = false;
-  const tick = () => {
-    const btn = $("v2-reg-send");
-    if (!btn) return;
-    if (sendLeft > 0) {
-      btn.disabled = true;
-      btn.textContent = `Resend (${sendLeft}s)`;
-      sendLeft -= 1;
-      sendTimer = setTimeout(tick, 1000);
-    } else {
-      btn.disabled = false;
-      btn.textContent = "Send code";
-    }
-  };
-  async function sendCode() { accountUnsupported(); }
-  function checkName() {
-    const hint = $("v2-name-hint");
-    if (hint) hint.textContent = "";
-    nameOk = false;
-  }
-  async function doRegister() { accountUnsupported(); }
-
-  /* ── Change password ── */
-  async function doPasswd() { accountUnsupported(); }
-
-  /* ── Reset password ── */
-  let recLeft = 0, recTimer = null;
-  const recTick = () => {
-    const btn = $("v2-rec-send");
-    if (!btn) return;
-    if (recLeft > 0) {
-      btn.disabled = true;
-      btn.textContent = `Resend (${recLeft}s)`;
-      recLeft -= 1;
-      recTimer = setTimeout(recTick, 1000);
-    } else {
-      btn.disabled = false;
-      btn.textContent = "Send code";
-    }
-  };
-  async function sendRecCode() { accountUnsupported(); }
-  async function doRecover() { accountUnsupported(); }
 
   /* ── 事件委托 ── */
   wrap.addEventListener("click", (e) => {
     /* 闸门态：点遮罩/取消都不关（必须登录才能进） */
-    if (window.__authGate
+    if (_authGate
         && (e.target === wrap
             || (e.target.closest && (e.target.closest("#v2-conn-cancel")
-                || e.target.closest("#v2-reg-cancel")
-                || e.target.closest("#v2-pwd-cancel")
-                || e.target.closest("#v2-rec-cancel")
                 || e.target.closest("#v2-conn-x"))))) return;
     if (e.target === wrap) { close(); return; }
     const hit = (id) => e.target.closest && e.target.closest("#" + id);
-    if (hit("v2-conn-cancel") || hit("v2-reg-cancel") || hit("v2-pwd-cancel")
-        || hit("v2-rec-cancel") || hit("v2-acct-cancel") || hit("v2-conn-x")) { close(); return; }
-    if (hit("v2-acct-cancel")) { close(); return; }
+    if (hit("v2-conn-cancel") || hit("v2-acct-cancel")
+        || hit("v2-conn-x")) { close(); return; }
     if (hit("v2-acct-signout")) {
-      /* v2 语义：登出只撤 host 的云凭据（Q2.1），模型与脚本都保留——
-       * 不再有"重新登录 = 空模型"的两段式警告。 */
-      GenieApp.logout().catch(() => {});
+      logout().catch(() => {});
       localStorage.removeItem("genie_v2_api_key");
       localStorage.removeItem("genie_v2_username");
       localStorage.removeItem("genie_v2_script");
@@ -790,64 +710,32 @@ function connDialog(initialView) {
       return;
     }
     if (hit("v2-conn-save")) doConnect();
-    if (hit("v2-reg-switch") || hit("v2-recover-switch")
-        || hit("v2-cp-switch") || hit("v2-acct-cp")) {
-      accountUnsupported();
-      return;
-    }
-    if (hit("v2-login-switch")) showView("login");
-    if (hit("v2-pwd-back")) showView("login");
-    if (hit("v2-rec-back")) showView("login");
-    if (hit("v2-reg-send")) sendCode();
-    if (hit("v2-reg-save")) doRegister();
-    if (hit("v2-pwd-save")) doPasswd();
-    if (hit("v2-rec-send")) sendRecCode();
-    if (hit("v2-rec-save")) doRecover();
-  });
-  wrap.addEventListener("input", (e) => {
-    if (e.target && e.target.id === "v2-reg-name") {
-      const cleaned = e.target.value.replace(/[^A-Za-z0-9_-]/g, "");
-      if (cleaned !== e.target.value) e.target.value = cleaned;
-      if (nameTimer) clearTimeout(nameTimer);
-      nameTimer = setTimeout(checkName, 300);
-    }
   });
   $("v2-conn-pass").addEventListener("keydown", (e) => {
     if (e.key === "Enter") doConnect();
-  });
-  $("v2-reg-pass").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") doRegister();
-  });
-  $("v2-pwd-new").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") doPasswd();
-  });
-  $("v2-rec-new").addEventListener("keydown", (e) => {
-    if (e.key === "Enter") doRecover();
   });
   showView(initialView === "account" && loggedIn ? "account" : "login");
 }
 $("login-toggle").addEventListener("click", () => {
   /* 站长裁决：已登录 = 按钮显示用户名，点击弹 Account 框（Sign out 主按钮）；
    * 未登录 = Connect，点击弹登录框。v2 登录态 = host 凭据仓（GET /auth）。 */
-  connDialog(window.__genieAuth && window.__genieAuth.logged_in ? "account" : "login");
+  connDialog(_genieAuth && _genieAuth.logged_in ? "account" : "login");
 });
 $("login-toggle").title = "Sign in — the host holds the cloud token";
 
-/* ── 未登录闸门（v1 同款 B 方案；v2 连线：登录态 = GET /auth 服务端真相）
- * 未登录且配置了网关 → 铺满遮罩 + 强制弹登录框（不可关）。 */
-window.__authGate = false;
-window.__genieAuth = null;
+let _authGate = false;
+let _genieAuth = null;
 (function applyAuthGate() {
   const show = () => {
-    window.__authGate = true;
+    _authGate = true;
     document.body.classList.add("auth-locked");
     const gate = document.getElementById("auth-gate");
     if (gate) gate.classList.remove("hidden");
     connDialog("login");
   };
-  GenieApp.status()
+  status()
     .then((a) => {
-      window.__genieAuth = a || null;
+      _genieAuth = a || null;
       if (a && a.logged_in) return;            /* 已登录：闸不出现 */
       if (a && a.gateway === false) return;    /* 未配置网关：本地形态 */
       show();
@@ -859,14 +747,100 @@ window.__genieAuth = null;
 $("run-py").addEventListener("click", runScript);
 /* title 已由 index.html 声明（英文），无需运行期覆盖 */
 
-window.getCfg = () => structuredClone(cfg);
-window.__scene3dCount = () => scene && scene.structureGroup
-  ? scene.structureGroup.children.length : -1;
-/* G59 已核实（2026-10-23）：termBusy 是 term.js 的**纯提交闸门**（防连点），
- * 不是忙闲镜像（进度条 = worker 现值投影，kernel_worker 头注的"废除旁证"
- * 指的是后者）。本导出仅供 e2e 探针（m2_gui_smoke）消费。 */
-window.__termState = () => ({ busy: termBusy, seq: SessionSync.lineSeq, cfgSeq: SessionSync.cfgSeq });
-window.__termText = () => (document.getElementById("term-out") || {}).textContent || "";
+
+
+/* ── 作业进度卡：rollup → 进度条（P1-21 步进/批形两种喂法）── */
+function feedJobProgress(data) {
+  if (!data) return;
+  const jobs = data.jobs || {};
+  const ids = Object.keys(jobs);
+  const total = Number(data.total) || ids.length;
+  let terminal = 0, failed = Number(data.failed) || 0;
+  for (const id of ids) {
+    const st = (jobs[id] || {}).state;
+    if (st === "done" || st === "failed" || st === "killed" || st === "canceled") {
+      terminal += 1;
+    }
+  }
+  const finished = Math.max((Number(data.done) || 0) + failed, terminal);
+  const allTerminal = total > 0 && finished >= total;
+  if (sweepRun.name) {
+    sweepPaneEvent({
+      sweep_id: sweepRun.name,
+      total: total || sweepRun.total,
+      rollup: { succeeded: Math.max(0, finished - failed), failed },
+      state: allTerminal ? "done" : "running",
+    });
+    if (allTerminal) sweepRun.name = "";
+  }
+  if (!allTerminal) {
+    const running = ids.filter((id) => {
+      const st = (jobs[id] || {}).state;
+      return st !== "done" && st !== "failed" && st !== "killed"
+        && st !== "canceled";
+    });
+    const dg = running.length === 1 && jobs[running[0]]
+      && jobs[running[0]].digest || null;
+    const steps = dg && dg.compute && dg.compute.steps;
+    if (dg && steps && Number(steps.total) > 0) {
+      jobProgress({
+        step: Number(steps.done) || 0, n_steps: Number(steps.total),
+        job_id: running[0], digest: dg,
+        batch: total > 1 ? { finished, total } : null,
+      });
+      return;
+    }
+    jobProgress({ step: finished, n_steps: total, job_id: ids[0] || "" });
+    return;
+  }
+  if (ids[0]) setLastJobId(ids[0]);
+  refreshResultChip();
+  const chip = document.getElementById("result-chip");
+  if (chip && !resultStatus) {
+    chip.classList.remove("hidden");
+    chip.textContent = "";
+    const sp = document.createElement("span");
+    sp.className = "jobprog-txt";
+    sp.textContent = (failed > 0 ? "✗ " + failed + " failed · " : "✓ ")
+      + "job " + (ids[0] || "?") + " · results/" + (ids[0] || "?") + ".h5";
+    sp.title = "结果成员在 .gensim 里";
+    chip.appendChild(sp);
+  }
+}
+
+/* 环批次 → 显示层：终端/表单/树/3D 由 SessionSync 统一收口 */
+onBatch((snap, epochChanged) => {
+  if (epochChanged) {
+    const out = document.getElementById("term-out");
+    if (out) out.textContent = "";
+  }
+  SessionSync.ingest(snap);
+  if (snap.job_progress) feedJobProgress(snap.job_progress);
+});
+
+/* 窗口内刷新 + 项目快捷键（2026-11-22）：Ctrl+R / F5 重载；
+ * Ctrl+N/O/S 与 Ctrl+Shift+S（Save As）——Ctrl+S 是浏览器"保存网页"，
+ * 必须 preventDefault；窗口与浏览器行为一致。 */
+document.addEventListener("keydown", (e) => {
+  const ctrl = e.ctrlKey || e.metaKey;
+  const k = e.key.toLowerCase();
+  if ((ctrl && !e.shiftKey && !e.altKey && k === "r") || e.key === "F5") {
+    e.preventDefault();
+    location.reload();
+    return;
+  }
+  if (!ctrl || e.altKey) return;
+  if (k === "s") {
+    e.preventDefault();
+    (e.shiftKey ? fileSaveAs : fileSave)();
+  } else if (k === "o") {
+    e.preventDefault();
+    fileOpen();
+  } else if (k === "n") {
+    e.preventDefault();
+    fileNew();
+  }
+});
 
 /* ── 启动 ── */
 renderTree();          /* 首屏就画树（无模型给空态引导，不留白板） */
@@ -874,8 +848,8 @@ renderInspector();
 /* 编辑器文本 = 工作区 script.py，由连线层（modules/app.js）载入/即敲即存。 */
 
 /* ── 开屏对齐：v2 环投影一拍（输出与 cfg 快照的唯一来源）────────── */
-function bootSyncSession() {
-  return GenieApp.pollOnce().catch(() => {});
+export function bootSyncSession() {
+  return pollOnce().catch(() => {});
 }
 
 /* ── 启动登录态回显（v2：GET /auth 的服务端真相；无浏览器 token）── */
@@ -893,10 +867,9 @@ function bootSyncSession() {
     window.dispatchEvent(new CustomEvent("genie-login",
       { detail: { on: true, name } }));
   };
-  window.__setLoginLabel = setLoginLabel;
-  GenieApp.status()
+  status()
     .then((a) => {
-      window.__genieAuth = a || null;
+      _genieAuth = a || null;
       if (a && a.logged_in) {
         setLoginLabel(a.username
           || (localStorage.getItem("genie_v2_username") || "user"));

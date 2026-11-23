@@ -41,7 +41,7 @@ from urllib.parse import parse_qs, urlparse
 from pydantic.fields import FieldInfo
 from genie_protocol import _wire
 
-from . import auth, card, cred, gw
+from . import auth, card, cred, dialogs, gw
 from .script import ScriptState
 from genie.net.client import WORKER_TOKEN_HEADER
 from genie.session import Session
@@ -271,8 +271,9 @@ def form_fields(collection: str, kind=None) -> list[dict]:
 
 #: Which add_* shells the GUI may create per collection. Materials are
 #: narrowed to the two online wire shapes: ``from_library`` is a dead node
-#: the line format rejects (the library flow goes through genie.mat_from_nk
-#: instead); geometry / source / monitor kinds are reflected below.
+#: the line format rejects (the library flow goes through
+#: add_material(type='library') + fit_material instead); geometry /
+#: source / monitor kinds are reflected below.
 _MAT_ADD_KINDS = ("const", "lorentz")
 
 
@@ -406,7 +407,31 @@ class App:
 
     # -- lifecycle ----------------------------------------------------
 
+    def _live_instance_port(self):
+        """The port of an already-running Studio, or None. **Judged by the
+        plate's pid being alive**, not by dialing the port: orphaned
+        WebView2/HTTP leftovers kept answering and blocked honest restarts
+        (2026-11-22 实测). Single instance is deliberate — two Studios
+        would write the same workspace document from two processes."""
+        import os
+        plate = read_plate(self.plate_path)
+        pid = (plate or {}).get("pid")
+        if not pid:
+            return None
+        try:
+            os.kill(int(pid), 0)                   # Windows: raises if gone
+        except (OSError, ValueError):
+            return None
+        return plate.get("port")
+
     def start(self) -> None:
+        live = None
+        if not __import__("os").environ.get("GENIE_ALLOW_MULTI_STUDIO"):
+            live = self._live_instance_port()
+        if live is not None:
+            raise RuntimeError(
+                f"Genie Studio already running at http://127.0.0.1:{live} "
+                f"— use that window (close it first)")
         outer = self
 
         class _Handler(_RouteHandler):
@@ -546,6 +571,8 @@ class _RouteHandler(BaseHTTPRequestHandler):
                                         "busy": app.session.busy})
             if path == "/auth":                     # login status (whoami-backed, sanitized)
                 return self._json(200, auth.status(app))
+            if path == "/usage":                    # month ledger + quota (gateway /api/usage)
+                return self._json(200, auth.usage(app))
             if path == "/workspace":                # the process working directory (read-only info)
                 return self._json(200, {"root": app.workspace})
             if path == "/sweeps":                   # sweep accounts (parameter_sweep_<name>/index.json)
@@ -570,6 +597,21 @@ class _RouteHandler(BaseHTTPRequestHandler):
             return self._json(404, {"error": "no route"})
 
         body = self._read_json()
+        if path == "/pick":                        # native file dialog (browser can't)
+            mode = (body or {}).get("mode") or "open"
+            fn = dialogs.ask_save if mode == "save" else dialogs.ask_open
+            picked = fn((body or {}).get("title") or "",
+                        [(body.get("label") or "Genie simulation",
+                          (body or {}).get("pattern") or "*.gensim")],
+                        (body or {}).get("initial"))
+            return self._json(200, {"path": picked})
+        if path == "/reveal":                      # Explorer at the document
+            target = (body or {}).get("path") or app.workspace
+            try:
+                os.startfile(os.path.dirname(target) or target)
+            except OSError as e:
+                return self._json(400, {"error": str(e)})
+            return self._json(200, {"ok": True})
         if path == "/auth/login":                  # the GUI login (token captured host-side)
             return self._json(200, auth.login(
                 app, str(body.get("username") or ""),

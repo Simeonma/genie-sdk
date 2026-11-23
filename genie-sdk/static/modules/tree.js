@@ -1,35 +1,38 @@
+import { $ } from "./util.js";
+import { addIntents, removeIntent, sendIntent, sendIntents } from "./edit.js";
+import { FormPanel } from "../views/form.js";
+import { iconEl } from "../icons.js";
+import { selectObj } from "./inspector.js";
+import { GEO_TYPE_LABEL, previewEl } from "../views/previews.js";
+import { matColor } from "../views/scene3d.js";
+import { TREE_META, cfg, toast, treeGroupOpen, treePreviewIcon, treeSel } from "./state.js";
 /* modules/tree.js — 左树（v1 renderTree 同款 DOM）
  * G5 拆分（2026-10-14）：自 app.js 机械切出，零行为变化；
  * 经典 script 按序加载，跨模块引用为运行期全局查找。 */
 
 /* 未命名对象行退回的可读类型名（几何走 previews.js 的 GEO_TYPE_LABEL，
  * 源/监视器走本表——行内只留一个词，见 renderTree 的命名注释）。 */
-const KIND_TYPE_LABEL = {
+export const KIND_TYPE_LABEL = {
   soft_source: "Dipole", plane_wave: "Plane wave", gaussian_beam: "Gaussian",
   time: "Time", freq: "Freq", index: "Index",
 };
 
 /* ══ 树（v1 renderTree 同款 DOM；器官在、接线无） ═════════════ */
-function renderTree() {
+export function renderTree() {
   const root = $("obj-tree");
   if (!root) return;
   root.setAttribute("role", "tree");
   root.setAttribute("aria-label", "场景内容树");
 
-  /* ══ 行规格模型（2026-10-15 站长裁决：树虚拟滚动）═══
-   * 先建"行描述"模型（不碰 DOM），再按规模二选一：
-   *   ≤ TREE_VIRTUAL_THRESHOLD 行 → 一次性物化（小配置零行为变化）
-   *   超阈值 → 虚拟滚动：只物化可视窗口 ± overscan 的行，
-   *   万级几何也只要 ~40 个 DOM 行（预览图标/按钮随窗口按需建） */
   const TREE_VIRTUAL_THRESHOLD = 250;
   const TREE_ROW_H = 28;          /* 虚拟模式行高（CSS 同步钉死，见 style.css） */
   const OVERSCAN = 6;
 
   const model = [];
-  const pushHead = (label, key, count, band) =>
-    model.push({ t: "head", label, key, count, band });
-  const pushInfo = (label, kind) => model.push({ t: "info", label, kind });
-  const pushObj = (kind, i, label) => model.push({ t: "obj", kind, i, label });
+  const pushHead = (label, key, count, band, sub) =>
+    model.push({ t: "head", label, key, count, band, sub });
+  const pushInfo = (label, kind, sub) => model.push({ t: "info", label, kind, sub });
+  const pushObj = (kind, i, label, sub) => model.push({ t: "obj", kind, i, label, sub });
 
   const open = (key) => treeGroupOpen[key] !== false;
 
@@ -46,29 +49,52 @@ function renderTree() {
       pushObj("materials", i, item.name || "?"));
   }
 
-  pushHead("Scene", "content", null, true);
-  if (open("content")) {
-    pushInfo(TREE_META.domain[1], "domain");
-    pushInfo(TREE_META.mesh[1], "mesh");
-    for (const kind of ["geometry", "source", "monitor"]) {
-      const list = (cfg && cfg[kind]) || [];
-      list.forEach((item, i) => {
-        /* 2026-10-21 用户定案：「对象行只给一个名字」——不再拼 "名字 · 类型 ·
-         * 材料" 三段。有名字用名字，没名字退回可读类型名。 */
-        const fallback = GEO_TYPE_LABEL[item.type]
-          || KIND_TYPE_LABEL[item.type] || item.type;
-        pushObj(kind, i, item.name || fallback);
-      });
+  /* 共享结构（不属于任何求解器——Q15 分层）：几何单独一节 */
+  pushHead("Structures", "structs", (cfg && cfg.geometry || []).length, true);
+  if (open("structs")) {
+    ((cfg && cfg.geometry) || []).forEach((item, i) => {
+      const fallback = GEO_TYPE_LABEL[item.type] || item.type;
+      pushObj("geometry", i, item.name || fallback);
+    });
+  }
+
+  pushHead("Solvers", "solvers", (cfg && cfg.solvers || []).length || null, true);
+  if (open("solvers")) {
+    for (const sv of ((cfg && cfg.solvers) || [])) {
+      const key = "solver:" + sv.name;
+      pushHead(sv.name, key, null, false, true);
+      if (!open(key)) continue;
+      if (sv.kind === "fdtd") {
+        pushInfo(TREE_META.domain[1], "domain", true);
+        pushInfo(TREE_META.mesh[1], "mesh", true);
+        ((cfg && cfg.source) || []).forEach((item, i) => {
+          const fallback = KIND_TYPE_LABEL[item.type] || item.type;
+          pushObj("source", i, item.name || fallback, true);
+        });
+        ((cfg && cfg.monitor) || []).forEach((item, i) => {
+          const fallback = KIND_TYPE_LABEL[item.type] || item.type;
+          pushObj("monitor", i, item.name || fallback, true);
+        });
+      }
+      /* mode 的包络表单分段归 L-13（本节点先只作声明存在） */
     }
-    const hasSceneObject = ["geometry", "source", "monitor"].some(
-      (k) => ((cfg && cfg[k]) || []).length > 0);
-    if (!hasSceneObject) model.push({ t: "hint" });
+    if (!((cfg && cfg.solvers) || []).length)
+      model.push({ t: "hint" });
+  }
+
+  /* 后处理配方（Q11）：模型级具名对象，不属于任何求解器——只读消费
+   * 结果，不创建任何模型对象。配方全文随 cfg 快照来（gui_snapshot）。 */
+  pushHead(TREE_META.analysis[1], "analysis",
+    (cfg && cfg.analysis || []).length, true);
+  if (open("analysis")) {
+    ((cfg && cfg.analysis) || []).forEach((rec, i) =>
+      pushObj("analysis", i, rec.name || "?"));
+    if (!((cfg && cfg.analysis) || []).length)
+      model.push({ t: "hint" });
   }
 
   pushHead("Run", "run", null, true);
   if (open("run")) {
-    /* 扫参与 Settings 并列（2026-10-30 站长裁）：扫描是"怎么跑"的事，
-     * 不是参数表的事——入口挂在 Run 组里，参数页回归纯单值表。 */
     pushInfo("Settings", "run");
     pushInfo("Sweep", "sweep");
   }
@@ -78,7 +104,7 @@ function renderTree() {
     const openNow = treeGroupOpen[sp.key] !== false;
     const g = document.createElement("div");
     g.className = "tree-group-head" + (openNow ? "" : " closed")
-      + (sp.band ? " tree-band" : "");
+      + (sp.band ? " tree-band" : "") + (sp.sub ? " tree-sub" : "");
     g.tabIndex = 0;
     g.setAttribute("role", "button");
     g.setAttribute("aria-expanded", openNow ? "true" : "false");
@@ -110,7 +136,8 @@ function renderTree() {
   const mkInfoEl = (sp) => {
     const row = document.createElement("div");
     const active = treeSel.kind === sp.kind && treeSel.i == null;
-    row.className = "tree-item" + (active ? " active" : "");
+    row.className = "tree-item" + (active ? " active" : "")
+      + (sp.sub ? " tree-sub" : "");
     row.tabIndex = 0;
     row.setAttribute("role", "treeitem");
     row.setAttribute("aria-selected", active ? "true" : "false");
@@ -141,7 +168,8 @@ function renderTree() {
   const mkObjectRowEl = (sp) => {
     const row = document.createElement("div");
     const active = treeSel.kind === sp.kind && treeSel.i === sp.i;
-    row.className = "tree-item" + (active ? " active" : "");
+    row.className = "tree-item" + (active ? " active" : "")
+      + (sp.sub ? " tree-sub" : "");
     row.tabIndex = 0;
     row.setAttribute("role", "treeitem");
     row.setAttribute("aria-selected", active ? "true" : "false");
@@ -178,19 +206,20 @@ function renderTree() {
     const cp = document.createElement("button");
     cp.className = "tree-copy mini";
     cp.appendChild(iconEl("copy"));
-    cp.title = `复制 ${sp.label}（插入副本到下一行）`;
-    cp.setAttribute("aria-label", `复制 ${sp.label}`);
-    cp.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const list = cfg && cfg[sp.kind];
-      if (!Array.isArray(list) || !list[sp.i]) return;
-      const copy = JSON.parse(JSON.stringify(list[sp.i]));
-      if (copy && copy.name) copy.name = `${copy.name}_copy`;
-      list.splice(sp.i + 1, 0, copy);
-      onFormMutate();
-      selectObj(sp.kind, sp.i + 1);
-      toast(`已复制 ${sp.label}`, "ok");
-    });
+    if (sp.kind === "analysis") { cp.style.display = "none"; }  // 配方不支持复制
+    else {
+      cp.title = `复制 ${sp.label}（插入副本到下一行）`;
+      cp.setAttribute("aria-label", `复制 ${sp.label}`);
+      cp.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const list = cfg && cfg[sp.kind];
+        if (!Array.isArray(list) || !list[sp.i]) return;
+        const copy = JSON.parse(JSON.stringify(list[sp.i]));
+        if (copy && copy.name) copy.name = `${copy.name}_copy`;
+        sendIntents(addIntents(sp.kind, copy.name, copy.type, copy));
+        toast(`已提交复制 ${sp.label}`, "ok");
+      });
+    }
     row.appendChild(cp);
     const x = document.createElement("button");
     x.className = "tree-del mini";
@@ -199,11 +228,17 @@ function renderTree() {
     x.setAttribute("aria-label", `删除 ${sp.label}`);
     x.addEventListener("click", (e) => {
       e.stopPropagation();
+      /* 分析配方不是 wire 模型字段（Q11）：删除走动词，不 splice 本地 cfg */
+      if (sp.kind === "analysis") {
+        exec("genie.remove(" + JSON.stringify("analysis." + sp.label)
+                      + ")", { echo: false }).catch(() => {});
+        toast(`已删除 ${sp.label}`, "info");
+        return;
+      }
       const list = cfg && cfg[sp.kind];
       if (!Array.isArray(list) || !list[sp.i]) return;
-      list.splice(sp.i, 1);
-      onFormMutate();
-      toast(`已删除 ${sp.label}（重跑脚本将整体重建）`, "info");
+      sendIntent(removeIntent(sp.kind, list[sp.i].name));
+      toast(`已提交删除 ${sp.label}`, "info");
     });
     row.appendChild(x);
     row.addEventListener("click", () => selectObj(sp.kind, sp.i));
@@ -213,13 +248,11 @@ function renderTree() {
   const mkHintEl = () => {
     const hint = document.createElement("div");
     hint.className = "tree-empty-hint";
-    const ic = iconEl("sparkle");
+    const ic = iconEl("brandmark");
     ic.setAttribute("aria-hidden", "true");
     ic.classList.add("tree-hint-ic");
     hint.appendChild(ic);
     hint.appendChild(document.createTextNode(
-      /* 2026-10-21：新建模型现在是**空文档**（无任何默认值），不再是
-       * "脚本没跑"——引导语要指向表单与工具栏，而不是让人去写脚本。 */
       cfg ? "空模型——用上方工具栏加材料 / 结构，或在检查器里填 domain"
           : "登录后即可编辑；也可以粘贴脚本按 Run"));
     return hint;

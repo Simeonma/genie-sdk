@@ -27,7 +27,7 @@
 }
 .toast-dot {
   width: 7px; height: 7px; border-radius: 50%; flex: none;
-  margin-top: 6px; background: var(--accent);
+  margin-top: 6px; background: var(--brand-bengara);   /* info 点 = 品牌弁柄红 */
 }
 .toast-ok .toast-dot { background: var(--success); }
 .toast-warn .toast-dot { background: var(--warning); }
@@ -92,8 +92,7 @@
   --bg-elevated: #FFFFFF;        /* L2 overlay */
   --bg-input: #FFFFFF;
   --bg-hover: #EDF0F4;           /* 中性 hover 填充（可点≠选中） */
-  --bg-active: #E7EFFA;          /* 选中底（accent 8% 台面） */
-  --bg-flash: #FDF3D7;           /* 变更提示闪底（琥珀族） */
+  --bg-active: #E7EFFA;          /* 选中底（accent 8% 台面） */           /* 变更提示闪底（琥珀族） */
   /* 发丝线三级（唯一分层手段）：
    * soft = 面板内部（表头/节带/行间）· border = 面板边界 · raise = 控件描边 */
   --border: #DCE0E6;             /* --c-line */
@@ -106,11 +105,12 @@
   --text-secondary: #39434E;     /* --c-ink-2 正文 / 标签 / 控件文案 */
   --text-muted: #5E6A76;         /* --c-ink-3 注记 / 单位 / 组标题
                                   * 白底 5.6:1，色带(#F2F4F7)上 5.2:1 ≥4.5 */
+  /* 品牌三色（20-market final7，2026-11-22）：墨 / 弧灰 / 弁柄红——
+   * 只做点缀（标记、空态引导、状态点），不当强调色用；强调仍是 --accent */
+  --brand-bengara: #9E3D2E;
   /* 唯一强调色 (5% 用量纪律) */
   --accent: #1F62B0;
   --accent-2: #1A518F;                    /* hover 深一档（比 accent 深） */
-  --accent-dim: #1F62B0;
-  --accent-grad: linear-gradient(180deg, var(--accent-2) 0%, #1F62B0 100%);
   /* 强调色的浅底/描边/光晕（2026-09 归一：与 success/warning/danger 同约定——
    * soft 0.10 浅底 / line 0.35 描边；glow 独立刻度，只在输入聚焦上用） */
   --accent-soft: rgba(31, 98, 176, 0.10);    /* 强调·浅底 / hover 微蓝底 */
@@ -121,8 +121,7 @@
    * 此前自引用 var(--success)/var(--danger) 解析为空、语义色整体失效） */
   --success: #1F7A4D;
   --warning: #9A6700;
-  --danger: #C0392B;
-  --info: var(--accent);            /* 信息 = 强调蓝（与 --accent 同值, 具名语义化;
+  --danger: #C0392B;            /* 信息 = 强调蓝（与 --accent 同值, 具名语义化;
                                     * 此前 info 态直接引用 --accent, 语义不显式） */
   /* 语义色 tint（标准化 alpha，L1 收尾：语义色的浅底/描边不再各自硬编码
    * rgba——从一个色值 + 一个 alpha 派生，取代此前鲜亮的 61,214,140 /
@@ -158,10 +157,7 @@
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
-  --space-5: 20px;
   --space-6: 24px;
-  --space-8: 32px;
-  --space-10: 40px;
   --ease: cubic-bezier(0.25, 0.46, 0.45, 0.94);
   /* 动效令牌（2026-09 L3 收敛：唯一 3 个时长 + 1 个缓动。此前 6 种时长
    * 0.12/0.15/0.18/0.2/0.22/var(--dur-slow) 各自为政，收敛为 fast/base/slow） */
@@ -172,7 +168,6 @@
    * tree-group-head / tree-band / sec-head 底形）字距统一为 0.6px——11px 千字距
    * 0.055em≈0.6px 的既定写法。非标题例外（用途注释在各声明处）: 品牌 0.2px /
    * mono 信息条 0.4px。 */
-  --ls-title: 0.6px;
   /* 代码面底 —— 真源 = design-system.md「语法高亮白名单/代码底」条目, 于 :root 唯一化
    * （token 单源铁律：本行是唯一定义, 不再裸写 hex；.pycode/
    * .st-code 等代码面一律以 var(--bg-code) 引用；表单输入下沉面见 --bg-sunken） */
@@ -200,20 +195,11 @@
   /* ══ 场景画布语义色（真源 token 2026-09 Round A：有限色相 · 减绿 · 逐色映射）
    * 纪律：DOM 层真源 = 本块；scene_palette.js 逐色以 0xRRGGBB 同值映射并在注释
    * 标注 token。对象按"物理语义"区分——几何=中性物料/源=信号蓝/监视器=全息青/
-   * PML=吸波琥珀/底=中性浅。无绿、无彩虹、单蓝族。 */
-  --scene-bg-top: #FEFEFE;       /* 场景渐变顶端 = L1 白纸 */
-  --scene-bg-bottom: #E9EFF7;    /* 场景渐变底端 = 冷浅底（原白名单值保留） */
+   * PML=吸波琥珀/底=中性浅。无绿、无彩虹、单蓝族。 */       /* 场景渐变顶端 = L1 白纸 */    /* 场景渐变底端 = 冷浅底（原白名单值保留） */
   --scene-grid: #A6BCD0;         /* 网格线（浅底画布） */
   --scene-edge: #8A96A6;         /* 域边线 */
-  --scene-edge-dot: var(--accent); /* 域角点 = 强调蓝 */
-  --scene-object: #A6B6C8;       /* 几何体填充 = 中性物料浅面（硅/聚合物料感） */
-  --scene-object-edge: #7E91A6;  /* 几何体线框描边（比填充深一档） */
-  --scene-pml: #C99A3F;          /* 吸收边界（PML）壳 = 琥珀（物理吸波） */
-  --scene-source: #D85A8C;       /* 源 = 玫粉（发光/注入面/方向箭）——暖色读作"光" */
-  --scene-monitor: #2E9FC4;      /* 监视器 = 青蓝半透明覆层——冷色读作"探测" */
-  --scene-axis: #7A93AC;         /* 坐标轴 = 弱化仪器灰蓝 */
-  --scene-label-bg: #F4F8FC;     /* 标签卡 = L2 白浮层 */
-  --scene-label-ink: #1C2A38;    /* 标签卡文字深墨 */
+  --scene-edge-dot: var(--accent); /* 域角点 = 强调蓝 */       /* 几何体填充 = 中性物料浅面（硅/聚合物料感） */  /* 几何体线框描边（比填充深一档） */
+  --scene-pml: #C99A3F;          /* 吸收边界（PML）壳 = 琥珀（物理吸波） */       /* 源 = 玫粉（发光/注入面/方向箭）——暖色读作"光" */      /* 监视器 = 青蓝半透明覆层——冷色读作"探测" */         /* 坐标轴 = 弱化仪器灰蓝 */
 }
 
 html,body {
@@ -290,14 +276,6 @@ button:not(:disabled):active,.tool-btn:not(:disabled):active,.tb-btn:not(:disabl
   text-transform: uppercase; letter-spacing: 0.07em;
   margin-left: 2px; padding-left: 12px; border-left: 1px solid var(--border);
   line-height: 1; font-weight: 500;
-}
-/* 版本徽章：无填充、1px 描边、mono 字——规格标签而非彩色贴纸 */
-.vbadge {
-  font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 600;
-  letter-spacing: 0.06em; color: var(--text-muted);
-  background: none; border: 1px solid var(--border-raise);
-  padding: 2px 5px; border-radius: var(--radius-xs);
-  line-height: 1; flex-shrink: 0;
 }
 /* 动作簇：手册=静默文字钮；连接=描边钮（状态点承担「已连接/未连接」语义，
  * 按钮本身不再用实心黑块抢整个顶栏的注意力） */
@@ -977,8 +955,6 @@ input::placeholder,textarea::placeholder {
 #files-table tr.files-row.previewable td.files-name {
   color: var(--accent-2); text-decoration: underline dotted;
 }
-.files-dl { color: var(--accent-2); text-decoration: none; white-space: nowrap; }
-.files-dl:hover { text-decoration: underline; }
 button.files-del { padding: 1px 8px; font-size: var(--fs-xs); }
 #files-empty {
   font-size: var(--fs-sm);
@@ -990,11 +966,6 @@ button.files-del { padding: 1px 8px; font-size: var(--fs-xs); }
   flex-shrink: 0; padding: 10px;
   border: 1px solid var(--border-soft); border-radius: var(--radius);
   background: #fff;
-}
-.files-preview-head {
-  display: flex; align-items: center; justify-content: space-between;
-  gap: 8px; margin-bottom: 8px;
-  font-size: var(--fs-sm); font-weight: 600; color: var(--text-primary);
 }
 .files-preview img {
   display: block; max-width: 100%; max-height: 42vh;
@@ -1021,17 +992,17 @@ button.files-del { padding: 1px 8px; font-size: var(--fs-xs); }
 .ruler-lbl {
   position: absolute; left: 0; top: 0;
   transform: translate(0, 0);
-  margin: -7px 0 0;
-  font: 600 11px/14px ui-monospace, "Cascadia Mono", Consolas, monospace;
-  color: #10151A;
+  margin: -6px 0 0;
+  font: 500 10px/13px ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color: #3E4A57;
   letter-spacing: 0.01em;
   white-space: nowrap;
-  text-shadow: 0 0 3px #EFF1F4, 0 0 3px #EFF1F4, 0 0 4px #EFF1F4;
+  text-shadow: 0 0 3px #F4F7FA, 0 0 3px #F4F7FA;
   will-change: transform;
 }
 .ruler-lbl i {
-  font-style: normal; font-weight: 600;
-  color: #5E6A76; opacity: 0.75; margin-right: 3px;
+  font-style: normal; font-weight: 500;
+  color: #8A96A3; opacity: 0.9; margin-right: 3px;
 }
 /* 不可用的工具钮（2D 降级缺显示能力，G39）：置灰 + 不响应，title 写明原因 */
 .tool-btn.is-disabled,
@@ -1078,13 +1049,6 @@ body.auth-locked #v2-conn { background: transparent; }
 .auth-gate-brand {
   font: 600 26px/1 var(--font-mono); letter-spacing: 0.10em;
   color: var(--text-primary);
-}
-.auth-gate-brand span {
-  margin-left: 8px; padding: 2px 5px;
-  font-size: 11px; letter-spacing: 0.06em;
-  color: var(--text-secondary);
-  border: 1px solid var(--border); border-radius: var(--radius-sm);
-  vertical-align: 4px;
 }
 .auth-gate-note {
   font-size: var(--fs-xs); color: var(--text-muted); letter-spacing: 0.02em;
@@ -1211,29 +1175,6 @@ body.auth-locked #v2-conn { background: transparent; }
   flex-shrink: 0;
   background: linear-gradient(180deg, var(--accent-soft), transparent);
 }
-.chat-head .chat-dot {
-  width: 7px; height: 7px; border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 8px var(--accent-line);
-  flex-shrink: 0;
-}
-.chat-head .chat-title { flex: 1; letter-spacing: 0.3px; }
-.chat-head .chat-model {
-  font: 11px/1 var(--font-mono); color: var(--text-muted);
-  background: var(--bg-tertiary); border: 1px solid var(--border);
-  border-radius: var(--radius-sm); padding: 4px 8px; flex-shrink: 0;
-}
-.chat-mini {
-  background: none; border: none; color: var(--text-muted);
-  cursor: pointer; font-size: var(--fs-base); padding: 4px 8px;
-  /* P1-6: 5→--radius-sm(4) 控件族。2026-09 P1-5：字形(⚙⤢⟲✕✓)已换
-   * SVG（data-icon 注入，16px 见本文件尾部图标排版节）——flex 居中 +
-   * line-height:1 仍是图标钮排版的载体，弃文本行盒 */
-  border-radius: var(--radius-sm);
-  display: inline-flex; align-items: center; justify-content: center;
-  line-height: 1; white-space: nowrap;
-}
-.chat-mini:hover { color: var(--text-primary); background: var(--bg-hover); }
 
 /* ── LLM 自配行（2026-08-31at key；31be +模型/端点三输入；
       2026-09 第三轮：着色子面板 + 显式标签 + 主「保存」钮 + 保存反馈） ── */
@@ -1249,12 +1190,6 @@ body.auth-locked #v2-conn { background: transparent; }
      带族）内白输入卡——读作独立自配区，非满幅白纸 */
   background: var(--bg-tertiary);
 }
-.chat-llm-field {
-  display: flex; flex-direction: column; gap: var(--space-1); min-width: 0;
-}
-.chat-llm-label {
-  font-size: var(--fs-xs); font-weight: 600; color: var(--text-secondary);
-}
 .chat-llm-row input {
   background: var(--bg-input); border: 1px solid var(--border);
   border-radius: var(--radius-sm); color: var(--text-primary); padding: 6px 10px;
@@ -1268,11 +1203,7 @@ body.auth-locked #v2-conn { background: transparent; }
   display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2);
   margin-top: var(--space-1);
 }
-.chat-llm-msg {
-  flex: 1; min-width: 0; font-size: var(--fs-xs); line-height: 1.5; color: var(--text-muted);
-}
 .chat-llm-msg.ok { color: var(--success); }
-.chat-llm-row .chat-llm-save { flex-shrink: 0; padding: 6px 16px; font-size: var(--fs-sm); }
 
 /* ── 对话流 ── */
 .chat-log {
@@ -1284,9 +1215,6 @@ body.auth-locked #v2-conn { background: transparent; }
      内容面上浮起，符合聊天内容面 ≠ 头部/输入 chrome 的层次 */
   background: var(--bg-tertiary);
 }
-.chat-log::-webkit-scrollbar { width: 5px; }
-.chat-log::-webkit-scrollbar-thumb { background: var(--border); border-radius: var(--radius-sm); }
-.chat-log::-webkit-scrollbar-track { background: transparent; }
 
 /* ── 工具调用卡（折叠式：一行摘要 + 点开看全文）── */
 
@@ -1305,7 +1233,6 @@ body.auth-locked #v2-conn { background: transparent; }
   padding: 4px 16px; font-size: var(--fs-xs); min-height: 20px; flex-shrink: 0;
   color: var(--accent);
 }
-.chat-status:empty { display: none; }
 
 /* ── 思考模式块（2026-08-31bf：推理模型 reasoning_content 实时显示） ── */
 
@@ -1337,10 +1264,6 @@ body.auth-locked #v2-conn { background: transparent; }
 /* 发送钮继承 .run-btn 主按钮基类（实心 accent）；此处只写语义差异：
  * 输入行内不收缩（textarea flex:1 吸收余宽） */
 .chat-send { flex-shrink: 0; }
-.chat-hint-row {
-  padding: 0 16px 8px; flex-shrink: 0;
-  font-size: var(--fs-xs); color: var(--text-muted);
-}
 .chat-hint-row kbd {
   background: var(--bg-tertiary); border: 1px solid var(--border);
   border-radius: var(--radius-sm); padding: 0 4px; font-size: var(--fs-xs);
@@ -1571,6 +1494,15 @@ body.auth-locked #v2-conn { background: transparent; }
   direction: rtl;              /* 长路径省略左侧，保住盘符以外最末段 */
   text-align: left;
 }
+/* 当前文档名（2026-11-22 File 面）：未保存改动 = 文件名后弁柄红圆点 */
+.file-doc {
+  margin-left: 4px; padding: 2px 6px;
+  max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font: 600 12px/1.2 system-ui, sans-serif;
+  color: var(--text-secondary);
+  border-left: 1px solid var(--border);
+}
+.file-doc.dirty { color: var(--brand-bengara); }
 /* Agent 已迁顶栏（2026-10-17 站长裁决）：ribbon 里不再有 Agent 框，
  * 旧 #tb-agent-box / #tb-agent-btns 的框 chrome 与按钮规则一并删除。 */
 /* Geometry 形状钮：8 个一排 34px 方瓦（透明底，hover 浮灰 + 图标转强调）；
@@ -1842,9 +1774,9 @@ body.result-mode #bar-run-slot .run-btn svg { display: none; }
   line-height: 1.5;                /* 换行行距拉开，避免两行挤作一团 */
   text-wrap: pretty;               /* Chrome 117+：消除孤字（"器"单独成行） */
 }
-/* R-F: 引导前缀 —— 小型 accent 星芒标记（stroke currentColor 随此色变蓝），
-   半透不抢眼，读作安静的品牌化「下一步」提示，而非裸箭头 */
-.tree-hint-ic { width: 12px; height: 12px; color: var(--accent); opacity: 0.55; flex: none; }
+/* R-F: 引导前缀 —— 小型 brand 标记（弁柄红，半透不抢眼），
+   读作安静的品牌化「下一步」提示，而非裸箭头 */
+.tree-hint-ic { width: 12px; height: 12px; color: var(--brand-bengara); opacity: 0.55; flex: none; }
 .tree-empty-hint:hover { background: none; color: var(--text-muted); }
 
 /* toolpanel(fit/mesh 预览)内的输入不受 150px 定宽约束 */
@@ -2054,24 +1986,23 @@ body.result-mode #bar-run-slot .run-btn svg { display: none; }
  * 其余（如行内其它控件）的 .inwrap 仍走 flex:1。
  * 2026-10-21：chip/删除钮钉死不可压缩（此前名字输入吃掉整行，类型 chip
  * 被挤成 "co…" 三个字母+省略号）。 */
-.card-head .inwrap.card-name-wrap { flex: 0 1 auto; min-width: 0; }
-.card-head input.card-name {
-  background: transparent;
-  border: 1px solid transparent;
+/* 卡头名字 = 身份（只读，2026-11-23）：改名会断引用，GUI 不再提供
+ * 原地编辑；显示成与卡片标题同字重的静态文本。 */
+.card-head .card-name {
+  display: inline-flex;
+  align-items: center;
   color: var(--text-primary);
   font: 600 13px/1.3 var(--font-ui, inherit);
+  font-size: var(--fs-base);
   height: 26px;
   padding: 0 6px;
   flex: 1 1 auto;
-  width: auto;
-  text-align: left;
-  border-radius: var(--radius-sm);
-  transition: background-color var(--dur-fast), border-color var(--dur-fast);
-  font-size: var(--fs-base);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.card-head input.card-name::placeholder { color: var(--text-muted); font-weight: 400; }
-.card-head input.card-name:hover { border-color: var(--border); background: var(--bg-sunken); }
-.card-head input.card-name:focus { border-color: var(--border-active); background: var(--bg-sunken); }
+.card-head .card-name.card-name-ro { cursor: default; }
 /* 类型 chip（四对象族同一 .tag.type，身份度高于次级 detail chip） */
 .card-head .tag.type {
   flex: 0 0 auto; font-weight: 600; color: var(--text-secondary);
@@ -2376,6 +2307,18 @@ input:focus-visible,select:focus-visible,textarea:focus-visible {
   font-size: var(--fs-sm); user-select: none; min-height: 28px;
   border-left: 2px solid transparent;
 }
+/* 2026-11-22：求解器子层级缩进（solver 节点下的 domain/mesh/源/监视器） */
+.tree-group-head.tree-sub { padding-left: 20px; }
+.tree-item.tree-sub { padding-left: 28px; }
+/* 后处理配方面板：代码正本编辑区（等宽、可拉伸） */
+.analysis-code {
+  width: 100%; box-sizing: border-box; resize: vertical;
+  font-family: var(--font-mono, ui-monospace, Consolas, monospace);
+  font-size: var(--fs-xs); line-height: 1.5;
+  color: var(--text-primary); background: var(--bg-tertiary);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 8px; margin: 6px 0;
+}
 .tree-item:hover { background: var(--bg-hover); color: var(--text-primary); }
 
 /* 缩进导轨：场景级项(0) / 类型项(1) / 结构子项(2) 逐级 +恒定偏移 */
@@ -2511,7 +2454,6 @@ body.result-mode #tb-run-box {
  * tests/sdk/test_single_source_locks.py::test_docked_panel_size_has_one_owner）。 */
 #main-layout.dock-root { overflow: hidden; display: block; }
 .dock-node { display: flex; width: 100%; height: 100%; min-width: 0; min-height: 0; }
-.dock-col { flex-direction: column; }
 .dock-cell { display: flex; min-width: 0; min-height: 0; overflow: hidden; }
 .dock-leaf { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; min-height: 0; }
 .dock-adopted {

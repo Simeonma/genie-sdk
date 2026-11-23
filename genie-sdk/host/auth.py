@@ -22,7 +22,7 @@ from genie.net.client import WORKER_TOKEN_HEADER
 
 from . import cred, gw
 
-__all__ = ["status", "login", "logout"]
+__all__ = ["status", "login", "logout", "usage"]
 
 
 def _call(app, method: str, path: str, body: dict | None = None):
@@ -109,3 +109,20 @@ def logout(app) -> dict:
     lands in a second place)."""
     cred.clear(path=app.cred_path)
     return {"ok": True}
+
+
+def usage(app) -> dict:
+    """This month's ledger for the page (2026-11-22): GPU card-hours /
+    CPU core-hours + counts + monthly quota + budget — the gateway's
+    ``/api/usage`` body verbatim (the account page shows the same numbers;
+    one source). Gateway / not-logged-in shapes mirror ``status()``."""
+    if not app.gateway_url:
+        return {"gateway": False}
+    if cred.load_token(path=app.cred_path) is None:
+        return {"gateway": True, "logged_in": False}
+    code, body = _call(app, "GET", "/api/usage")
+    if code == 200 and isinstance(body, dict):
+        return body
+    return {"gateway": True, "logged_in": False,
+            "error": (body or {}).get("code") if isinstance(body, dict)
+            else None}

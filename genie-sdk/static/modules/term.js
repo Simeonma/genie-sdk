@@ -1,3 +1,19 @@
+
+import { activeTab, addPlot, jobPhase, jobProgress, plots, setLastJobId, setResultStatus, sweepProgress } from "./result.js";
+
+import { $, guiViewOf } from "./util.js";
+import { apiNotice } from "./api.js";
+import { _pendingExec, scheduleValidate, setPendingExec } from "./edit.js";
+import { exec } from "../core/bus.js";
+import { pollOnce } from "../core/ring.js";
+import { cancel, restart } from "./app.js";
+import { FormPanel } from "../views/form.js";
+import { renderInspector } from "./inspector.js";
+import { enterResult, refreshResultChip, renderPlotInto } from "./result.js";
+import { updateScene } from "./scene.js";
+import { cfg, setCfg, setDisplayCfg, toast } from "./state.js";
+import { runBtnRefresh } from "./toolbar.js";
+import { renderTree } from "./tree.js";
 /* modules/term.js — Terminal + 模型同步器（SessionSync/termExec/空闲订阅/busy 排队）
  * G5 拆分（2026-10-14）：自 app.js 机械切出，零行为变化；
  * 经典 script 按序加载，跨模块引用为运行期全局查找。 */
@@ -5,23 +21,19 @@
  * 三条命令腿同汇 /api/exec：①输入行逐条指令 ②脚本「运行」整体 exec
  * ③工具栏 Run = genie.run()。输出唯一滚在这里；cfg 快照驱动
  * 表单/树/3D 刷新。SDK/agent 与 terminal 同一执行层（一步到位）。 */
-let termBusy = false;
-let termPollTimer = null;
-const termHistory = [];
-let termHistIdx = -1, termDraft = "";
+export let termBusy = false;
+export let termPollTimer = null;
+export const termHistory = [];
+export let termHistIdx = -1, termDraft = "";
 /* 停止钮（A2「长任务必须能掐」）：busy 期可见，点击 = POST /api/exec/stop
  * （服务端向 worker 发 SIGINT）——⏹/done 经输出环自然滚出，本地零状态。 */
-const termStopBtn = $("term-stop");
-const termResetBtn = $("term-reset");
-function setStopVisible(v) {
+export const termStopBtn = $("term-stop");
+export const termResetBtn = $("term-reset");
+export function setStopVisible(v) {
   if (termStopBtn) termStopBtn.hidden = !v;
   /* R31：清理重启钮与停止钮同显同隐（busy 期可见）——死循环卡 exec
    * 时 busy 恒 true，两钮都在场；先试 ⏹，投不进（无控制台）再 ↻。 */
   if (termResetBtn) termResetBtn.hidden = !v;
-  /* 主钮 busy 态（2026-10-14 站长裁决）：Running + 禁用（按钮不得
-   * 撒谎——运行中不可点，停止走 ⏹ 钮）。非忙时**委托 runBtnRefresh**
-   * 按模式定文案（此前无条件写回 "Run" 会盖掉结果态的
-   * Switch to setting——0cd3c4a 引入、本笔修复的文案冲突）。 */
   const b = $("submit");
   if (b) b.disabled = v;
   const l = $("submit-label");
@@ -29,11 +41,7 @@ function setStopVisible(v) {
   else runBtnRefresh();
 }
 
-/* ══ 模型同步器（2026-10-11 第一性收敛③）：GUI 全部同步状态 =
- * 两个游标（lineSeq=输出行游标 / cfgSeq=cfg 版本游标）。谁落后谁拉；
- * 投影（表单/树/3D/Plot）只订阅 onSnapshot——轮询层只剩「拉增量、
- * 喂同步器」，刷新判据不再散在闭包里。 */
-const SessionSync = {
+export const SessionSync = {
   lineSeq: 0, cfgSeq: 0, _subs: [],
   _boot: true,   /* 首拍回放窗：历史里的 job-done 只静默入结果态，不弹 toast */
   onSnapshot(fn) { this._subs.push(fn); },
@@ -52,8 +60,7 @@ const SessionSync = {
     }
     if (typeof j.busy === "boolean") {
       setStopVisible(j.busy);
-      if (typeof window.__jobPhase === "function")
-        window.__jobPhase({ phase: j.phase || "idle", job_id: j.job_id || "" });
+      jobPhase({ phase: j.phase || "idle", job_id: j.job_id || "" });
     }
     for (const l of (j.lines || [])) {
       this.lineSeq = Math.max(this.lineSeq, l.seq);
@@ -62,23 +69,20 @@ const SessionSync = {
       if (kind === "state") {
         /* 生命周期事件（worker → manager → 环）：无文本，喂进度条即可
          * （busy/按钮走上面的快照，此处只是亚 tick 内的相位细化）。 */
-        if (typeof window.__jobPhase === "function")
-          window.__jobPhase(l.data || {});
+        jobPhase(l.data || {});
         continue;
       }
       if (kind === "job-progress") {
         /* 运行中步进进度（内核 runner 泵 → worker → 本事件）：不落终端
          * （防刷屏），只喂 result-chip 进度条（方案 A，2026-10-15）。 */
-        if (typeof window.__jobProgress === "function")
-          window.__jobProgress(l.data || {});
+        jobProgress(l.data || {});
         continue;
       }
       if (kind === "sweep-progress") {
         /* G168/R34（站长裁"汇总为王，点级降噪"）：扫描级汇总
          * （X/N · 失败数）——不落终端，喂 result-chip；点级过程事件
          * 已在 worker 侧静默，每点终态行照常走文本环。 */
-        if (typeof window.__sweepProgress === "function")
-          window.__sweepProgress(l.data || {});
+        sweepProgress(l.data || {});
         continue;
       }
       if (kind === "plot" && l.data) {
@@ -95,15 +99,15 @@ const SessionSync = {
          * 正则旁证——「一次 run 尝试已了结」是事实，与谁发起、哪个页面、
          * 成败无关；失败也进结果态 = 2026-10-14 既有裁决）。 */
         if (l.data.job_id) {
-          window.__lastJobId = l.data.job_id;
-          window.__resultStatus = null;
+          setLastJobId(l.data.job_id);
+          setResultStatus(null);
         }
-        if (!window.__resultMode) enterResult(SessionSync._boot);
+        if (!resultMode) enterResult(SessionSync._boot);
         refreshResultChip();
         /* 活动页签的 Plot 重画（新数据到了）。原为 renderPlot(sp)——
          * 该函数从未存在（2026-10 重构走查补漏：__plots 非空 + job-done
          * 即 ReferenceError 炸 ingest）。 */
-        const act = (window.__plots || []).find(p => p.id === window.__activeTab);
+        const act = (plots || []).find(p => p.id === activeTab);
         if (act) {
           const pv = document.getElementById("plot-view");
           if (pv && !pv.classList.contains("hidden")) renderPlotInto(pv, act);
@@ -122,7 +126,7 @@ const SessionSync = {
 
 /* kind → 着色类（环条目结构化 2026-10-11）：报错/进程级 stderr 红、
  * 管理 note 灰；stdout 与其余不着色。input 不走这里（特殊处理）。 */
-function kindClass(kind) {
+export function kindClass(kind) {
   if (kind === "error" || kind === "stderr") return "term-err";
   if (kind === "note") return "term-note";
   if (kind === "job") return "term-job";   /* 运行阶段提示（提交/运行中/下载） */
@@ -133,7 +137,7 @@ function kindClass(kind) {
  * 标注（term-note），随后 "❯ " 前缀 + 原文（两个 span，与旧客户端 echo
  * 同款 DOM——标注来源时前缀 ❯⋯，视觉与旧 echoMark 通道一致）。不建
  * DOM 容器防过度工程：时序即块；环裁剪致首块无头 input 照常平铺。 */
-function renderTermInput(l) {
+export function renderTermInput(l) {
   const out = $("term-out");
   if (!out) return;
   termCloseBlock();          /* 命令回显 = 上一段输出的封口 */
@@ -149,7 +153,7 @@ function renderTermInput(l) {
 }
 
 /* 终端滚动合批：一帧至多一次强读排版（大环回放的主线程杀手） */
-function termQueueScroll() {
+export function termQueueScroll() {
   if (_termScrollQueued) return;
   _termScrollQueued = true;
   requestAnimationFrame(() => {
@@ -159,7 +163,7 @@ function termQueueScroll() {
   });
 }
 
-let _termScrollQueued = false;
+export let _termScrollQueued = false;
 
 /* ── 长输出折叠（G45）──
  * 终端是 append-only 的流；跑一次仿真会灌几百行 stdout，把上面的
@@ -167,16 +171,16 @@ let _termScrollQueued = false;
  * `.term-block`；块内超过 FOLD_AT 行时，只留头 FOLD_HEAD 行可见，
  * 其余塞进 `.term-block-body`（默认收起），并插一个「展开 N 行」按钮。
  * 非 stdout（note/job/err/input）一律先把当前块封口——折叠块不跨语义。 */
-const FOLD_AT = 40;
-const FOLD_HEAD = 3;      /* 终端面板常常只有 ~6 行高：留 3 行就够看出上下文，
+export const FOLD_AT = 40;
+export const FOLD_HEAD = 3;      /* 终端面板常常只有 ~6 行高：留 3 行就够看出上下文，
                            * 再多会把「展开」按钮顶到可视区外 */
-let _termBlock = null;      /* {el, body, btn, lines} 当前 stdout 块 */
+export let _termBlock = null;      /* {el, body, btn, lines} 当前 stdout 块 */
 
-function termCloseBlock() {
+export function termCloseBlock() {
   _termBlock = null;
 }
 
-function termAppendFoldable(text) {
+export function termAppendFoldable(text) {
   const out = $("term-out");
   if (!out) return;
   if (!_termBlock) {
@@ -232,7 +236,7 @@ function termAppendFoldable(text) {
   termQueueScroll();
 }
 
-function termAppend(text, cls) {
+export function termAppend(text, cls) {
   const out = $("term-out");
   if (!out || !text) return;
   if (!cls) {                     /* 无着色 = stdout → 可折叠流 */
@@ -247,35 +251,17 @@ function termAppend(text, cls) {
   termQueueScroll();
 }
 
-/* ── 两个执行入口，一条流程（M3）────────────────────────────────
- * termExec(code)  = 敲代码（mode=run：在当前 worker 命名空间里执行）
- * runScript()     = 脚本运行（mode=build：构造新模型，成功才替换）
- * runModel()      = 提交当前模型（POST /api/run：**不改模型**）
- *
- * 以前工具栏 Run 是 `termExec("genie.run()")`——把一个按钮的意图写成另一
- * 个界面里的文本，于是它依赖"命名空间里恰好有个没被换掉的 f"。现在
- * 它是一个独立的意图，走自己的端点。 */
-async function _postJSON(path, body) {
-  const r = await fetch(path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body || {}) });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(apiFailText(r, j));
-  return j;
-}
 
 /* 执行主流程：排队 → 置忙 → flush 未决表单编辑 → 提交 → 轮询到 done。
  * 排队而非丢弃（G13①）：worker 先发 cfg 快照后发 done，丢弃语义曾静默
  * 吞命令；kernel 本就串行，单槽排队即正确语义（Jupyter 同款）。 */
-async function _execFlow(label, submit) {
+export async function _execFlow(label, submit) {
   if (termBusy) {
-    _pendingExec = { label, submit };
+    setPendingExec({ label, submit });
     termAppend("… 上一段还在执行——已排队，跑完自动运行\n", "term-note");
     return;
   }
   termBusy = true;   /* 同步置位（防连点竞态）：置位前不得有任何 await */
-  await flushPendingCfgPush();
   try {
     await submit();
   } catch (e) {
@@ -287,26 +273,26 @@ async function _execFlow(label, submit) {
   _startPolling();
 }
 
-function termExec(code, opts = {}) {
+export function termExec(code, opts = {}) {
   code = code || "";
   if (!code.trim()) { setStopVisible(false); return; }
   /* v2 连线层：/exec（mode=build = fresh 整份换模型）；输入回显在层内 */
-  return _execFlow("exec", () => GenieApp.termExec(code, {
+  return _execFlow("exec", () => execToTerminal(code, {
     fresh: (opts.mode || "run") === "build", mark: opts.label || "" }));
 }
 
 /** 提交当前模型（工具栏 Run）。**不改模型**，也不经终端命名空间。 */
-function runModel() {
+export function runModel() {
   /* v2 连线层：Run = 提交当前模型（genie.fdtd.run） */
-  return _execFlow("run", () => GenieApp.runModel());
+  return _execFlow("run", () => runModelRaw());
 }
 
-function _startPolling() {
+export function _startPolling() {
   if (termPollTimer) clearInterval(termPollTimer);
   termPollTimer = setInterval(async () => {
     let busy;
     try {
-      busy = await GenieApp.pollOnce();   /* v2 环投影一拍（/events?since=） */
+      busy = await pollOnce();   /* v2 环投影一拍（/events?since=） */
     } catch (e) {
       /* 输出通道断了：显性报错并停轮。绝不静默。 */
       termAppend("✗ 输出通道 " + (e && e.message ? e.message : e) + "\n", "term-err");
@@ -315,19 +301,12 @@ function _startPolling() {
       return;
     }
     setStopVisible(!!busy);         /* 停止钮可见性 = worker 忙闲 */
-    /* 完成判据（O2 收敛为一句话）：**worker 不忙了** = 我这条 op 回了 done。
-     * busy 由在途 op 账本投影（kernel_session._inflight），不再有
-     * "另一条 done 也算我完成"的旁路——那条旁路依赖环里出现 done 条目，
-     * 而它从来没出现过（死代码，G71 顺手删除）。 */
     if (!busy) {
       clearInterval(termPollTimer);
       termPollTimer = null;
       termBusy = false;
-      /* 结果模式切换已上收 job-done 事件（ingest 内）——这里不再
-       * 正则猜 termLastCode（2026-10 架构收敛：跑没跑仿真看事实，
-       * 不看提交文本长什么样）。 */
       if (_pendingExec) {                            /* 排队命令自动续跑 */
-        const p = _pendingExec; _pendingExec = null;
+        const p = _pendingExec; setPendingExec(null);
         _execFlow(p.label, p.submit);
       }
     }
@@ -346,76 +325,28 @@ function _startPolling() {
  * 规则：本地有未提交编辑的路径 → 本地优先（最后写入者生效，与文档一致）；
  * 其余的照抄服务端。少了这一步，第二个标签会因为"回声被跳过"而停在旧值，
  * 它下一次编辑求出的 diff 会把别人刚改的字段**一起打回去**。 */
-function _mergeForeignPaths(serverCfg, paths) {
-  if (!cfg || typeof cfg !== "object") return false;
-  let dirty = [];
-  try { dirty = diffCfg(_serverCfg || {}, cfg).map((o) => o.path); }
-  catch { dirty = []; }
-  const dirtySet = new Set(dirty);
-  let touched = false;
-  for (const p of paths || []) {
-    if (!p) continue;
-    if (dirtySet.has(p)) continue;              /* 我手上还没提交的，优先 */
-    if (dirty.some((d) => d.startsWith(p + ".") || p.startsWith(d + ".")))
-      continue;
-    let v;
-    try { v = getPath(serverCfg, p); } catch { continue; }
-    try { setPath(cfg, p, v); touched = true; } catch { /* 定位不到就跳过 */ }
-  }
-  if (!touched) return false;
+export function applyCfgSnapshot(c, resolved, seq, origin, paths) {
+  /* 纯投影（2026-11-23 终态）：GUI 不持可编辑副本——快照到达 → 投影一次 →
+   * 重画。没有 diff 基准、没有回声抑制、没有本地编辑合并。
+   * 唯一的状态保护：**正在编辑的输入框不被重建**（焦点/光标/半截输入）。
+   */
+  if (!c) return;
+  c = guiViewOf(c);                            /* Q17 嵌套 → GUI 平铺视图 */
+  if (resolved) resolved = guiViewOf(resolved);
+  setCfg(c);
+  setDisplayCfg(resolved || c);                /* 表达式槽 → 数值副本（3D/小注用） */
   FormPanel.setCfg(cfg);
-  renderTree();          /* 名字/颜色/几何可能变了；不碰检查器（焦点在里面） */
+  const ae = document.activeElement;
+  const editing = ae && ae.closest && ae.closest(".inspector, #config-content");
+  if (!editing) {
+    renderInspector();
+    renderTree();
+  }
   updateScene();
   scheduleValidate();
-  return true;
-}
-
-function applyCfgSnapshot(c, resolved, seq, origin, paths) {
-  if (!c) return;
-  /* Q17：服务端快照是嵌套户型，先投影成 GUI 平铺视图（两处基准同改） */
-  c = (typeof guiViewOf === "function") ? guiViewOf(c) : c;
-  if (resolved && typeof guiViewOf === "function") resolved = guiViewOf(resolved);
-  /* 深拷贝：表单是**原地改** cfg 的，若 _serverCfg 与 cfg 指向同一个
-   * 对象，diff 永远是空（这是 patch 通道最容易踩的坑）。 */
-  const snap = (typeof structuredClone === "function")
-    ? structuredClone(c) : JSON.parse(JSON.stringify(c));
   if (origin === "reject") {
-    /* 服务端**拒了**这批改动（一批 op 全对或全错）。必须把本地那份按服务端
-     * 拉回来：否则那个非法值会一直留在表单里，之后每次提交都带上它、每次
-     * 都整批失败——表单从此一个字也存不进去。 */
-    cfg = c;
-    _serverCfg = snap;
-    displayCfg = resolved || cfg;
-    FormPanel.setCfg(cfg);
-    renderTree();
-    renderInspector();
-    updateScene();
-    scheduleValidate();
-    apiNotice("改动没被接受，已还原（原因见终端）", "err");
-    return;
+    apiNotice("改动没被接受（原因见终端）", "err");
   }
-  /* 回声抑制仅当本地已有编辑缓冲才成立：刚加载的页面 cfg 还是 null，
-   * origin=patch 的首拍快照是初始模型而非回声——须走下方整份应用，
-   * 否则刷新后界面永远空模型（worker 里的模型其实是好的）。 */
-  if (origin === "patch" && cfg) {
-    _mergeForeignPaths(c, paths);   /* 只并入"不是我改的"那些路径 */
-    _serverCfg = snap;              /* 刷新 diff 基准，不重建面板 */
-    /* 保住服务端的 resolved 副本：表单改动会把 displayCfg 打回 raw（表达式
-     * 槽/单位串原样），3D 与参数小注都靠这份"表达式→数值"的显示副本。
-     * 缺 resolved（服务端解析失败）时维持现状。 */
-    if (resolved) {
-      displayCfg = resolved;
-      updateScene();
-    }
-    return;
-  }
-  _serverCfg = snap;
-  cfg = c;
-  displayCfg = resolved || cfg;   /* 表达式槽→数值副本（3D 渲染用），cfg 原文不动 */
-  FormPanel.setCfg(cfg);
-  renderTree();
-  renderInspector();
-  updateScene();
 }
 
 SessionSync.onSnapshot(applyCfgSnapshot);   /* 投影订阅同步器（收敛③） */
@@ -427,7 +358,7 @@ SessionSync.onSnapshot(applyCfgSnapshot);   /* 投影订阅同步器（收敛③
 setInterval(async () => {
   if (termBusy || termPollTimer) return;   /* exec 轮询在管，不抢线 */
   try {
-    await GenieApp.pollOnce();               /* v2 环投影：空闲 2s 接力 */
+    await pollOnce();               /* v2 环投影：空闲 2s 接力 */
   } catch { /* 网络抖动：下个节拍再试 */ }
 }, 2000);
 
@@ -468,14 +399,11 @@ setInterval(async () => {
  * stopPropagation：dock 点击有聚焦逻辑，点停止钮不把焦点抢回输入行。 */
 $("term-stop").addEventListener("click", (e) => {
   e.stopPropagation();
-  GenieApp.cancel().catch(() => {});   /* 取消在飞作业（genie.cancel 同门） */
+  cancel().catch(() => {});   /* 取消在飞作业（genie.cancel 同门） */
 });
 
-/* 重启 worker（R31 站长裁：停止治不了时的进程级兜底）：杀 worker
- * 重起——只清执行态（在途作废、宿主干净），模型与终端历史保留。
- * 服务端经环滚出"执行进程已清理重启"提示；busy 翻 false 后两钮随轮询自隐。 */
 if (termResetBtn) termResetBtn.addEventListener("click", (e) => {
   e.stopPropagation();
-  GenieApp.restart().catch(() => {});   /* 重启 worker */
+  restart().catch(() => {});   /* 重启 worker */
 });
 

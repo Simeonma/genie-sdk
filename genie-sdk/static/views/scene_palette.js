@@ -1,3 +1,4 @@
+import { scene } from "../modules/state.js";
 /* Genie FDTD service — 场景画布色板单源（P2-6 审计, 2026-09 Round A 减绿定案）
  *
  * 本文件是两套场景渲染的画布色唯一来源：
@@ -21,7 +22,7 @@
  * 各色逐条在注释标注对应 :root --scene-* token（同值映射）。
  */
 
-const SCENE_PALETTE = {
+export const SCENE_PALETTE = {
   /* ── 材料调色板（2026-10-21 重定基：对象按材料着色）──
    * 用户定案：几何体颜色 = 材料颜色；材料可在脚本/表单里自定义 color
    * （材料库材料自带预设色，G46 2026-10-30），未定义时按材料名稳定散列
@@ -42,9 +43,6 @@ const SCENE_PALETTE = {
     0xA070AE,  /* 丁香 */
   ],
 
-  /* ── 结构几何轮廓（= --scene-object-edge）：中性物料填充（MATERIALS）+
-   * 深一档灰蓝描边——浅底画布上轮廓清晰（wireframe LineSegments 用色）。
-   * 填充色见 MATERIALS；描边统一取此灰蓝, 不再随物料色, 读作"工程轮廓"。 */
   STRUCTURE: {
     /* 结构棱线（2026-10-21 用户："再深一点"）：从 #7E91A6/0.45 压到近墨蓝，
      * 浅底上才读得出"实体的轮廓"，而不是一层若有若无的灰纱。 */
@@ -56,11 +54,6 @@ const SCENE_PALETTE = {
     EDGE_OPACITY_WIRE: 1.0,
   },
 
-  /* ── BC（边界条件）语义色：3D/2D 共用同一常量（P2-6 统一 canon）。
-   * 3D 六面着色面/霓虹边条、2D 域框边按面着色，同语义同值；2D 仅把数值
-   * 派生为 CSS 字符串，不再各自写字面（历史 2D=dodgerblue 系已清除）。
-   * Round A 降饱和 + 去绿：pmc 由绿 0x4ade80 改灰蓝；periodic/bloch 转
-   * 低色度红/紫；pec 保留浅蓝（引擎默认）。 */
   BC: {
     pml: 0xC99A3F,        /* PML 琥珀（= --scene-pml）：BC 面 + PML 外扩壳虚线框/
                            * 内边界框共用——物理"吸波边界"，暖琥珀单独成义 */
@@ -73,9 +66,6 @@ const SCENE_PALETTE = {
                            *（logo 渐变二阶, index.html logo svg）的画布等价 */
   },
 
-  /* ── 域框视觉（3D only；2D 域框即 BC 色边，不另设色）──
-   * 2026-10-21 用户定案：域体全透明，只有「黑色棱线」表示范围——
-   * 边界条件不再画在域面上（BC 语义去检查器读文字）。 */
   DOMAIN: {
     EDGE: 0x14181D,       /* 域棱线 = 近黑（工作台的墨色，非纯 #000） */
     DOT: 0x14181D,        /* 角点（已随 BC 面退役，保留常量以免 2D 侧引用断） */
@@ -83,9 +73,6 @@ const SCENE_PALETTE = {
 
   /* ── 背景 / 雾 / 标签（3D 透明底色, 露 #scene-panel CSS 渐变）── */
   BG: {
-    /* 3D 雾端点色（THREE.Fog）：Round A 由深海军蓝 0x0d1420 改为冷浅灰蓝
-     * ——浅底画布上物件随纵深淡出到浅底, 不再沉入"深空蓝黑"；符合整体
-     * 浅色三层面身份（= --scene-bg-bottom 一族, 更浅更冷）。 */
     FOG: 0xCFD8E4,
     /* 2D 降级画布底色：不透明深海军蓝近黑（旧示波器风格线框自绘底，
      * 线框/网格亮色按此底调过——勿与 3D 透明浅底并值，勿并入 CSS token） */
@@ -93,10 +80,8 @@ const SCENE_PALETTE = {
     /* 3D 标签卡底色（label sprite 圆角卡填充, 用方叠加 alpha 0.82）：
      * Round A 由黑 0x080c16 改 L2 白浮层 #F4F8FC（= --scene-label-bg）——
      * 浅底场景里黑卡是重块, 白卡 + 深墨更贴 L1/L2 三层面身份 */
-    LABEL_CARD: 0xF4F8FC,
     /* 标签卡文字墨（= --scene-label-ink #1C2A38）：白卡上深墨, ≥4.5:1；
      * 边框光晕仍取对象色（着色点/源/监视器色）作强调 */
-    LABEL_INK: 0x1C2A38,
   },
 
   /* ── 网格线：三径各自按底色调色，画布自治 ── */
@@ -132,10 +117,6 @@ const SCENE_PALETTE = {
     SELECT_EMISSIVE: 0.22,
   },
 
-  /* ── 3D 光照（非画布色板成员：照明参数，仅字面单源化，勿与 CSS 映射）
-   * 2026-10-21「浅色影棚」重定基：原值（紫调环境光/冷紫补光/深蓝地色）
-   * 属深色主题遗留，落白底画布会把实体染成脏灰紫。现为中性白 + 冷灰地，
-   * 明暗全部由方向光决定。 ── */
   LIGHTS: {
     AMBIENT: 0xFFFFFF,     /* 环境光（中性白，托底不提亮） */
     KEY: 0xFFFFFF,         /* 主方向光（左上，定明暗与投影方向） */

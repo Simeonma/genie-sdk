@@ -10,7 +10,7 @@ One address grammar, one write verb, one read verb:
     genie.describe(addr)                 # field table
     genie.remove(addr)
     genie.fit_material(name)             # explicit library fit
-    genie.validate() / run_fdtd() / run_sweep(name) / run_analysis(name)
+    genie.run_fdtd() / run_mode(name) / build_fdtd() / run_sweep(name) / run_analysis(name)
     genie.get_result(mon[, field])       # result data
     genie.save(path=None) / open(path)
 
@@ -31,7 +31,6 @@ from genie import ipc
 from genie.core import material as core_material
 from genie.core.model import Model
 from genie.core.model.draft import digest
-from genie.core.param import validate_for_ui
 from genie.net import GenieJobError
 
 from genie.core import archive
@@ -285,7 +284,14 @@ class Surface:
         self._model.attributes._add(type, name)
         return f"attribute.{name}"
 
-    def add_analysis(self, name):
+    def add_analysis(self, name=None):
+        if name is None:                       # GUI 便利：分析/分析_2 …
+            taken = self._env.post_recipes
+            name = "analysis"
+            i = 1
+            while name in taken:
+                i += 1
+                name = f"analysis_{i}"
         self._ensure_free(name, "analysis")
         post.add_verb(self._env, name)          # creates the empty recipe
         return f"analysis.{name}"
@@ -297,12 +303,22 @@ class Surface:
         sweep_mod.sync_sweeps(self._env)
         return f"sweep.{name}"
 
-    def add_solver(self, name, type=None):  # noqa: A002
+    def add_solver(self, name=None, type=None):  # noqa: A002
         type = type or name
-        self._check_name(name)
         if type not in ("fdtd", "mode"):
             raise ValueError(f"solver type {type!r} is invalid (expected: "
                              f"fdtd | mode)")
+        if name is None:
+            # GUI buttons / 终端便利：省 name = 自动唯一实例名
+            # (mode, mode_2, mode_3, ...) — the naming rule lives here,
+            # not in the caller.
+            taken = self._model._solvers
+            name = type
+            i = 1
+            while name in taken:
+                i += 1
+                name = f"{type}_{i}"
+        self._check_name(name)
         self._model.add_solver(name, type)
         return name
 
@@ -314,8 +330,35 @@ class Surface:
     # the single write channel
     # ══════════════════════════════════════════════════════════════
 
-    def set_named(self, addr, **fields):
+    def set_named(self, addr, node=None, **fields):
+        """The one write channel, two granularities: keyword fields, or —
+        **material addresses only** — one whole node dict (the output of
+        ``assemble_nk`` / a fit pipeline; 整装入住, Q1.4's exception
+        reborn in the Q25 API). The node's ``type`` must match the
+        declared type; ``name`` is ignored (the address decides)."""
         t = self._resolve(addr)
+        if node is not None:
+            if fields:
+                raise ValueError(
+                    f"set_named({addr!r}): pass either a whole node or "
+                    f"keyword fields, not both")
+            if t.kind != "material":
+                raise ValueError(
+                    f"set_named({addr!r}, node): whole-node writes are a "
+                    f"material exception — use keyword fields here")
+            if not isinstance(node, dict):
+                raise ValueError(
+                    f"set_named({addr!r}, node): expected a node dict, "
+                    f"got {type(node).__name__}")
+            n = {k: v for k, v in node.items() if k not in ("name",)}
+            ntype = n.pop("type", None)
+            declared = getattr(t.obj, "type", None)
+            if ntype is not None and declared is not None \
+                    and ntype != declared:
+                raise ValueError(
+                    f"set_named({addr!r}, node): node type {ntype!r} does "
+                    f"not match the declared type {declared!r}")
+            fields = n
         if not fields:
             raise ValueError(f"set_named({addr!r}): no fields given")
         writer = getattr(self, f"_set_{t.kind}")
@@ -665,24 +708,39 @@ class Surface:
                 f"material.{name}: no fit window — set band=(lo, hi) in "
                 f"metres, or add a simulation source first")
         lib = meta["library"]
-        wl, n, k = core_material.load_nk(lib)
-        fit = core_material.fit_nk(
-            wl, n, k, band=band, tolerance=meta.get("tolerance", 0.1),
-            max_poles=int(meta.get("max_poles", 10)),
-            imaginary_weight=float(meta.get("imaginary_weight", 1.0)),
-            make_passive=bool(meta.get("make_passive", False)))
-        node = core_material.assemble_nk({"xx": fit, "yy": fit, "zz": fit},
-                                         name=name)
+        tables = core_material._load_axes(lib)
+        # Q39: three axes, one fit each — the same table object fits once
+        # (iso); the report is the constant three-key dict {"x","y","z"}.
+        fitted: dict = {}
+        report: dict = {}
+        for ax in ("x", "y", "z"):
+            t = tables[ax]
+            if id(t) not in fitted:
+                wl, n, k = t
+                fitted[id(t)] = core_material.fit_nk(
+                    wl, n, k, band=band,
+                    tolerance=meta.get("tolerance", 0.1),
+                    max_poles=int(meta.get("max_poles", 10)),
+                    imaginary_weight=float(meta.get("imaginary_weight", 1.0)),
+                    make_passive=bool(meta.get("make_passive", False)))
+            fit = fitted[id(t)]
+            report[ax] = {
+                **{k2: (float(v) if isinstance(v, (int, float)) else v)
+                   for k2, v in fit.quality.items()},
+                "n_poles": int(fit.n_poles),
+                "warnings": list(fit.warnings)}
+        node = core_material.assemble_nk(
+            {"xx": fitted[id(tables["x"])],
+             "yy": fitted[id(tables["y"])],
+             "zz": fitted[id(tables["z"])]}, name=name)
         draft = self._family_members("material")[name]
         draft.eps_inf = node.get("eps_inf", 1.0)
         for f in ("eps_inf_xx", "eps_inf_yy", "eps_inf_zz"):
             setattr(draft, f, node.get(f))
         draft.poles = node["poles"]
         meta["band"] = band
-        meta["quality"] = {k2: (float(v) if isinstance(v, (int, float)) else v)
-                           for k2, v in fit.quality.items()}
-        return dict(meta["quality"], warnings=list(fit.warnings),
-                    n_poles=int(fit.n_poles))
+        meta["quality"] = report
+        return report
 
     def _fit_pending(self):
         for name, meta in list(self._mat_meta.items()):
@@ -764,10 +822,6 @@ class Surface:
     # ══════════════════════════════════════════════════════════════
     # actions
     # ══════════════════════════════════════════════════════════════
-
-    def validate(self):
-        self._fit_pending()
-        return validate_for_ui(self._model.to_config())
 
     def run_fdtd(self, *, n_gpu=None):
         self._fit_pending()
@@ -865,10 +919,21 @@ class Surface:
     # document commands
     # ══════════════════════════════════════════════════════════════
 
+    def _new(self):
+        """Blank document (File → New): empty model, no doc path, recipes and
+        sweep accounts cleared. Internal bridge (no user-facing verb change);
+        the GUI refreshes from the cfg snapshot exec always emits."""
+        env = self._env
+        env.model = Model()
+        env.doc_path = None
+        env.post_recipes = {}
+        env.sweeps = {}
+        return True
+
     def save(self, path=None):
         env = self._env
         target = path or env.doc_path
-        cfg = self._model.to_config()
+        cfg = self._model.to_document()
         archive.save(target, simconfig=cfg,
                      state=chain.state_for(cfg, self._model.last_id, []),
                      carry_result_from=env.doc_path,

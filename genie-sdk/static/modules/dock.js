@@ -1,25 +1,8 @@
-/* modules/dock.js — 工作台 dock 内核（2026-10-15 站长裁决：五面板模块化）
- *
- * 模型：布局 = 一棵 split 树。
- *   叶子 = 面板堆栈 { stack: [面板id...], active: i }（单面板也统一此形）；
- *   内节点 = { dir: "row"|"col", sizes: [px|null...], children: [...] }，
- *   sizes 里唯一的 null = 弹性子（吸收余量）。
- *   面板 id：tree-panel / config-panel / scene-panel / term-dock / json-panel；
- *   DOM 原件被收养进 .dock-leaf 包裹层（render 先收养再清空——innerHTML
- *   会连原件一起销毁，2026-10-15 实测翻车）。
- *
- * 持久化纪律：布局只是「脸」的摆法（铁律 1 的边界）——存浏览器
- * localStorage（genie.dock.layout.v1），绝不进服务端/模型状态。
- * 载入时校验（面板集合不齐即弃用回默认），防旧版残留脏数据。
- *
- * 期①：splitter 拖拽调宽高 + 持久化。
- * 期②：面板拖拽 dock——手柄/标签拖出 → 落区四边 dock 或中心合堆；
- *       树结构变更 = 纯树变换（detach→prune→insert），render 全量重建。
- * 期③：布局预设（Dock.preset(name)），见文件尾 PRESETS。
- */
+import { cfg, scene } from "./state.js";
+import { loadWorkspaceFiles } from "./workspace.js";
 "use strict";
 
-const Dock = (function () {
+export const Dock = (function () {
   const STORAGE_KEY = "genie.dock.layout.v1";
   const SAVED_KEY = "genie.dock.saved.v1";   /* 用户命名布局：{name: tree} */
   /* 结构｜属性工作面（2026-10 站长裁决）：tree/config 结构上合为
@@ -29,17 +12,12 @@ const Dock = (function () {
                   "scene-panel": "3D Scene", "visualize-panel": "Visualize",
                   "files-view": "Files", "term-dock": "Terminal", "json-panel": "Script" };
 
-  /* ── 布局只有一档（2026-10-30 站长裁：移动端整体删除）──────────────
-   * 桌面形态按视口比例分配；窄窗只影响比例（fitSizes 会按比例收），
-   * 不再有第二套形态/第二套导航。MIN 只读。 */
   const DESKTOP_MIN = { "struct-panel": 310, "scene-panel": 200,
                         "visualize-panel": 160, "term-dock": 80, "json-panel": 200 };
   const MIN = DESKTOP_MIN;
 
   /* 默认布局按视口比例分配。 */
   function defaultTree() {
-    /* 桌面唯一形态（2026-10 case 收敛）：左 结构｜属性，右 3D/结果/文件
-     * + Script，下 Terminal；宽度只影响比例，不再有第二套形态 */
     const w = window.innerWidth, h = window.innerHeight;
     {
       const left = Math.max(DESKTOP_MIN["struct-panel"] + 8, Math.round(w * 0.34));
@@ -156,12 +134,6 @@ const Dock = (function () {
     if (isSpring) return `flex: 1 1 auto; min-${axis}: ${floor}px;`;
     return `flex: 0 0 ${size}px; min-${axis}: ${floor}px;`;
   }
-  /* 子树最小伸展量（沿指定轴）：叶 = 面板 MIN（宽度语义；作为高度下界时取
-   * 保守小值 CROSS_MIN）; 同轴节点 = 子取和（并排/叠放的累加）; 跨轴 = 取大
-   * （最高的子决定容器下限）。
-   * 2026-10-21 修：旧实现只算"沿 dir 轴"，却被 childStyle 拿去当交叉轴
-   * （高度）下界用——横向三栏的 min-height 被写成 710px，把下方 Terminal
-   * 的 220px 挤爆，输入行整整沉出视口。 */
   const CROSS_MIN = 120;
   function minExtent(node, axis = "height") {
     if (isLeaf(node)) {
@@ -209,10 +181,6 @@ const Dock = (function () {
     return box;
   }
 
-  /* ── 统一面板标题栏（2026-10-15 站长裁决②）──
-   * 每个可 dock 的叶子一条 34px 头：单面板 = 标题 + 动作钮右组；
-   * 合堆 = 标签排（与 view-tab 同款式）。拖拽 = 抓头/抓标签。
-   * （scene 的 view-tabbar 仅在多页签——有 Plot——时出现，见 result.js） */
   const PANEL_ACTIONS = {                              /* 面板 → 动作钮（原件收养） */
     /* 动作钮右组：文件 I/O 已上收 File 菜单，面板头各留唯一动作钮 */
     /* 动作钮右组：仿真 open/save 在 File 菜单，脚本头留 Run+脚本两钮 */
@@ -242,9 +210,6 @@ const Dock = (function () {
       ids.forEach((id) => { const b = adoptedActions.get(id); if (b) acts.appendChild(b); });
       head.appendChild(acts);
     }
-    /* 拖拽手势（2026-10 站长裁决③）：只认「标签文字」——单面板叶 =
-     * 抓标题文字，合堆叶 = 抓页签（makeTabs 内置）。头部空白处不再
-     * 是抓手（误拖整窗的来源），按钮照常排除。 */
     return head;
   }
   function makeTabs(leafObj) {
@@ -326,8 +291,6 @@ const Dock = (function () {
     const r = hit.leafEl.getBoundingClientRect();
     const inset = { west: [0, 0.5, 0, 1], east: [0.5, 1, 0, 1],
                     north: [0, 1, 0, 0.5], south: [0, 1, 0.5, 1], center: [0, 1, 0, 1] }[hit.zone];
-    /* west 曾误写 [0,0,0.5,1]（right 分量=0）——阴影宽度恒 0、只剩
-     * 边框 4px 的下半截（2026-10 站长目检缺陷①的实锤根因） */
     h.style.display = "block";
     h.style.left = r.left + r.width * inset[0] + "px";
     h.style.right = window.innerWidth - (r.left + r.width * inset[1]) + "px";
@@ -382,7 +345,6 @@ const Dock = (function () {
       }
       // 四边 dock：目标叶一分为二（沿落区轴向）。尺寸守恒：新叶取一半但
       // 双方都不得跌破各自最小值——否则连续分栏会把窗口一路减半成缝
-      // （2026-10-15 站长目检『拖动导致窗口不见』的实锤根因）。
       // half 由 applyDrop 从 DOM 预量传入——同窗拆出时 targetLeaf 是
       // detach 新建的对象，此处再查 DOM 必然扑空（2026-10 缺陷②根因）。
       const dir = zone === "west" || zone === "east" ? "row" : "col";
@@ -416,8 +378,6 @@ const Dock = (function () {
       dst = findByStack(t, remain);
       if (!dst) return;
     }
-    /* 半宽预量：趁 DOM 还对得上当前树（hit.uid 的叶几何 = 拆出前窗口），
-     * detach/insert 全程不再摸 DOM */
     const dir = hit.zone === "west" || hit.zone === "east" ? "row" : "col";
     const domLeaf = document.querySelector(`.dock-leaf[data-uid="${hit.uid}"]`);
     const full = domLeaf ? (dir === "row" ? domLeaf.offsetWidth
@@ -429,7 +389,6 @@ const Dock = (function () {
     save();
     renderAll();
   }
-  /* 全树钳制：固定尺寸一律 >= 该叶首面板最小值（历史脏布局一并矫正） */
   function clampSizes(node) {
     if (isLeaf(node)) return;
     const spring = node.sizes.indexOf(null);
@@ -640,8 +599,6 @@ const Dock = (function () {
     renderAll();
     return true;
   }
-  /* ── 用户命名布局（2026-10-15 站长提议：存/取自己调好的界面）──
-   * 与自动记忆同一纪律：只存浏览器（脸的摆法），不进服务端。 */
   function getSaved() {
     try { return JSON.parse(localStorage.getItem(SAVED_KEY)) || {}; }
     catch { return {}; }

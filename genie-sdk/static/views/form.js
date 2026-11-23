@@ -1,3 +1,10 @@
+import { apiNotice } from "../modules/api.js";
+import { exec } from "../core/bus.js";
+import { removeIntent, sendIntent, submitField } from "../modules/edit.js";
+import { autoGrid } from "../modules/app.js";
+import { GEO_TYPE_LABEL, previewEl } from "./previews.js";
+import { matColor } from "./scene3d.js";
+import { cfg, scene } from "../modules/state.js";
 /* Genie FDTD service — 参数面板（Phase B2 工作台版，2026-08-30）
  *
  * 旧 Studio 排版复活：config 栏一次只渲染 nav 选中的一节（Materials/
@@ -15,7 +22,7 @@
 
 /* ═══ 字段默认单位(2026-09 定案)：表单友好单位，JSON/代码视图保持 SI ═══
  * 纯数字按此换算写回；后缀输入（UNIT_SUFFIXES）优先。hint 显示 SI 等效。 */
-const FIELD_UNITS = {
+export const FIELD_UNITS = {
   len:  { toSI: (v) => v * 1e-6,  toUser: (v) => v * 1e6,
           label: "µm", si: "m",  hint: "len" },
   wl:   { toSI: (v) => v * 1e-9,  toUser: (v) => v * 1e9,
@@ -30,12 +37,12 @@ const FIELD_UNITS = {
 };
 
 /* 可解析的友好显示：6 位有效数字、非极端量级用十进制（0.5 / 381.97） */
-function fmtUserNum(x) {
+export function fmtUserNum(x) {
   if (typeof x !== "number" || !isFinite(x)) return "";
   return String(parseFloat(x.toPrecision(6)));
 }
 
-function _dispValue(val, unit) {
+export function _dispValue(val, unit) {
   if (Array.isArray(val))
     return val.map((x) =>
       typeof x === "number" && unit ? fmtUserNum(unit.toUser(x))
@@ -45,7 +52,7 @@ function _dispValue(val, unit) {
 }
 
 /* ── 路径读写（点分；数组下标即路径段）── 阶段 5b 回装（最小写回） */
-function getPath(obj, path) {
+export function getPath(obj, path) {
   let c = obj;
   for (const k of String(path).split(".")) {
     if (c == null) return undefined;
@@ -54,27 +61,6 @@ function getPath(obj, path) {
   return c;
 }
 
-function setPath(obj, path, value) {
-  const keys = String(path).split(".");
-  let cur = obj;
-  for (let i = 0; i < keys.length - 1; i++) {
-    const k = keys[i], nxt = keys[i + 1];
-    if (cur[k] == null || typeof cur[k] !== "object")
-      cur[k] = /^\d+$/.test(nxt) ? [] : {};
-    cur = cur[k];
-  }
-  cur[keys[keys.length - 1]] = value;
-}
-
-function deletePath(obj, path) {
-  const keys = String(path).split(".");
-  let cur = obj;
-  for (let i = 0; i < keys.length - 1; i++) {
-    cur = cur ? cur[keys[i]] : null;
-    if (cur == null) return;
-  }
-  if (cur) delete cur[keys[keys.length - 1]];
-}
 
 /* ── 单位后缀（2026-10-21 用户实测）：注释一直写着"[单位后缀]优先"，
  * 但其实没有任何实现——输入 `1um` 会被当成**表达式字符串**原样写进
@@ -83,14 +69,14 @@ function deletePath(obj, path) {
  *   裸数字  → 按字段单位换算（domain 里 1 = 1 µm）
  *   带后缀  → 后缀说了算，直接得 SI 绝对值（1um = 1e-6 m，与字段单位无关）
  * 认不出后缀又不像纯数字的（如 `lambda/2`、"1e-6*2"）照旧透传给服务端求值。 */
-const _UNIT_SUFFIX = {
+export const _UNIT_SUFFIX = {
   m: 1, dm: 1e-1, cm: 1e-2, mm: 1e-3,
   um: 1e-6, "µm": 1e-6, "μm": 1e-6, nm: 1e-9, pm: 1e-12,
   s: 1, ms: 1e-3, us: 1e-6, "µs": 1e-6, "μs": 1e-6,
   ns: 1e-9, ps: 1e-12, fs: 1e-15,
   thz: 1e12, ghz: 1e9, mhz: 1e6, khz: 1e3, hz: 1,
 };
-function parseSuffixed(t) {
+export function parseSuffixed(t) {
   const m = String(t).trim().match(
     /^([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*([a-zA-Zµμ]+)$/);
   if (!m) return NaN;
@@ -101,7 +87,7 @@ function parseSuffixed(t) {
 /* 写回换算（最小版）：纯数 × 字段单位 → SI（15 位有效数字杀浮点噪声）；
  * 单位后缀见 parseSuffixed；其余非纯数（表达式串）原样透传——实时校验在
  * 服务端 /api/validate（genie.models 同一双手），浏览器零求值（阶段 5②）。 */
-function writeBackValue(raw, kind, unitKey) {
+export function writeBackValue(raw, kind, unitKey) {
   const txt = String(raw == null ? "" : raw).trim();
   const unit = FIELD_UNITS[unitKey] || null;
   const toSI = (t) => {
@@ -127,16 +113,14 @@ function writeBackValue(raw, kind, unitKey) {
   return txt;
 }
 
-const FormPanel = {
+export const FormPanel = {
   container: null,
   cfg: null,
-  onMutate: null,        // (cfg) => void —— 表单编辑 → app.js（徽标/3D/校验）
   current: "domain",    // 当前打开的节
   currentSub: -1,       // nav 子项高亮的卡片下标（-1 = 无）
 
-  init(containerId, hooks) {
+  init(containerId) {
     this.container = document.getElementById(containerId);
-    this.onMutate = (hooks && hooks.onMutate) || null;
   },
 
   setCfg(cfg) { this.cfg = cfg; },
@@ -167,14 +151,8 @@ const FormPanel = {
     return list.map((v, i) => [v, i]);
   },
 
-  /* 结构变化（增删卡/切类型）后重建当前节 */
   _rerender() {
     this._render();
-    this._notifyMutate();
-  },
-
-  _notifyMutate() {
-    if (this.onMutate) this.onMutate(this.cfg);
   },
 
   _render() {
@@ -228,9 +206,6 @@ const FormPanel = {
     }
   },
 
-  /* 校验标错：错误路径 → 当前节内对应输入红框（其他节的错由 nav 红点提示）
-   * 2026-09-02 审查修复：错误不再只进 hover title——行下插入内联错误
-   * 文本（色+文字），并设 aria-invalid / aria-describedby 供读屏播报。 */
   /* 路径归一(08-31cd): 内核错误路径含中间类型段
    * (geometry.0.box.x_range), 表单字段路径没有 (geometry.0.x_range.0);
    * 剥掉中间段才能前缀匹配标红。 */
@@ -305,7 +280,6 @@ const FormPanel = {
     return row;
   },
 
-  /* 面板内空态：淡图标 + 一行标题 + 一行提示（列表为空时不再留白） */
   _paneEmpty(iconKey, title, hint) {
     const wrap = this._el("div", "empty-state pane-empty-state");
     const ic = this._el("span", "empty-ic");
@@ -331,9 +305,6 @@ const FormPanel = {
     bar.textContent = "⚠ " + msg;
   },
 
-  /* R3 标签排版：label 尾部 "(unit)" 后缀拆为 .unit span（视觉降档，CSS 弱化）。
-   * 纯视觉——title/aria-label/htmlFor 仍用完整 label 字符串，cfg 键/路径零改动；
-   * 零 innerHTML（createElement + textContent）。无括号后缀时行为同旧版。 */
   _fillLabel(lab, label) {
     const m = typeof label === "string"
       ? label.match(/^(.*?)\s*\(([^()]*)\)\s*$/) : null;
@@ -411,7 +382,7 @@ const FormPanel = {
     } else {
       hint.textContent = this._siHint(hintKind, isFinite(f) ? f : null);
     }
-    input.addEventListener("input", () => this._writeBack(input));
+    input.addEventListener("change", () => this._writeBack(input));
     const wrap = document.createElement("span");
     wrap.className = "inwrap";
     wrap.appendChild(input);
@@ -525,10 +496,6 @@ const FormPanel = {
     return pills;
   },
 
-  /* 材料场编辑器（a16）：基值标量 + 对角命名键覆盖（P2-5）。
-   * path=材料节点根（materials.<i>），base=eps|mu|eps_inf|mu_inf。
-   * iso 态编辑基值；diag 态三轴各一槽，空槽=回落基值（placeholder 即
-   * 基值，清空即删命名键）。位置式三数组 / 3×3 张量不再存在。 */
   _matEditor(path, mt, base, name) {
     const frag = document.createDocumentFragment();
     const AX = ["xx", "yy", "zz"];
@@ -617,9 +584,6 @@ const FormPanel = {
    * data-path 保持 .0/.1——cfg 仍是 [lo, hi] 数组（校验/线格式不受扰） */
   _rangeRow(label, path, arr, hintKind) {
     const row = this._el("div", "frow");
-    /* P2-5 a11y：此前 .flabel 是 span 且 min/max 两槽无可访问名——
-     * 改真 label，min 槽经 htmlFor 关联组标签；两槽各设显式可访问名
-     * （"x_range (µm) min" / "x_range (µm) max"），id/值/写回不变。 */
     const lb = this._el("label", "flabel");
     this._fillLabel(lb, label);
     row.appendChild(lb);
@@ -644,10 +608,6 @@ const FormPanel = {
     return row;
   },
 
-  /* ═══ ε/μ 双形态（a16）：基值标量 + 对角命名键 ═══
-   * iso=只有基值 | diag=任一命名键已设（其余轴回落基值）。
-   * diag→iso 删三命名键、基值取 xx（有损静默，2026-09 站长裁决：
-   * 不提醒不记忆）；iso→diag 零写入——命名键缺省即回落基值。 */
   _matMode(path, base, to) {
     const mt = getPath(this.cfg, path);
     if (!mt) return;
@@ -656,34 +616,31 @@ const FormPanel = {
     if (cur === to) return;
     if (to === "iso") {
       const bv = mt[keys[0]] ?? mt[base] ?? 1;
-      for (const k of keys) deletePath(this.cfg, path + "." + k);
-      setPath(this.cfg, path + "." + base, bv);
+      for (const k of keys) submitField(path + "." + k, null);
+      submitField(path + "." + base, bv);
     }
     this._rerender();
   },
 
+  /* 字段提交（2026-11-23 纯投影）：**不写本地模型**，发一条 set 意图；
+   * 界面更新由下一次快照重画（服务端是唯一真相）。 */
   _writeBack(input) {
-    /* null-path 控件（组视图/卡头类型下拉等纯 UI 选择器）无写回目标：
-     * 防御短路，杜绝 setPath(cfg,"null",v) 污染顶层配置 */
     if (!input.dataset.path) return;
     const raw = input.value.trim();
+    const path = input.dataset.path;
     /* 三态布尔：— 删除 / true|false 写 JSON 布尔 */
     if (input.dataset.kind === "bool") {
-      if (raw === "") deletePath(this.cfg, input.dataset.path);
-      else setPath(this.cfg, input.dataset.path, raw === "true");
-      this._notifyMutate();
+      submitField(path, raw === "" ? null : (raw === "true"));
       return;
     }
     /* 「空 = 不设置」的可选枚举（如 from_face）选回空时删除字段，
      * 而不是写出 ""（schema 是 Optional[Literal]，空串必报错） */
     if (raw === "" && input.dataset.emptyDeletes) {
-      deletePath(this.cfg, input.dataset.path);
-      this._notifyMutate();
+      submitField(path, null);
       return;
     }
-    const v = writeBackValue(raw, input.dataset.kind, input.dataset.unit || null);
-    setPath(this.cfg, input.dataset.path, v);
-    this._notifyMutate();
+    submitField(path, writeBackValue(raw, input.dataset.kind,
+                                     input.dataset.unit || null));
   },
 
   _card(headChildren, bodyEl) {
@@ -702,13 +659,13 @@ const FormPanel = {
    * 写回/onChange 链（→ 树/F2/3D label 同步）。placeholder 兜底未命名
    * （沿用原 card-title 的 "type #n" 回退），空名不写死到 cfg。 */
   _headName(path, value, placeholder, ariaLabel) {
-    const nw = this._input(path, value || "", "str");
-    const inp = nw.querySelector("input");
-    inp.classList.add("card-name");
-    inp.placeholder = placeholder || "name";
-    inp.setAttribute("aria-label", ariaLabel || (value || "name") + " 名称");
-    nw.classList.add("card-name-wrap");
-    return nw;
+    /* 身份名只读：name 是身份不是字段（改名 = 断引用，见上）；要换名就
+     * 重建对象（或脚本里删+建）。 */
+    const span = this._el("span", "card-name card-name-ro",
+                          value || placeholder || "（未命名）");
+    span.title = "名称即身份 —— 改名请重建对象（或脚本里删+建）";
+    span.setAttribute("aria-label", ariaLabel || (value || "name") + " 名称");
+    return span;
   },
 
   /* 渲染风卡头缩略图（previews.js R2 统一）：geometry/source/monitor 共用，
@@ -723,11 +680,21 @@ const FormPanel = {
     const b = this._el("button", "mini danger", label || "删除");
     b.addEventListener("click", (e) => {
       if (typeof uiConfirm === "function" && !uiConfirm("确定删除此项？（不可恢复）", e)) return;
-      const list = getPath(this.cfg, listPath);
-      if (Array.isArray(list)) {
-        list.splice(index, 1);
-        this._rerender();
+      const parts = String(listPath).split(".");
+      const head = parts[0];
+      const list = (this.cfg && this.cfg[head]) || [];
+      const item = list[Number(parts[1])];
+      if (!item) return;
+      if (parts.length === 2) {
+        /* 顶层对象：一条删除意图（等快照重画，不本地 splice） */
+        if (item.name) sendIntent(removeIntent(head, item.name));
+        return;
       }
+      /* 子列表（极点/网格…）：整表替换意图 */
+      const field = parts.slice(2).join(".");
+      const next = (Array.isArray(item[field]) ? item[field] : []).slice();
+      next.splice(index, 1);
+      submitField(listPath, next);
     });
     return b;
   },
@@ -739,7 +706,7 @@ const FormPanel = {
   /* ══════════════════ 各节（渲染进传入的 body 容器） ══════════════════ */
 
   _domain(body) {
-    const d = this.cfg.domain || (this.cfg.domain = {});
+    const d = this.cfg.domain || {};
     /* 段 1: 范围 */
     const s1 = this._sec("范围");
     body.appendChild(s1.head); body.appendChild(s1.body);
@@ -775,9 +742,6 @@ const FormPanel = {
       });
       line.appendChild(kindSel);
       bt.appendChild(line);
-      /* 2026-09 布局修复：kind 专属参数改到独立整行（.frow·label.flabel 两栏）
-       * 下挂当前面——不再挤进 .brow 单行造成 k/from_src/n_bg 相互遮挡。
-       * .bparams 提供轻缩进分组，参数标签落在 110px 轨道、值落 130px 列。 */
       const params = this._el("div", "bparams");
       if ((b.kind || "pec") === "pml") {
         const w = (lbl, key, val) => {
@@ -818,7 +782,7 @@ const FormPanel = {
     mount.id = "mesh-mount";
     sM.body.appendChild(mount);
 
-    const d = this.cfg.domain || (this.cfg.domain = {});
+    const d = this.cfg.domain || {};
     sM.body.appendChild(this._row("dx (µm)", this._input("domain.dx", d.dx, "num", "len")));
     sM.body.appendChild(this._row("dy (µm)", this._input("domain.dy", d.dy, "num", "len")));
     sM.body.appendChild(this._row("dz (µm)", this._input("domain.dz", d.dz, "num", "len")));
@@ -849,13 +813,13 @@ const FormPanel = {
     const auto = this._el("button", "mini", "⚡ 自动网格（按几何/材料）");
     auto.addEventListener("click", async () => {
       try {
-        await GenieApp.autoGrid();
+        await autoGrid();
         this._rerender();
       } catch (e) { apiNotice("自动网格：" + (e && e.message ? e.message : e), "err"); }
     });
     sM.body.appendChild(auto);
 
-    const list = this.cfg.mesh || (this.cfg.mesh = []);
+    const list = this.cfg.mesh || [];
     list.forEach((m, i) => {
       const inner = document.createDocumentFragment();
       inner.appendChild(this._rangeRow("x_range (µm)", `mesh.${i}.x_range`, m.x_range, "len"));
@@ -887,10 +851,10 @@ const FormPanel = {
     });
     const add = this._el("button", "mini", "+ mesh 区");
     add.addEventListener("click", () => {
-      list.push({ name: "m" + (list.length + 1),
-                  x_range: [-2e-7, 2e-7], y_range: [-2e-7, 2e-7],
-                  z_range: [-2e-7, 2e-7], factor_x: 2, growth_rate: 1.2 });
-      this._rerender();
+      /* 加网格 = 一条命令（worker 建默认细化盒）；字段后续在卡里改 */
+      const name = "m" + (list.length + 1);
+      exec("genie.add_mesh(" + JSON.stringify(name) + ")", { fresh: false, echo: false })
+        .catch((e) => apiNotice("加网格失败：" + (e && e.message ? e.message : e), "err"));
     });
     body.appendChild(add);
   },
@@ -899,7 +863,7 @@ const FormPanel = {
    * 只影响 3D 视图材质色；未设置时显示"自动"取到的调色板色并可一键回收
    * 到自动配色（删字段 → 前端散列）。颜色改动走 onFormMutate 同一收口：
    * 3D 重绘 + 树刷新 + 校验 + 模型推送。 */
-  _colorRow(mt) {
+  _colorRow(mt, path) {
     const row = this._el("div", "frow color-row");
     row.appendChild(this._el("label", "flabel", "显示色"));
     const field = this._el("span", "color-field");
@@ -924,17 +888,15 @@ const FormPanel = {
       autoBtn.classList.remove("on");
     });
     inp.addEventListener("change", () => {
-      mt.color = inp.value.toUpperCase();
-      hex.textContent = mt.color;
+      hex.textContent = inp.value.toUpperCase();
       autoBtn.classList.remove("on");
-      onFormMutate();
+      submitField(path + ".color", inp.value.toUpperCase());
     });
     autoBtn.addEventListener("click", () => {
-      delete mt.color;
       inp.value = autoHex.toLowerCase();
       hex.textContent = autoHex.toUpperCase();
       autoBtn.classList.add("on");
-      onFormMutate();
+      submitField(path + ".color", null);      /* 删字段 = 回自动配色 */
     });
     field.appendChild(inp);
     field.appendChild(hex);
@@ -944,7 +906,7 @@ const FormPanel = {
   },
 
   _materials(body) {
-    const list = this.cfg.materials || (this.cfg.materials = []);
+    const list = this.cfg.materials || [];
     if (!list.length) {
       body.appendChild(this._paneEmpty("materials", "还没有材料",
         "从工具条 MATERIALS 添加，或在脚本里 genie.materials.add_const()"));
@@ -959,14 +921,13 @@ const FormPanel = {
         "mat_" + mt.type));  /* 分型缩略图（R6；from_library 面已退役 R38） */
       headChildren.push(this._headName(`materials.${i}.name`, mt.name, "material name",
         (mt.name || "材料 " + (i + 1)) + " 名称"));
-      const chip = this._el("span", "tag type",
-        mt.type === "lorentz" ? "dispersive" : "const");
+      const chip = this._el("span", "tag type", mt.type || "material");
       chip.title = "材料类型（由工具栏按钮 / 代码决定）";
       headChildren.push(chip);
       headChildren.push(this._delBtn("materials", i));
       /* 显示色（2026-10-21）：材料节点上的 color 字段——只影响 3D 视图的
        * 材质色，与脚本 `.color('#RRGGBB')` 同一字段（不是 GUI 私有态）。 */
-      inner.appendChild(this._colorRow(mt));
+      inner.appendChild(this._colorRow(mt, `materials.${i}`));
       if (mt.type === "const") {
         const bE = this._msec("mat" + i + ":eps", "ε · 介电常数", false);
         inner.appendChild(bE.head); inner.appendChild(bE.body);
@@ -976,21 +937,19 @@ const FormPanel = {
         inner.appendChild(bM.head); inner.appendChild(bM.body);
         bM.body.appendChild(this._matEditor(`materials.${i}`, mt, "mu", "μ"));
       } else if (mt.type === "lorentz") {
-        mt.poles = mt.poles || [];
-        mt.mu_poles = mt.mu_poles || [];
+        const poles = Array.isArray(poles) ? poles : [];
+        const muPoles = Array.isArray(muPoles) ? muPoles : [];
 
         const sc = (v) => (typeof v === "number" && isFinite(v) ? v : null);
-        const isArr = (v) => Array.isArray(v) && v.length === 3;
 
         /* 单 pole 渲染（含两级折叠：可收起整卡） */
         const poleItem = (listKey, pl, j) => {
           const P = `materials.${i}.${listKey}.${j}`;
           const isAx = typeof pl.axis === "string";
-          const isLegacy = !isAx && (isArr(pl.omega_0) || isArr(pl.omega_p));
-          const shape = isAx ? "axis" : (isLegacy ? "legacy" : "iso");
+          const shape = isAx ? "axis" : "iso";
           const row = document.createDocumentFragment();
 
-          if (!isLegacy) {
+          {
             const sr = this._el("div", "frow");
             sr.appendChild(this._el("label", "flabel", "形态"));
             const pills = this._el("span", "mode-pills");
@@ -1012,8 +971,9 @@ const FormPanel = {
                       ? { kind: cur.kind, omega_p: pick, gamma: g }
                       : { kind: cur.kind, omega_0: pick, gamma: g,
                           delta_eps: d });
-                mt[listKey][j] = next;
-                this._rerender();
+                const arr = (listKey === "poles" ? poles : muPoles).slice();
+                arr[j] = next;
+                submitField(`materials.${i}.${listKey}`, arr);
               });
               pills.appendChild(bb);
             }
@@ -1024,17 +984,18 @@ const FormPanel = {
           const kindSel = this._select(P + ".kind", pl.kind, ["lorentz", "drude"]);
           kindSel.addEventListener("change", () => {
             const keep = isAx ? { axis: pl.axis } : {};
-            mt[listKey][j] = kindSel.value === "drude"
+            const arr = (listKey === "poles" ? poles : muPoles).slice();
+            arr[j] = kindSel.value === "drude"
               ? Object.assign({ kind: "drude", omega_p: 1e16,
                                 gamma: pl.gamma ?? 1e13 }, keep)
               : Object.assign({ kind: "lorentz", omega_0: 1e15,
                                 gamma: pl.gamma ?? 1e13,
                                 delta_eps: pl.delta_eps ?? 1 }, keep);
-            this._rerender();
+            submitField(`materials.${i}.${listKey}`, arr);
           });
           row.appendChild(this._row("kind", kindSel));
 
-          const pk = isLegacy ? "num3" : "num";
+          const pk = "num";
           if (pl.kind === "drude") {
             row.appendChild(this._row("ω_p",
               this._input(P + ".omega_p", pl.omega_p, pk, "ang")));
@@ -1054,39 +1015,7 @@ const FormPanel = {
               "轴向 pole：挂在单个坐标轴（对角各向异性），每轴可各自一组 pole。" +
               "各向同性 = 不选轴（自动展开到三根轴）。斜向/复数耦合已移除——" +
               "它们在宽带时域会泵能（相位共轭 / 半格错位）。"));
-          } else if (shape === "legacy") {
-            row.appendChild(this._el("div", "note",
-              "旧「三轴」速记（3 元参数，内核 1.4.0 已移除）。拆成多个" +
-              "各向同性/轴向 pole 自行叠加："));
-            const split = this._el("button", "mini");
-            /* ▸ 为装饰性前缀（P2-3）：语义由文字「拆成…」承载 → aria-hidden 包裹 */
-            const sg = this._el("span");
-            sg.setAttribute("aria-hidden", "true");
-            sg.textContent = "▸ ";
-            split.appendChild(sg);
-            split.appendChild(document.createTextNode("拆成三个各向同性 pole"));
-            split.addEventListener("click", () => {
-              const arr = (pl.omega_0 || pl.omega_p);
-              const gA = isArr(pl.gamma) ? pl.gamma
-                : (sc(pl.gamma) != null ? [pl.gamma, pl.gamma, pl.gamma]
-                    : [1e13, 1e13, 1e13]);
-              const dA = isArr(pl.delta_eps) ? pl.delta_eps
-                : (sc(pl.delta_eps) != null
-                    ? [pl.delta_eps, pl.delta_eps, pl.delta_eps] : [1, 1, 1]);
-              const out = [];
-              for (let a = 0; a < 3; a++) {
-                const po = { kind: pl.kind, gamma: gA[a] };
-                if (pl.kind === "drude") po.omega_p = arr[a];
-                else { po.omega_0 = arr[a]; po.delta_eps = dA[a]; }
-                out.push(po);
-              }
-              mt[listKey].splice(j, 1, ...out);
-              this._rerender();
-            });
-            row.appendChild(split);
           }
-
-          /* 审美打磨(2026-09)：pole 平铺项（不再卡中卡） */
           const item = this._el("div", "poleitem");
           const ihead = this._el("div", "pi-head");
           const pchev = this._el("span", "pchev", "▾");
@@ -1116,9 +1045,10 @@ const FormPanel = {
           const b = this._el("button", "mini",
             "+ " + (listKey === "poles" ? "ε pole" : "μ pole"));
           b.addEventListener("click", () => {
-            mt[listKey].push({ kind: "lorentz", omega_0: 1e15,
-                               gamma: 1e13, delta_eps: 1 });
-            this._rerender();
+            const arr = (listKey === "poles" ? poles : muPoles).slice();
+            arr.push({ kind: "lorentz", omega_0: 1e15,
+                       gamma: 1e13, delta_eps: 1 });
+            submitField(`materials.${i}.${listKey}`, arr);
           });
           return b;
         };
@@ -1144,36 +1074,33 @@ const FormPanel = {
 
         /* 两级折叠·一级：ε 整块（ε_inf + ε 极点）常开；μ 整块默认收起 */
         const bE = this._msec("mat" + i + ":eps", "ε · 介电常数（含色散）", false);
-        if (mt.poles.length) bE.head.appendChild(this._el("span", "sec-badge", String(mt.poles.length)));
+        if (poles.length) bE.head.appendChild(this._el("span", "sec-badge", String(poles.length)));
         inner.appendChild(bE.head); inner.appendChild(bE.body);
         bE.body.appendChild(this._matEditor(`materials.${i}`, mt, "eps_inf", "ε∞"));
         const peList = this._el("div", "pole-list");
-        mt.poles.forEach((pl, j) => peList.appendChild(poleItem("poles", pl, j)));
+        poles.forEach((pl, j) => peList.appendChild(poleItem("poles", pl, j)));
         bE.body.appendChild(peList);
-        if (!mt.poles.length) bE.body.appendChild(this._el("div", "note",
+        if (!poles.length) bE.body.appendChild(this._el("div", "note",
           "暂无 ε 极点 —— 独立参数的多个 pole 请自行叠加（各向同性 / 轴向）"));
         bE.body.appendChild(addPoleBtn("poles"));
 
         const bM = this._msec("mat" + i + ":mu", "μ · 磁导率（含色散）", true);
-        if (mt.mu_poles.length) bM.head.appendChild(this._el("span", "sec-badge", String(mt.mu_poles.length)));
+        if (muPoles.length) bM.head.appendChild(this._el("span", "sec-badge", String(muPoles.length)));
         inner.appendChild(bM.head); inner.appendChild(bM.body);
         bM.body.appendChild(this._matEditor(`materials.${i}`, mt, "mu_inf", "μ∞"));
         const pmList = this._el("div", "pole-list");
-        mt.mu_poles.forEach((pl, j) => pmList.appendChild(poleItem("mu_poles", pl, j)));
+        muPoles.forEach((pl, j) => pmList.appendChild(poleItem("mu_poles", pl, j)));
         bM.body.appendChild(pmList);
-        if (!mt.mu_poles.length) bM.body.appendChild(this._el("div", "note",
+        if (!muPoles.length) bM.body.appendChild(this._el("div", "note",
           "暂无 μ 极点 —— 需要时添加（μ 默认折叠，多数材料无需设置）"));
         bM.body.appendChild(addPoleBtn("mu_poles"));
       }
-      /* from_library 编辑分支已删（G20 2026-10-16）：内核拒收该节点
-       * （类别错误——nk 数据引用不属 cfg），库材料走工具条拟合对话框。 */
       body.appendChild(this._card(headChildren, inner));
     });
-    // 组级 + 材料 已删（2026-09 站长反馈：工具栏 Material 是唯一新增入口）
   },
 
   _geometry(body) {
-    const list = this.cfg.geometry || (this.cfg.geometry = []);
+    const list = this.cfg.geometry || [];
     if (!list.length) {
       body.appendChild(this._paneEmpty("structure", "还没有几何体",
         "从工具条 STRUCTURES 选一个形状添加，或在脚本里 genie.geometry.add_box()"));
@@ -1181,8 +1108,6 @@ const FormPanel = {
     }
     this._items(list).forEach(([g, i]) => {
       const inner = document.createDocumentFragment();
-      /* 命名单一位置 = 卡头（可编辑名输入），此处不再重复 body name 行；
-       * 未命名时树/3D label 与卡头同回退 type #n（见卡头 _headName placeholder） */
       /* material 字段改为下拉(已有材料+可选, 08-31cb) */
       const matSel = document.createElement("select");
       matSel.dataset.path = `geometry.${i}.material`;
@@ -1207,8 +1132,7 @@ const FormPanel = {
         matSel.appendChild(o);
       }
       matSel.addEventListener("change", () => {
-        g.material = matSel.value || undefined;
-        this._notifyMutate();
+        submitField(`geometry.${i}.material`, matSel.value || null);
       });
       /* 材料节（物理因果 RoundE）：几何身份=材料（名在卡头）；空间量入
        * 「位置与尺寸」，优先级（mesh 覆盖序）独立成节，与其余对象族同构。 */
@@ -1259,8 +1183,7 @@ const FormPanel = {
             verts.push([x * 1e-6, y * 1e-6]);            // µm → m
           }
           if (verts.length >= 3) {
-            g.vertices = verts;
-            this._notifyMutate();
+            submitField(`geometry.${i}.vertices`, verts);
           }
         });
         sGeo2.body.appendChild(this._row("vertices (µm)", ta));
@@ -1321,7 +1244,7 @@ const FormPanel = {
   },
 
   _source(body) {
-    const list = this.cfg.source || (this.cfg.source = []);
+    const list = this.cfg.source || [];
     if (!list.length) {
       body.appendChild(this._paneEmpty("soft_source", "还没有源",
         "到 FDTD 页的 SOURCES 添加，或在脚本里 genie.fdtd.sources.add_plane_wave()"));
@@ -1359,10 +1282,6 @@ const FormPanel = {
         const polRow = (label, which, tip) => {
           const row = this._el("div", "frow");
           const ld = this._el("label", "flabel", label);
-          /* F3 修复段 4（陷阱#1）：本分支的提示此前缺失——Ey 提醒只写在
-           * plane_wave/gaussian_beam 分支（下方 theta/phi/psi 行）。tip 走
-           * 既有体例（label title，同 _row 的 tip 落点），可见文案另见紧随
-           * 两行后的 .note。 */
           if (tip) ld.title = tip;
           row.appendChild(ld);
           const wrap = this._el("div", "inwrap");
@@ -1378,8 +1297,8 @@ const FormPanel = {
             inp.addEventListener("input", () => {
               const v = parseFloat(inp.value);
               pol[k][which] = isFinite(v) ? v : 0;
-              s.polarization = pol.map(p => [p[0], p[1]]);
-              this._notifyMutate();
+              submitField(`source.${i}.polarization`,
+                          pol.map(p => [p[0], p[1]]));
             });
             wrap.appendChild(inp);
           }
@@ -1476,7 +1395,7 @@ const FormPanel = {
   },
 
   _monitor(body) {
-    const list = this.cfg.monitor || (this.cfg.monitor = []);
+    const list = this.cfg.monitor || [];
     if (!list.length) {
       body.appendChild(this._paneEmpty("mon_time", "还没有监视器",
         "到 FDTD 页的 MONITORS 添加，或在脚本里 genie.fdtd.monitors.add_freq()"));
@@ -1484,8 +1403,6 @@ const FormPanel = {
     }
     this._items(list).forEach(([m, i]) => {
       const inner = document.createDocumentFragment();
-      /* 命名单一位置 = 卡头（可编辑名输入）；原「基本参数」节只含 name，
-       * 随之一并移除（不再有空节头） */
       /* 位置与尺寸（物理因果 RoundE：先定观测面/域，再定观测什么、怎么采样） */
       const sMon2 = this._sec("位置与尺寸", true, 2);
       inner.appendChild(sMon2.head); inner.appendChild(sMon2.body);
@@ -1560,14 +1477,11 @@ const FormPanel = {
     if (this.only == null) body.appendChild(addRow);
   },
 
-  /* GPU 卡数不由用户选（G78 2026-10-25 站长裁决）：内核只报需求、网关按
-   * 等级上限与机型容量决定给几张卡，run.gpu 退化成可选上限。表单因此
-   * 不再提供任何选卡控件——需要抬高上限的走配置文件/脚本。 */
 
   _run(body) {
     // G18 单旋钮：时长唯一在 domain.total_time（domain 节编辑）——run 节
     // 只剩超时；卡数由系统定（G78），步数是 build 后派生量。
-    const r = this.cfg.run || (this.cfg.run = {});
+    const r = this.cfg.run || {};
     body.appendChild(this._row("超时 (s)",
       this._input("run.timeout_s", r.timeout_s ?? 3600, "num")));
     // 提交面板挂载点（app.js 常驻 DOM 移进来; 2026-08-31au 方案A：

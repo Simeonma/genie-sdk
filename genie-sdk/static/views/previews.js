@@ -1,3 +1,4 @@
+
 /* 几何/源/监视器「渲染风」预览插图（2026-09 premium-visual R1）。
  *
  * 与 icons.js 的扁平线稿并存：线稿继续服务小尺寸场景（树、场景工具条），
@@ -15,13 +16,13 @@
 /* 几何类型「友好显示名」（2026-09）：UI 显示层用，去掉内部类型里的 "_z" 等
  * 技术后缀、更直观（用户看图自然知道形状）；内部类型/线格式/代码生成不变。
  * 供 app.js（工具条 tooltip / 树标签）与 form.js（类型 chip / 面板标题）共用。 */
-const GEO_TYPE_LABEL = {
+export const GEO_TYPE_LABEL = {
   box: "Box", sphere: "Sphere", cylinder: "Cylinder",
   ngon_z: "N-gon", ellipse_z: "Ellipse", ring_z: "Ring",
   polygon_z: "Polygon", polygon_swept: "Swept",
 };
 
-const PREVIEW_PATHS = {
+export const PREVIEW_PATHS = {
   /* ── 通用调色（中性 slate 灰蓝，双层明度 + 高光 + 软阴影）──
    * 亮面 #cfdcea→#8e9fb4 / 侧 #8e9fb4→#4e5f75 / 背 #4e5f75
    * 描边 #4e5f75 @0.4，高光 #fff @0.5-0.65，落影 #36465a @0.22+blur */
@@ -65,9 +66,6 @@ const PREVIEW_PATHS = {
    * 共振峰处隆起再回落（反常色散），一眼读出「折射率随波长变化」。 */
   mat_lorentz: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="28" height="28"><defs><linearGradient id="pvLo1" x1="6" y1="8" x2="26" y2="15" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#eef4fb"/><stop offset="1" stop-color="#d7e2ef"/></linearGradient><linearGradient id="pvLo2" x1="6" y1="13" x2="26" y2="19" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#cfdcea"/><stop offset="1" stop-color="#afbfd2"/></linearGradient><linearGradient id="pvLo3" x1="6" y1="18" x2="26" y2="24" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#8e9fb4"/><stop offset="1" stop-color="#6e7f95"/></linearGradient></defs><path d="M5 10.5 L16 5.5 L27 10.5 L16 15.5 Z" fill="url(#pvLo1)"/><path d="M5 10.5 L16 15.5 L16 17.9 L5 12.9 Z" fill="#b7c6d8" stroke-opacity="0.9"/><path d="M27 10.5 L16 15.5 L16 17.9 L27 12.9 Z" fill="#b7c6d8" stroke-opacity="0.9"/><path d="M5 15.4 L16 10.4 L27 15.4 L16 20.4 Z" fill="url(#pvLo2)"/><path d="M5 15.4 L16 20.4 L16 22.8 L5 17.8 Z" fill="#93a6bc" stroke-opacity="0.9"/><path d="M27 15.4 L16 20.4 L16 22.8 L27 17.8 Z" fill="#93a6bc" stroke-opacity="0.9"/><path d="M5 20.3 L16 15.3 L27 20.3 L16 25.3 Z" fill="url(#pvLo3)"/><path d="M5 20.3 L16 25.3 L16 27.7 L5 22.7 Z" fill="#5f7188" stroke-opacity="0.9"/><path d="M27 20.3 L16 25.3 L16 27.7 L27 22.7 Z" fill="#5f7188" stroke-opacity="0.9"/><g fill="none" stroke="#36465a" stroke-opacity="0.3" stroke-width="0.6" stroke-linejoin="round"><path d="M5 10.5 L16 5.5 L27 10.5"/></g></svg>',
 
-  /* 材料库拟合（工具条 library 按钮→对话框）：一排三块并列色板小样
-   * ——同一渲染语言的递进明度三片 ⇒「从一叠现成材料小样里挑一块」的
-   * 目录意象。（from_library cfg 节点面已退役 R38，本图标仍服务工具条。） */
   mat_library: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="28" height="28"><defs><linearGradient id="pvLbA" x1="5" y1="5" x2="15" y2="15" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#f4f8fd"/><stop offset="1" stop-color="#c3d2e2"/></linearGradient><linearGradient id="pvLbB" x1="17" y1="5" x2="27" y2="15" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#dbe6f2"/><stop offset="1" stop-color="#9fb0c5"/></linearGradient><linearGradient id="pvLbC" x1="5" y1="17" x2="15" y2="27" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#cfdcea"/><stop offset="1" stop-color="#7d8ea5"/></linearGradient><linearGradient id="pvLbD" x1="17" y1="17" x2="27" y2="27" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#afbfd2"/><stop offset="1" stop-color="#5f7188"/></linearGradient></defs><path d="M4.4 4.4 H14.0 L15.6 6.0 H6.0 Z" fill="url(#pvLbA)"/><path d="M4.4 14.0 H14.0 L15.6 15.6 H6.0 Z" fill="#8fa1b7"/><path d="M17.2 4.4 H26.8 L28.4 6.0 H18.8 Z" fill="url(#pvLbB)"/><path d="M17.2 14.0 H26.8 L28.4 15.6 H18.8 Z" fill="#8fa1b7"/><path d="M4.4 17.2 H14.0 L15.6 18.8 H6.0 Z" fill="url(#pvLbC)"/><path d="M4.4 26.8 H14.0 L15.6 28.4 H6.0 Z" fill="#8fa1b7"/><path d="M17.2 17.2 H26.8 L28.4 18.8 H18.8 Z" fill="url(#pvLbD)"/><path d="M17.2 26.8 H26.8 L28.4 28.4 H18.8 Z" fill="#8fa1b7"/><g fill="none" stroke="#36465a" stroke-opacity="0.35" stroke-width="0.6"><rect x="4.4" y="4.4" width="9.6" height="9.6" rx="1"/><rect x="17.2" y="4.4" width="9.6" height="9.6" rx="1"/><rect x="4.4" y="17.2" width="9.6" height="9.6" rx="1"/><rect x="17.2" y="17.2" width="9.6" height="9.6" rx="1"/></g></svg>',
 
   /* ════ 源（source）· R2：同一渲染语言（渐变+高光+软阴影+细描边）════ */
@@ -80,9 +78,6 @@ const PREVIEW_PATHS = {
    * 波前用同族渐变明暗交替，箭杆白色高光。 */
   plane_wave: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="28" height="28"><defs><linearGradient id="pvPwA" x1="7" y1="7" x2="21" y2="25" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#cfdcea"/><stop offset="1" stop-color="#8e9fb4"/></linearGradient></defs><g stroke="#4e5f75" stroke-opacity="0.45" stroke-width="0.6" fill="none" stroke-linecap="round"><path d="M7 6 L7 26" stroke="#8e9fb4" stroke-width="1.6" stroke-opacity="0.55"/><path d="M12.5 6 L12.5 26" stroke="#6e7f95" stroke-width="1.6" stroke-opacity="0.5"/><path d="M18 6 L18 26" stroke="#6e7f95" stroke-width="1.6" stroke-opacity="0.45"/></g><path d="M7.6 16 L23 16" stroke="url(#pvPwA)" stroke-width="2" stroke-linecap="round"/><path d="M19.4 12.2 L23.6 16 L19.4 19.8" fill="none" stroke="#6e7f95" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/><path d="M9 8.2 L9 12.6" stroke="#ffffff" stroke-opacity="0.7" stroke-width="1.1" stroke-linecap="round"/></svg>',
 
-  /* 高斯束（gaussian_beam）· R2：水平高斯光束，波前弧线；束腰（中心）最窄。
-   * R3（2026-10-17 站长裁决）：上下沿各波前弧的端点连两条包络线——
-   * 不加填充，纯线条读出「宽→窄→宽」的高斯轮廓。 */
   gaussian_beam: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="28" height="28"><defs><linearGradient id="pvGbW" x1="3" y1="16" x2="29" y2="16" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#8fa1b7"/><stop offset="0.5" stop-color="#dbe6f2"/><stop offset="1" stop-color="#8fa1b7"/></linearGradient><linearGradient id="pvGbC" x1="3" y1="16" x2="29" y2="16" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#1f62b0" stop-opacity="0.06"/><stop offset="0.5" stop-color="#5b96d6" stop-opacity="0.34"/><stop offset="1" stop-color="#1f62b0" stop-opacity="0.06"/></linearGradient></defs><path d="M3 9.6 C9 12.2 12.4 13.9 16 13.9 C19.6 13.9 23 12.2 29 9.6 L29 22.4 C23 19.8 19.6 18.1 16 18.1 C12.4 18.1 9 19.8 3 22.4 Z" fill="url(#pvGbC)"/><g fill="none" stroke="url(#pvGbW)" stroke-width="1.5" stroke-linecap="round"><path d="M3 9.6 C9 12.2 12.4 13.9 16 13.9 C19.6 13.9 23 12.2 29 9.6"/><path d="M3 22.4 C9 19.8 12.4 18.1 16 18.1 C19.6 18.1 23 19.8 29 22.4"/></g><path d="M3 9.6 C1.8 12.2 1.8 19.8 3 22.4" fill="none" stroke="#8fa1b7" stroke-width="1.3" stroke-linecap="round"/><path d="M29 9.6 C30.2 12.2 30.2 19.8 29 22.4" fill="none" stroke="#8fa1b7" stroke-width="1.3" stroke-linecap="round"/><path d="M16 13.9 L16 18.1" stroke="#5b96d6" stroke-width="1.2" stroke-linecap="round" opacity="0.6"/></svg>',
 
   /* ════ 监视器（monitor）· R2：同一渲染语言 ════ */
@@ -135,12 +130,12 @@ const PREVIEW_PATHS = {
   params: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="28" height="28"><defs><linearGradient id="pvPrT" x1="0" y1="8" x2="0" y2="24" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#e9f0f8"/><stop offset="1" stop-color="#cfdcea"/></linearGradient><linearGradient id="pvPrK" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e9f0f8"/><stop offset="1" stop-color="#8e9fb4"/></linearGradient></defs><rect x="5" y="7" width="22" height="18" rx="3" fill="url(#pvPrT)" stroke="#4e5f75" stroke-opacity="0.45" stroke-width="0.7"/><path d="M9 12.4 H23 M9 19.6 H23" stroke="#4e5f75" stroke-opacity="0.35" stroke-width="1" stroke-linecap="round"/><circle cx="13" cy="12.4" r="2.4" fill="url(#pvPrK)" stroke="#4e5f75" stroke-opacity="0.5" stroke-width="0.6"/><circle cx="20" cy="19.6" r="2.4" fill="url(#pvPrK)" stroke="#4e5f75" stroke-opacity="0.5" stroke-width="0.6"/><path d="M12 11.3 L13.6 10.6" stroke="#ffffff" stroke-opacity="0.8" stroke-width="0.8" stroke-linecap="round"/><path d="M19 18.5 L20.6 17.8" stroke="#ffffff" stroke-opacity="0.8" stroke-width="0.8" stroke-linecap="round"/></svg>',
 };
 
-const _previewCache = {};
+export const _previewCache = {};
 
 /* 取一个预览元素（克隆自缓存；未知 key 回退 box）。
  * 返回的 <svg> 一律 aria-hidden（装饰性预览：语义由所在按钮的
  * aria-label / 相邻文本承担），随 clone 每次设置。 */
-function previewEl(key) {
+export function previewEl(key) {
   const svg = PREVIEW_PATHS[key] || PREVIEW_PATHS.box;
   if (!_previewCache[key]) {
     _previewCache[key] = new DOMParser()
@@ -151,14 +146,6 @@ function previewEl(key) {
   return pv;
 }
 
-/* ══ 渐变涂料站（2026-10-17 修复「树图标随页签时隐时现」）════════
- * 病根：同一 key 的 preview 在「隐藏 ribbon 页 + 可见面（树/检查器/顶栏）」
- * 各有一份克隆，渐变 id 相同（如 pvMsT）；fill="url(#id)" 按文档序命中
- * 第一份——恰是 display:none 页里的那份。Chrome 不渲染 display:none
- * 子树里的渐变涂料 ⇒ 树里的 Mesh/Run 只剩线稿，直到对应页签被展示过
- * （切走又复盲）。修法：把全部 <defs> 汇入 body 首子节点的常渲染
- * 0×0 SVG（position:absolute，非 display:none——icon sprite 惯用法），
- * 此后所有 url(#…) 命中这份永远可渲染的涂料，与页签可见性彻底脱钩。 */
 (function installPreviewDefs() {
   if (!document.body) return;             /* 本文件在 body 内按序加载，恒有 body */
   if (document.getElementById("preview-defs-sprite")) return;

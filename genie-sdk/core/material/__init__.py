@@ -8,8 +8,7 @@ Public surface:
   stable NKFit shape) / ``assemble_nk`` (**the only node factory**:
   per-component results → a single node) / ``load_nk`` (library
   name → raw n-k data) / ``list_library_materials`` (list of
-  library names) / ``mat_from_nk`` (one-call convenience: library
-  name → a material node).
+  library names).
 - fit_nk fits one component at a time — generality comes from
   **composition** (isotropic / diagonal anisotropic = fit each diagonal
   element separately, then assemble); the return type is always one
@@ -55,7 +54,7 @@ from .fit import (_TOLERANCE, C0_SI, ComponentFit, DispersionResult,
                    fit_range_bounds, passivity_report,
                    pole_from_node, pole_to_node, scalar_result)
 
-__all__ = ["fit_nk", "assemble_nk", "mat_from_nk", "load_nk",
+__all__ = ["fit_nk", "assemble_nk", "load_nk",
            "list_library_materials"]
 
 #: Speed of light [m/s] (same value as the kernel's C0_PHYS).
@@ -258,11 +257,16 @@ def _parse_entry(entry: dict, src: str):
         f"has unknown or inapplicable type {ftype!r}")
 
 
+_AXIS_KEYS = ("x", "y", "z")
+
+
 def _load_raw(name: str):
-    """Library name → ``{component: (wl_um, n, k)}``; **missing file =
+    """Library name → ``{axis: (wl_um, n, k)}``; **missing file =
     None, broken file = ValueError** (the two failures are reported
-    separately). An iso material = a single key ``''``; compound
-    material keys = direction (o/e/x/y/z)."""
+    separately). An iso material = a single key ``''`` (unlabeled
+    block); an anisotropic file labels its blocks ``x``/``y``/``z``
+    (the o/e vocabulary was baked into axis labels at import,
+    2026-11-22 — it lives only in the importer's curation)."""
     _check_material_name(name)
     path = _DATA_DIR / (name + ".yml")
     if not path.exists():
@@ -273,6 +277,11 @@ def _load_raw(name: str):
     for e in entries:
         arr = _parse_entry(e, str(path))
         key = e["direction"] or ""
+        if key not in ("",) + _AXIS_KEYS:
+            raise ValueError(
+                f"materials file {path}: block direction {key!r} is not "
+                f"an axis label (expected one of x/y/z, or no label = "
+                f"iso) — regenerate the file with tools/import_rii.py")
         if key in comps:
             raise ValueError(
                 f"materials file {path}: duplicate component "
@@ -285,6 +294,29 @@ def _load_raw(name: str):
     return comps
 
 
+def _load_axes(name: str):
+    """Library name → ``{axis: (wl_m, n, k)}`` for **all three axes**
+    (the one address that knows how many distinct tables a material
+    has). Iso = the same table object on x/y/z (no copies); an
+    anisotropic file must cover all three axes or the error names the
+    missing ones."""
+    comps = _load_raw(name)
+    if comps is None:
+        raise ValueError(
+            f"library {name!r} not found in the local n-k library — "
+            f"f.list_library_materials() lists all local library names")
+    if set(comps) == {""}:
+        t = _to_m(comps[""])
+        return {"x": t, "y": t, "z": t}
+    by = {ax: _to_m(comps[ax]) for ax in comps}
+    missing = [ax for ax in _AXIS_KEYS if ax not in by]
+    if missing:
+        raise ValueError(
+            f"library {name!r}: blocks {sorted(comps)} do not cover "
+            f"axes {missing} — the library entry is incomplete")
+    return by
+
+
 def _to_m(arr):
     """(wl_um, n, k) → (wl_m, n, k) (the µm→m conversion lives here, at a single address)."""
     wl_um, n, k = arr
@@ -292,14 +324,14 @@ def _to_m(arr):
             np.asarray(n, dtype=float), np.asarray(k, dtype=float))
 
 
-def load_nk(name, component=None):
+def load_nk(name, axis=None):
     """Library name → raw n-k data ``(wl_m, n, k)`` (**direct pick when
     unambiguous, otherwise error listing options**).
 
     An iso material (single data block) returns the triplet directly
-    and ``component`` must be None; a compound material (multi-block)
-    **requires naming the component explicitly**, e.g.
-    ``load_nk('ZnO', 'e')`` — when omitted, the error lists the
+    and ``axis`` must be None; an anisotropic material (multi-block,
+    axis-labeled) **requires naming the axis explicitly**, e.g.
+    ``load_nk('ZnO', 'z')`` — when omitted, the error lists the
     options instead of guessing a default.
 
     Raises
@@ -307,9 +339,9 @@ def load_nk(name, component=None):
     ValueError
         The name is not a bare material name; no local hit (pointing
         to :func:`list_library_materials`); the file exists but does
-        not parse (with the path); naming a component on an iso
-        material / not naming one on a compound material, or naming
-        a wrong one (options listed). Messages are always English.
+        not parse (with the path); naming an axis on an iso material /
+        not naming one on an anisotropic material, or naming a wrong
+        one (options listed). Messages are always English.
     """
     comps = _load_raw(name)
     if comps is None:
@@ -317,20 +349,20 @@ def load_nk(name, component=None):
             f"library {name!r} not found in the local n-k library — "
             f"f.list_library_materials() lists all local library names")
     if set(comps) == {""}:
-        if component is not None:
+        if axis is not None:
             raise ValueError(
                 f"library {name!r} is isotropic (single data set) — no "
-                f"component to select")
+                f"axis to select")
         return _to_m(comps[""])
-    if component is None:
+    if axis is None:
         raise ValueError(
-            f"library {name!r} has multiple components — pass one of: "
+            f"library {name!r} has multiple axis blocks — pass one of: "
             + ", ".join(repr(c) for c in sorted(comps)))
-    if component not in comps:
+    if axis not in comps:
         raise ValueError(
-            f"library {name!r} has no component {component!r} — "
+            f"library {name!r} has no axis block {axis!r} — "
             f"available: " + ", ".join(repr(c) for c in sorted(comps)))
-    return _to_m(comps[component])
+    return _to_m(comps[axis])
 
 
 # Tensor assembly (general assembly). Pole coupling = **axis mount**
@@ -595,105 +627,20 @@ def fit_nk(wl, n, k, band=None, max_poles=10, imaginary_weight=1.0, tolerance=0.
 # ═══════════════════════════════════════════════════════════════════════════
 
 #: Physical component → axis mapping. Uniaxial-crystal convention:
-#: the optic axis lies along z — the o wave is perpendicular to the
-#: optic axis (xx=yy), the e wave along it (zz); biaxial crystals
-#: use x/y/z.
-_COMPONENT_AXES = {"o": ("xx", "yy"), "e": ("zz",),
-                   "x": ("xx",), "y": ("yy",), "z": ("zz",)}
+# 2026-11-22: the o/e component vocabulary was baked into axis labels
+# at import (o -> x+y blocks, e -> z) — the mapping lives only in
+# tools/import_rii.py's curation now; the loader knows x/y/z only.
 
-
-def _fit_convenience(wl, n, k, band=None, max_poles=10, imaginary_weight=1.0,
-                     make_passive=False, tolerance=0.1):
-    """Convenience-layer rule: fit the window the **caller** names at the
-    requested ``tolerance`` (default 0.1, Lumerical's ``0x220``) and keep the
-    result even if the tolerance is missed — the warnings say so, and
-    ``mat_from_nk`` surfaces them.
-
-    ``band=None`` means "the whole data range" *at this layer*; the worker
-    verb passes the **simulation source band** (the Lumerical rule: fit
-    where you will simulate), falling back to the data range when the
-    source band holds too few samples to constrain a fit.
-    """
-    return fit_nk(wl, n, k, band=band, max_poles=max_poles,
-                  imaginary_weight=imaginary_weight, make_passive=make_passive,
-                  tolerance=tolerance)
 
 
 def _report(line: str) -> None:
     """One-line human report — **only on an interactive terminal**.
 
-    ``mat_from_nk`` is also a worker verb, and the worker's stdout *is* the
-    IPC channel: an unconditional print there corrupts the stream (the
-    journey test caught exactly that). A terminal user still gets the line;
-    a script / worker / pipe stays silent and reads ``NKFit.summary()``
-    itself.
+    The worker's stdout *is* the IPC channel: an unconditional print
+    there corrupts the stream (the journey test caught exactly that).
+    A terminal user still gets the line; a script / worker / pipe stays
+    silent and reads ``NKFit.summary()`` itself.
     """
     import sys
     if sys.stdout.isatty():
         print(line)
-
-
-def mat_from_nk(name, band=None, max_poles=10, imaginary_weight=1.0,
-                make_passive=False, tolerance=0.1):
-    """Library name → a material node in **one call** (read library →
-    per-component, per-axis ``fit_nk`` → ``assemble_nk``).
-
-    A near-zero-knob convenience layer: only ``band`` (fit window [m]),
-    ``max_poles`` (order-search ceiling) and ``imaginary_weight`` are
-    forwarded. The
-    per-component quality is not surfaced — for control use the primitive
-    layer (``load_nk`` / ``fit_nk`` / ``assemble_nk``). **Does not touch the model** (adding
-    to a model is one line, ``genie.materials.add_lorentz(node)``); the node
-    name defaults to the library name. An iso material is fitted
-    once and mounted on all three axes; compound materials are
-    split per axis via
-    ``_COMPONENT_AXES`` (o→xx,yy, e→zz), and incomplete components →
-    an error listing what the library contains.
-
-    ``band=None`` = the whole data range. The **worker verb** passes the
-    simulation source band here (fit where you will simulate), so the
-    one-liner follows the source by default while this core function stays
-    independent of the model.
-
-    Raises
-    ------
-    ValueError
-        Library name not found (pointing to
-        :func:`list_library_materials`); an unknown component
-        direction; incomplete components (missing axes); any
-        component's fit not assemblable (not converged —
-        assemble names it explicitly). Messages are always English.
-    """
-    comps = _load_raw(name)
-    if comps is None:
-        raise ValueError(
-            f"library {name!r} not found in the local n-k library — "
-            f"f.list_library_materials() lists all local library names")
-    if set(comps) == {""}:                       # iso: fit once, mount on all three axes
-        wl, n, k = _to_m(comps[""])
-        fit = _fit_convenience(wl, n, k, band=band,
-                               max_poles=max_poles,
-                               imaginary_weight=imaginary_weight,
-                               make_passive=make_passive, tolerance=tolerance)
-        _report(f"{name} (iso)  {fit.summary()}")
-        return assemble_nk({"xx": fit, "yy": fit, "zz": fit}, name=name)
-    by_axis: dict = {}
-    for comp in sorted(comps):
-        if comp not in _COMPONENT_AXES:
-            raise ValueError(
-                f"library {name!r}: unknown component direction {comp!r} "
-                f"(known: o/e/x/y/z)")
-        wl, n, k = _to_m(comps[comp])
-        fit = _fit_convenience(wl, n, k, band=band,
-                               max_poles=max_poles,
-                               imaginary_weight=imaginary_weight,
-                               make_passive=make_passive, tolerance=tolerance)
-        _report(f"{name} ({comp})  {fit.summary()}")
-        for ax in _COMPONENT_AXES[comp]:
-            by_axis[ax] = fit
-    missing = sorted({"xx", "yy", "zz"} - set(by_axis))
-    if missing:
-        raise ValueError(
-            f"library {name!r}: components {sorted(comps)} do not cover "
-            f"axes {missing} — the library entry is incomplete")
-    return assemble_nk(by_axis, name=name)

@@ -1,130 +1,114 @@
-/* modules/edit.js — 表单编辑通道（M3b：改一个字段发一条增量，不发整份文档）
- * G5 拆分（2026-10-14）：自 app.js 机械切出；M3b 2026-10-22 换成 patch。
+import { post } from "../core/bus.js";
+import { cfg, setDocDirty, toast } from "./state.js";
+/* modules/edit.js — GUI 编辑通道（2026-11-23 终态：单一真相 = worker 里的模型）
  *
- * 为什么要 diff 而不是直接全量推：模型真源在 worker，浏览器手里的 cfg 只是
- * **编辑缓冲**。以前每次敲字段都把整份文档推上去做整份替换，于是
- *   · 并发写（终端/另一标签）互相覆盖；
- *   · 自己的写入回声无法识别 → 整面板重渲染（丢焦点、吞键）；
- *   · 一次字段编辑要重建整棵对象树。
- * 现在所有改动先落在本地 cfg（几百个写入点一个都不用改），在**这一个收口点**
- * 与服务端已知状态求差，只发改动的路径。 */
+ * 第一性：GUI 只是**投影 + 命令发送器**——不持可编辑副本、不做状态 diff、
+ * 不反推动作。每个动作/字段编辑 → 一条明确的意图 → host 生成一行 Python →
+ * worker 改模型 → 快照回来重画。
+ *
+ * 被删掉的旧机器（它们只为"两份模型同步"服务，且是 bug 温床）：
+ *   diffCfg / pushCfg / scheduleCfgPush / _serverCfg 基线 /
+ *   intentsFromOps 整表反推 / replaceModel / _pendingExec。
+ * 保留的映射只有一张：**字段路径 → 意图**（GUI 知道路径，host 知道命令）。
+ */
 "use strict";
 
-/* 服务端已知状态（最近一次快照）。patch 的 diff 基准 = 它，不是上一次本地状态
- * ——否则连续编辑会diff 出错误增量。 */
-let _serverCfg = null;
+/* cfg 列表键 → /form 的 collection 词 */
+export const COLL_OF = {
+  materials: "mat", geometry: "geom", source: "src", monitor: "mon",
+};
 
-function onFormMutate() {
-  /* 表单值即显示值——但只把**改过的路径**抄进 displayCfg，保住其余
-   * resolved 槽（表达式/单位串的显示副本）。修前整份 displayCfg = cfg：
-   * 一次没有实际变化的 blur 也会把 resolved 副本抹成 raw，"0.5[um]" 这类
-   * 值在 3D 与参数 SI 列里就失效了（2026-10-30 真机实证）。 */
-  if (!displayCfg || displayCfg === cfg) {
-    displayCfg = cfg;
-  } else {
-    try {
-      for (const op of diffCfg(_serverCfg || {}, cfg)) {
-        setPath(displayCfg, op.path, op.value);
-      }
-    } catch (e) { displayCfg = cfg; }   /* 兜底：结构突变时退回整份 */
-  }
-  updateScene();
-  renderTree();
-  scheduleValidate();
-  scheduleCfgPush();   /* 表单字段级修改 → worker 里的 f（terminal 战役：唯一可编辑） */
-}
-
-/** 两份模型求路径级差异 → [{path, value}]（value=null 表示删除）。
- *
- * 只有两种 op 形状：**标量路径赋值** 与 **整表替换**。结构操作（加/删/
- * 重排对象）天然就是"整个列表变了"，按表发既简单又不会因为下标移位而
- * 打到错的对象。
- */
-function diffCfg(base, next) {
-  const ops = [];
-  (function walk(b, n, path) {
-    if (n === null || typeof n !== "object") {
-      if (JSON.stringify(b) !== JSON.stringify(n)) {
-        if (path) ops.push({ path, value: n });
-      }
-      return;
-    }
-    if (Array.isArray(n)) {
-      if (JSON.stringify(b) !== JSON.stringify(n)) {
-        if (path) ops.push({ path, value: n });
-      }
-      return;
-    }
-    const bo = (b && typeof b === "object" && !Array.isArray(b)) ? b : {};
-    for (const k of Object.keys(n)) {
-      walk(bo[k], n[k], path ? path + "." + k : k);
-    }
-    for (const k of Object.keys(bo)) {
-      if (!(k in n)) ops.push({ path: path ? path + "." + k : k, value: null });
-    }
-  })(base || {}, next || {}, "");
-  return ops;
-}
-
-/* 表单 → worker 里的 f 推送（防抖 400ms；服务端权威，客户端只发增量） */
-let _cfgPushTimer = null;
-let _pendingExec = null;   /* busy 期提交的待执行命令（单槽排队）*/
-
-async function pushCfg() {
-  if (!cfg) return;
-  const ops = diffCfg(_serverCfg || {}, cfg);
-  if (!ops.length) return;                 /* 没改动 = 不发 */
+/* 一条意图 → host（/form）。失败即报（不静默）。 */
+export async function sendIntent(intent) {
   try {
-    /* v2 连线层：路径 diff → 薄意图（host 生成 Python delta） */
-    await GenieApp.formIntents(ops);
+    await post("/form", intent);
+    setDocDirty(true);                     /* 模型即将变；快照落地后由 File 面清 */
+    return true;
   } catch (e) {
-    apiNotice("保存修改：" + (e && e.message ? e.message : e), "err");
+    toast("提交失败：" + (e && e.message ? e.message : e), "err");
+    return false;
   }
 }
-function scheduleCfgPush() {
-  if (_cfgPushTimer) clearTimeout(_cfgPushTimer);
-  _cfgPushTimer = setTimeout(async () => {
-    _cfgPushTimer = null;
-    await pushCfg();
-  }, 400);
-}
-/* Run/脚本执行前 flush 未决的表单编辑（意图级：提交我刚刚的修改）。 */
-async function flushPendingCfgPush() {
-  if (!_cfgPushTimer) return;
-  clearTimeout(_cfgPushTimer);
-  _cfgPushTimer = null;
-  await pushCfg();
+
+export async function sendIntents(list) {
+  let ok = true;
+  for (const it of list || []) ok = (await sendIntent(it)) && ok;
+  return ok;
 }
 
-/** 整份模型替换（导入 .gensim / 搬运）：服务端 replace + 本地视图刷新。
- *
- * 先把 `_serverCfg` 对齐成新模型，于是随后 onFormMutate 的 diff 为空
- * （不会再多发一坨 patch），只有这一次 replace。 */
-async function replaceModel(model, source) {
-  if (!model || typeof model !== "object") return false;
-  /* Q17：嵌套户型先投影成 GUI 平铺视图（同 applyCfgSnapshot） */
-  if (typeof guiViewOf === "function") model = guiViewOf(model);
-  cfg = model;
-  /* 深拷贝：cfg 会被表单原地改，_serverCfg 必须是"服务端那份"的独立副本 */
-  _serverCfg = (typeof structuredClone === "function")
-    ? structuredClone(model) : JSON.parse(JSON.stringify(model));
-  displayCfg = model;
-  FormPanel.setCfg(cfg);
-  updateScene();
-  renderTree();
-  renderInspector();
-  scheduleValidate();
-  /* v2：整份换模型 = worker 里 exec(fresh) 重建（不走本地替换端点）；
-   * 这里的本地替换只服务显示层——需要真换模型时请在编辑器跑脚本。 */
-  return true;
+/* 字段路径 → 一条 set 意图。身份（对象 name/type）只**读** cfg，不写。 */
+export function fieldIntent(path, value) {
+  const parts = String(path || "").split(".");
+  const head = parts[0];
+  /* 数组下标路径（domain.x_range.0 / geometry.3.x_range.1）：wire 字段是
+   * 整数组 → 从只读快照取当前数组、替换该位、按整字段发。 */
+  const last = parts[parts.length - 1];
+  const isIdx = /^\d+$/.test(last);
+  const arrField = (base, fieldPath, idx) => {
+    const cur = (base && Array.isArray(base[fieldPath])) ? base[fieldPath].slice() : [];
+    while (cur.length < Math.max(idx + 1, 2)) cur.push(0);
+    cur[idx] = value;
+    return cur;
+  };
+  if (head === "parameters") {
+    const name = parts[1];
+    if (!name) return null;
+    if (value === null) return { op: "param", name, remove: true };
+    return { op: "param", name, value,
+             add: !(cfg && cfg.parameters && name in cfg.parameters) };
+  }
+  if (head === "domain") {
+    if (isIdx) {
+      const fieldPath = parts.slice(1, -1).join(".");
+      return { collection: "domain", id: null, field: fieldPath,
+               value: arrField(cfg && cfg.domain, fieldPath, Number(last)) };
+    }
+    return { collection: "domain", id: null,
+             field: parts.slice(1).join("."), value };
+  }
+  const coll = COLL_OF[head];
+  if (!coll || parts.length < 3) return null;   /* 身份/整表不在这里发 */
+  const item = ((cfg && cfg[head]) || [])[Number(parts[1])];
+  if (!item || !item.name) return null;
+  if (isIdx) {
+    const fieldPath = parts.slice(2, -1).join(".");
+    return { collection: coll, id: null, name: item.name, kind: item.type,
+             field: fieldPath, value: arrField(item, fieldPath, Number(last)) };
+  }
+  return { collection: coll, id: null, name: item.name, kind: item.type,
+           field: parts.slice(2).join("."), value };
 }
 
-/* 模型级校验错误的去重记录（2026-10-21）：这类错误没有字段路径（loc 为空），
- * 挂不到输入框上，只能在面板层提示——按消息去重，避免每次防抖校验都弹一遍。 */
-let _lastRootErr = "";
-
-function scheduleValidate() {
-  /* v2：校验只在 worker 里（提交时 `validate_for_ui`，错误走终端红行）。
-   * v1 的 `/api/validate` 已退役；字段级即时校验（失焦 / 保存前）需要
-   * 公开读动词 `genie.validate()`，记在后端线，GUI 批先不接、也不再发请求。 */
+export function submitField(path, value) {
+  const it = fieldIntent(path, value);
+  if (!it) return Promise.resolve(false);
+  return sendIntent(it);
 }
+
+/* 动作点（加对象）：身份 + 全部字段，按序发。 */
+export function addIntents(kind, name, type, fields) {
+  const coll = { mat: "mat", geo: "geom", src: "src", mon: "mon",
+                 materials: "mat", geometry: "geom", source: "src",
+                 monitor: "mon" }[kind];
+  const out = [{ op: "add", collection: coll, kind: type, name }];
+  for (const [k, v] of Object.entries(fields || {})) {
+    if (k === "name" || k === "type" || k === "id") continue;
+    out.push({ collection: coll, id: null, name, kind: type, field: k, value: v });
+  }
+  return out;
+}
+
+export function removeIntent(kind, name) {
+  const coll = { mat: "mat", geo: "geom", src: "src", mon: "mon",
+                 materials: "mat", geometry: "geom", source: "src",
+                 monitor: "mon" }[kind];
+  return { op: "remove", collection: coll, name };
+}
+
+/* 校验面：L-7 挂账（worker 内部校验尚未接线）——保留空实现，调用点不变，
+ * 接线时只改这一处。 */
+export function scheduleValidate() {}
+
+/* busy 期提交的待执行命令（单槽排队；term.js 读写，权限在本模块） */
+export let _pendingExec = null;
+export function setPendingExec(v) { _pendingExec = v; }

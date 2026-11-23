@@ -1676,6 +1676,9 @@ class ModeDomainSpec(_StrictModel):
     dx: Optional[float] = Field(default=None, gt=0.0)
     dy: Optional[float] = Field(default=None, gt=0.0)
     dz: Optional[float] = Field(default=None, gt=0.0)
+    #: 采样点坐标向量（Q18 拍② / Q20）：语义 = **格心**（cell centres），
+    #: 不是格边——内核由相邻中点派生格边、端部各向外延拓半格
+    #: （mode/solver.py `_axis_edges`）；与该轴 d/spacing 三选一。
     x_coords: Optional[list[float]] = None
     y_coords: Optional[list[float]] = None
     z_coords: Optional[list[float]] = None

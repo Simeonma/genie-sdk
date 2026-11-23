@@ -69,19 +69,84 @@ def _connect() -> int:
 
 
 def _studio(rest) -> int:
+    """Studio = a **native window** (pywebview / WebView2) by default
+    (2026-11-22, 站长拍 A): same static GUI, no address bar. ``--browser``
+    keeps the old server-in-a-browser mode (dev self-test: static edits
+    need a page refresh only); no pywebview installed → loud fallback."""
     port = 0                                      # no default port: system-assigned
-    if rest and rest[0] == "--port":
-        if len(rest) < 2 or not rest[1].isdigit():
-            print("usage: genie studio [--port N]")
+    use_webview = True
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        if a == "--port" and i + 1 < len(rest) and rest[i + 1].isdigit():
+            port = int(rest[i + 1])
+            i += 2
+        elif a == "--browser":
+            use_webview = False
+            i += 1
+        elif a == "--debug":                       # devtools (F12) in the window
+            i += 1
+        else:
+            print("usage: genie studio [--port N] [--browser] [--debug]")
             return 2
-        port = int(rest[1])
     gw = os.environ.get("GENIE_BACKEND") or DEFAULT_GATEWAY
     studio = App(os.getcwd(), port=port, gateway_url=gw)
-    studio.start()
-    print(f"Genie Studio: http://127.0.0.1:{studio.port}"
-          f" (plate: {studio.plate_path}; Ctrl+C to stop)")
     try:
-        threading.Event().wait()                  # block to keep serving
+        studio.start()                             # single-instance guard lives here
+    except RuntimeError as e:                      # already running → that window
+        print(str(e))
+        return 0
+    url = f"http://127.0.0.1:{studio.port}"
+
+    win = None
+    debug = "--debug" in rest
+    if use_webview:
+        try:
+            import webview                     # pywebview (WebView2 shell)
+            from webview.menu import Menu, MenuAction
+        except ImportError:
+            print("pywebview not installed — falling back to the browser "
+                  "(pip install pywebview for the native window)")
+        else:
+            # 尺寸按 **CSS 像素**给（WebView2 会按系统 DPI 再放大）：150% 缩放下
+            # 1440×900 会变成 2160 物理宽、越界出屏（2026-11-22 实测）。
+            import ctypes
+            u32 = ctypes.windll.user32
+            try:
+                scale = u32.GetDpiForSystem() / 96.0
+            except Exception:                  # noqa: BLE001 — pre-1607 fallback
+                scale = 1.0
+            sw = u32.GetSystemMetrics(0) / scale
+            sh = u32.GetSystemMetrics(1) / scale
+
+            def _reload(window):
+                """窗口内刷新（调试静态文件用）：重载当前 URL。"""
+                try:
+                    window.evaluate_js("location.reload()")
+                except Exception:              # noqa: BLE001 — window gone
+                    pass
+
+            menu = Menu("View", [
+                MenuAction("Reload page", _reload),
+            ])
+            win = webview.create_window(
+                "GENIE-OPTICS Studio", url,
+                width=int(min(1440, sw * 0.92)),
+                height=int(min(900, sh * 0.92)),
+                menu=[menu])               # pywebview 6: a list, not one Menu
+    print(f"Genie Studio: {url}"
+          f" (plate: {studio.plate_path}"
+          + ("" if win is not None else "; Ctrl+C to stop") + ")")
+    try:
+        if win is not None:
+            # 窗口/任务栏图标 = 品牌 favicon（部署产物，母版在 20-market/brand）；
+            # pywebview 6 的 icon 在 start() 上（winforms 后端生效），不在 create_window。
+            icon = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                                "static", "brand", "favicon.ico")
+            webview.start(debug=debug,
+                          icon=icon if os.path.isfile(icon) else None)
+        else:
+            threading.Event().wait()           # browser mode: block to keep serving
     except KeyboardInterrupt:
         pass
     finally:

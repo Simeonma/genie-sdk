@@ -12,11 +12,11 @@ the material verbs' thin-delegation pattern, generalized).
   `
 _gpu``). Composed from chain's primitives — the same machine the
   sweep driver imports (Q10: a sweep is a batched run).
-- ``genie.<solver>.validate()`` (design-time preflight): the same check
-  ``run`` runs for that solver (promote + ``validate_for_ui``), with no
-  submit, no document write and no terminal row; returns the error list
-  instead of raising. ``genie.validate()`` = the same surface on the
-  fdtd default.
+- ``genie.build_fdtd()`` (Q35): the build preview — the same chain with
+  ``run.build=true``, stops after build (no time steps, no post tail).
+- Design-time preflight is **not a verb** (Q37, 2026-11-22): ``run``'s
+  precheck is local and free — an invalid model raises before any network
+  traffic. (The retired ``genie.validate()`` lived here.)
 - The read verbs (parsing semantics live in core/results; this
   module only does "pick the member + open the file"): the monitor three
   (get_time/get_freq/get_index) + ``mode_results`` (Q18 拍① — the mode
@@ -54,7 +54,6 @@ from genie.core.material import C0_SI as C0
 from genie.core.model import Model
 from genie.core.model.draft import digest
 from genie.net import TERMINAL_OK, GenieJobError
-from ..core.param import validate_for_ui
 
 from . import chain, plot, post, sweep
 from .api import (Drude as _Drude, Lorentz as _Lorentz,
@@ -120,7 +119,7 @@ def load_sweeps(doc_path) -> dict:
 class _SolverHandle:
     """One declared solver seen from the script side: attribute reads and
     writes delegate to the solver's envelope (domain / meshes / sources /
-    monitors — Q15+Q30); the action surface adds ``run`` / ``validate``,
+    monitors — Q15+Q30); the action surface adds ``run``,
     and the Q25 creation verbs ``add_source`` / ``add_monitor`` /
     ``add_mesh``."""
 
@@ -217,26 +216,6 @@ class Genie:
 
     def __repr__(self):
         return f"<genie model={self._model!r}>"
-
-    # -- design-time preflight (the same surface as run's precheck, no submit) --
-
-    def validate(self):
-        """Preflight the **fdtd default configuration** without
-        submitting (the common case; per-solver: ``genie.<s>.validate()``).
-
-        Promotes the live model exactly like ``run`` does and runs the
-        same validation surface (``protocol.validate_for_ui``):
-        parameter key names → expression evaluation (Q13) → structural /
-        value guards. Nothing is sent anywhere, nothing is written to the
-        document, no terminal row is emitted.
-
-        Returns a list of ``{"loc": ..., "msg": ...}`` — empty means the
-        model would pass run's precheck; ``loc`` is the in-config path
-        (e.g. ``materials.0.const.eps``), ``""`` means a whole-config
-        error. Design-time only: the resource guard is deployment policy
-        and is not part of this surface.
-        """
-        return validate_for_ui(self._model.to_config())
 
     # -- the read verbs (parsing semantics live in core/results, zero terminal lines)---------
 
@@ -413,11 +392,11 @@ class Genie:
         form)."""
         return core_material.assemble_nk(fits, name=name)
 
-    def load_nk(self, name, component=None):
-        """Local n-k library → (wl_m, n, k) (iso taken directly; composite
-        materials must name the component explicitly — single returns
-        directly, multiple errors out)."""
-        return core_material.load_nk(name, component=component)
+    def load_nk(self, name, axis=None):
+        """Local n-k library → (wl_m, n, k) (iso taken directly;
+        anisotropic materials must name the axis explicitly — single
+        returns directly, multiple errors out)."""
+        return core_material.load_nk(name, axis=axis)
 
     def _fit_preview(self, name, band=None, max_poles=10, make_passive=False,
                     tolerance=0.1):
@@ -425,32 +404,50 @@ class Genie:
         returns the same payload).
 
         Read-only: it fits and reports the curves, it does **not** touch the
-        model (the GUI's material dialog draws them; ``mat_from_nk`` still
-        owns "put it in the model"). ``band`` [m] omitted → the fit follows
-        the simulation source band, exactly like ``mat_from_nk``.
+        model (the GUI's material dialog draws them; 入模走
+        add_material(type='library') + fit_material). ``band`` [m] omitted →
+        the fit follows the simulation source band.
+
+        **Per-axis (L-16)**: every unique axis table gets its own entry
+        (``fits: [{axes, band, summary, wl/n/k, wl_fit/n_fit/k_fit}, …]``) —
+        iso = one entry with all three axes, uniaxial = two, biaxial =
+        three; the GUI draws one plot per entry. Same fit knobs for every
+        table (no per-axis knobs — no consumer).
         """
-        wl, n, k = core_material.load_nk(name)
-        fit = self.fit_nk(wl, n, k, band=band, max_poles=max_poles,
-                          make_passive=make_passive, tolerance=tolerance)
-        raw = fit.curve()                       # data points inside the band
-        grid = np.linspace(fit.band[0], fit.band[1], 200)
-        smooth = fit.curve(wl=grid)             # the fit on a dense grid
-        payload = {
-            "name": str(name),
-            "band": [float(fit.band[0]), float(fit.band[1])],
-            "n_poles": int(fit.n_poles),
-            "tolerance": float(tolerance),
-            "summary": fit.summary(),
-            "quality": {k2: (float(v) if isinstance(v, (int, float)) else v)
-                        for k2, v in fit.quality.items()},
-            "warnings": [str(w) for w in fit.warnings],
-            "wl": [float(x) for x in raw["wl"]],
-            "n": [float(x) for x in raw["n"]],
-            "k": [float(x) for x in raw["k"]],
-            "wl_fit": [float(x) for x in smooth["wl"]],
-            "n_fit": [float(x) for x in smooth["n_fit"]],
-            "k_fit": [float(x) for x in smooth["k_fit"]],
-        }
+        tables = core_material._load_axes(name)
+        seen: dict = {}
+        fits: list = []
+        for ax in ("x", "y", "z"):
+            key = id(tables[ax])
+            if key in seen:
+                fits[seen[key]]["axes"].append(ax)
+                continue
+            wl, n, k = tables[ax]
+            fit = self.fit_nk(wl, n, k, band=band, max_poles=max_poles,
+                              make_passive=make_passive,
+                              tolerance=tolerance)
+            raw = fit.curve()                   # data points inside the band
+            grid = np.linspace(fit.band[0], fit.band[1], 200)
+            smooth = fit.curve(wl=grid)         # the fit on a dense grid
+            seen[key] = len(fits)
+            fits.append({
+                "axes": [ax],
+                "band": [float(fit.band[0]), float(fit.band[1])],
+                "n_poles": int(fit.n_poles),
+                "tolerance": float(tolerance),
+                "summary": fit.summary(),
+                "quality": {k2: (float(v) if isinstance(v, (int, float))
+                                 else v)
+                            for k2, v in fit.quality.items()},
+                "warnings": [str(w) for w in fit.warnings],
+                "wl": [float(x) for x in raw["wl"]],
+                "n": [float(x) for x in raw["n"]],
+                "k": [float(x) for x in raw["k"]],
+                "wl_fit": [float(x) for x in smooth["wl"]],
+                "n_fit": [float(x) for x in smooth["n_fit"]],
+                "k_fit": [float(x) for x in smooth["k_fit"]],
+            })
+        payload = {"name": str(name), "fits": fits}
         self._env.emit(ipc.out(f"material fit {name}",
                                kind=ipc.OUT_KIND_MATFIT, data=payload))
         return payload
@@ -509,7 +506,7 @@ class Genie:
             state = archive.read_state(doc)
         except Exception:                   # noqa: BLE001 — no saved state to compare against
             return True
-        return digest(self._model.to_config()) != state.get("digest")
+        return digest(self._model.to_document()) != state.get("digest")
 
 
     # ══════════════════════════════════════════════════════════════════
@@ -530,17 +527,17 @@ class Genie:
     def add_attribute(self, name, type="matrix_frame"):  # noqa: A002
         return self._surface.add_attribute(name, type)
 
-    def add_analysis(self, name):
+    def add_analysis(self, name=None):
         return self._surface.add_analysis(name)
 
     def add_sweep(self, name):
         return self._surface.add_sweep(name)
 
-    def add_solver(self, name, type=None):  # noqa: A002
+    def add_solver(self, name=None, type=None):  # noqa: A002
         return self._surface.add_solver(name, type)
 
-    def set_named(self, addr, **fields):
-        return self._surface.set_named(addr, **fields)
+    def set_named(self, addr, node=None, **fields):
+        return self._surface.set_named(addr, node, **fields)
 
     def get_named(self, addr, field=None):
         return self._surface.get_named(addr, field)
@@ -566,8 +563,8 @@ class Genie:
         """Q35 build 预演（与 run_fdtd 成对；fdtd 专属）。"""
         return self._surface.build_fdtd(n_gpu=n_gpu)
 
-    def run_mode(self, *, n_gpu=None):
-        return self._surface.run_mode(n_gpu=n_gpu)
+    def run_mode(self, name="mode", *, n_gpu=None):
+        return self._surface.run_mode(name, n_gpu=n_gpu)
 
     def run_sweep(self, name):
         return self._surface.run_sweep(name)
@@ -584,8 +581,9 @@ class Genie:
     def open(self, path):
         return self._surface.open(path)
 
-    def validate(self):
-        return self._surface.validate()
+    def _new(self):
+        """File → New 的内部桥（无用户面动词变化）：空模型 + 清文档路径。"""
+        return self._surface._new()
 
     # payload constructors (values, not model objects)
     Drude = staticmethod(_Drude)

@@ -1,48 +1,35 @@
-/* Genie FDTD service — 3D 结构预览（Phase B，2026-08-30）
- *
- * 移植自 fdtd_ui/frontend/js/scene3d.js（P3a 时代旧 UI 的器官复活，
- * 旧 UI 归档已于 2026-10-18 删除）。改动相对原版：
- *  - 数据接口改为直接吃 service 层配置 JSON（domain.x_range 等嵌套结构、
- *    geometry 数值数组），删除旧版全部逗号字符串 split 解析与旧后端
- *    单源喂给的 pmlBox/meshLines（PML 壳与网格线改为前端本地计算）
- *  - 删除 template/rotation/polygon/ellipse/ring 等新 schema 暂无对应的
- *    形状（schema.py geometry 仅 box/sphere/cylinder）
- *  - 删除与旧全局 App 耦合的工具函数，按钮接线在 app.js 完成
- *  - 渲染纪律不变：零 innerHTML（label 用 canvas 2D 纹理，非 DOM 注入）
- *
- * 依赖：/vendor/three.min.js（r128 全局版）+ /vendor/OrbitControls.js。
- */
+import { selectObj } from "../modules/inspector.js";
+import { updateScene } from "../modules/scene.js";
+import { SCENE_PALETTE } from "./scene_palette.js";
+import { cfg, scene } from "../modules/state.js";
 "use strict";
 
 /* 材料调色：优先取材料节点自带的 color（2026-10-21 用户定案：对象按材料
  * 上色；脚本/表单可定义，材料库材料自带预设色——G46），否则按材料名稳定
  * 散列取调色板一色（同名同色）。
  * 色值单源 = scene_palette.js（P2-6）；勿在本文件再写字面。 */
-const MAT_PALETTE = SCENE_PALETTE.MATERIALS;
-function matColor(name) {
+export const MAT_PALETTE = SCENE_PALETTE.MATERIALS;
+export function matColor(name) {
   let h = 0;
   const s = String(name || "mat");
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
   return MAT_PALETTE[h % MAT_PALETTE.length];
 }
 /* "#RRGGBB" / "RRGGBB" → 0xRRGGBB；非法返回 null */
-function parseHexColor(v) {
+export function parseHexColor(v) {
   if (typeof v !== "string") return null;
   const s = v.trim().replace(/^#/, "");
   return /^[0-9a-fA-F]{6}$/.test(s) ? parseInt(s, 16) : null;
 }
 
-class Scene3D {
+export class Scene3D {
   constructor(containerId) {
     this.container = document.getElementById(containerId);
     this.scene = null; this.camera = null; this.renderer = null; this.controls = null;
     this.domainGroup = null; this.structureGroup = null; this.markerGroup = null;
-    this.meshGroup = null; this.labelGroup = null;
-    /* 显示开关默认值（2026-10-21 用户定案）：PML 吸收壳**常显**（好看且是
-     * 物理信息，不再给开关）；坐标尺常显可关；网格默认关。 */
+    this.meshGroup = null;
     this.showPml = true; this.showGrid = false; this.showWireframe = true;
     this.wireMode = "edges";     /* solid | edges | wire —— 结构着色三态 */
-    this.showLabels = false;
     this.showRulers = true;      /* 边框坐标尺（刻度 + µm 读数） */
     this.showXray = false;       /* X 光：结构半透明，看穿嵌套体 */
     this.projection = "ortho";   /* ortho | persp —— 透视/正交切换 */
@@ -60,13 +47,8 @@ class Scene3D {
     };
     this.structureMeshes = [];
     this._geoIdxMeshes = {};
-    // label sprite ↔ leader-line 配对簿：updateScene 重建时重置，供
-    // _resolveLabelOverlaps 做屏幕空间推挤（Round D：防两标签叠一起）
-    this._labelItems = [];
     this.axesRenderer = null; this.axesScene = null; this.axesCamera = null;
     this._cfg = null;
-    /* 按需渲染（2026-10-15 站长裁决 A）：场景无变化不重画——
-     * 大网格（万级几何）每帧全量提交是拖慢根因，静止时开销必须归零 */
     this._dirty = true;
     /* 简化渲染（裁决 D）：对象数超阈值 → InstancedMesh 合批（裁决 B），
      * 线框/标签/拾取高亮让位性能，徽标示警 */
@@ -171,10 +153,6 @@ class Scene3D {
     this._simBadge.className = "sim-badge hidden";
     this.container.appendChild(this._simBadge);
 
-    /* 浅色仪器窗光照（2026-10-21 重定基）：旧值 AMBIENT #404060 紫调暗灰 +
-     * 冷紫 RIM + 深蓝地色是「深空黑底」主题的遗留——套到白底画布上，所有
-     * 实体都被染成发灰的紫。现形态 = 影棚三点光：半球光托底、左上方主光定
-     * 明暗、补光压暗部、轮廓光勾右缘；环境贴图负责柔和高光。 */
     this.scene.add(new THREE.HemisphereLight(
       SCENE_PALETTE.LIGHTS.HEMI_SKY, SCENE_PALETTE.LIGHTS.HEMI_GROUND, 0.24));
     this.scene.add(new THREE.AmbientLight(SCENE_PALETTE.LIGHTS.AMBIENT, 0.06));
@@ -189,16 +167,11 @@ class Scene3D {
     this.structureGroup = new THREE.Group();
     this.markerGroup = new THREE.Group();
     this.meshGroup = new THREE.Group();
-    this.labelGroup = new THREE.Group();
     // 直接 Three.js 坐标：用户 X→X、Y→Y、Z→Z（Y-up）
     this.scene.add(this.domainGroup);
     this.scene.add(this.meshGroup);
     this.scene.add(this.structureGroup);
     this.scene.add(this.markerGroup);
-    this.scene.add(this.labelGroup);
-    /* 标签默认关（用户定案：域体与实体干净，标签按需开）——visible 必须与
-     * 字段同源，否则 updateScene 加的 sprite 会无视开关直接显现。 */
-    this.labelGroup.visible = this.showLabels;
 
     // ── HUD 坐标轴（第二渲染器，跟随主视角方向）──
     this.axesRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -273,12 +246,6 @@ class Scene3D {
     this.axesScene.add(sprite);
   }
 
-  _bcColor(bcType) {
-    /* 数值 canon 单源 scene_palette.js；scene2d._bcColor 同表同值派生
-     * CSS 字符串——同语义两径不再可能异值（P2-6） */
-    return SCENE_PALETTE.BC[bcType] || SCENE_PALETTE.BC.fallback;
-    /* BC.fallback = --accent 亮档 #4E8FD9（勿回外族亮蓝） */
-  }
 
   /* 主入口：直接吃 service 配置 JSON（{domain, mesh, geometry, source, monitor}）。
    * updateCount：重渲调用计数（UI 同步批 1——e2e 断言 3D 投影刷新的场景标志）。 */
@@ -349,9 +316,6 @@ class Scene3D {
    * 里的贴片要么糊、要么随相机缩放变形）。
    * 每条轴有 4 条平行棱：每帧选"投影离框心最远"的那条（贴轮廓），
    * 其余三条连刻度一起隐藏。 */
-  /* 空域提示（2026-10-21 站长裁决：新建模型没有任何默认值）——
-   * 域没填全时画布上**不画盒子**，只给一句明确的话：画一个用户从没定义
-   * 过的 ±1µm 比不画更误导。用户填完 x/y/z 三组 MIN/MAX，盒子才出现。 */
   _showDomainEmptyHint(on) {
     let el = this.container.querySelector(".scene-domain-hint");
     if (!on) {
@@ -363,10 +327,10 @@ class Scene3D {
       el.className = "scene-domain-hint";
       const t = document.createElement("div");
       t.className = "sdh-title";
-      t.textContent = "还没有 domain";
+      t.textContent = "未定义 domain";
       const h = document.createElement("div");
       h.className = "sdh-hint";
-      h.textContent = "填 x / y / z 的 MIN、MAX（表单或脚本），范围齐了就出现域盒子";
+      h.textContent = "结构照常显示；填好 x / y / z 范围后出现域框、网格与标尺";
       el.appendChild(t);
       el.appendChild(h);
       this.container.appendChild(el);
@@ -417,7 +381,7 @@ class Scene3D {
         /* 数值：两端各一个；只有最长那条轴再加一个中点读数（短轴上多一个牌
          * 就会互压成糊字，7 个读数已经是这幅框的信息上限）。 */
         const isLongest = half[a] * 2 >= maxDim * 0.999;
-        const labelKs = isLongest ? [0, nDiv / 2, nDiv] : [0, nDiv];
+        const labelKs = [0, nDiv];   /* 两端读数即可：多点撞读数读作噪声 */
         const labels = [];
         for (const k of labelKs) {
           const w = center[a] - half[a] + (2 * half[a]) * k / nDiv;
@@ -522,7 +486,6 @@ class Scene3D {
       it.x = Math.min(Math.max(it.x, 4), Math.max(4, W - w - 4));
       it.y = Math.min(Math.max(it.y, 12), H - 6);
     }
-    this._updateLabelScales();   /* 对象标签随相机保持屏幕等大 */
     for (const it of placed) {
       it.el.style.transform =
         "translate(" + Math.round(it.x) + "px," + Math.round(it.y) + "px)";
@@ -536,15 +499,9 @@ class Scene3D {
     this.clearGroup(this.structureGroup);
     this.clearGroup(this.markerGroup);
     this.clearGroup(this.meshGroup);
-    this.clearGroup(this.labelGroup);
     this.structureMeshes = [];
-    this._labelItems = [];
 
     const dom = cfg.domain || {};
-    /* 域范围（2026-10-21 站长裁决）：**新建模型没有任何默认值**，一切由
-     * 用户自己添加。所以这里不再"缺值就退回 ±1µm"——那会在空文档上画一个
-     * 用户从没定义过的盒子，比不画更具误导性。逐值校验，只要有一轴不完整
-     * 就直接不画域（并给空态提示），等用户把 x/y/z 都填上再出现。 */
     const rng = (arr, i) => {
       if (!Array.isArray(arr)) return NaN;
       const v = Number(arr[i]);
@@ -555,15 +512,20 @@ class Scene3D {
       ymin: rng(dom.y_range, 0), ymax: rng(dom.y_range, 1),
       zmin: rng(dom.z_range, 0), zmax: rng(dom.z_range, 1),
     };
+    let hasDomain = true;
     for (const ax of ["x", "y", "z"]) {
-      if (!(d[ax + "max"] > d[ax + "min"])) {   /* 缺值/反向/零宽：域未定义 */
-        this._domRanges = null;
-        this._showDomainEmptyHint(true);
-        if (this._rulerLayer) this._rulerLayer.textContent = "";
-        return;
-      }
+      if (!(d[ax + "max"] > d[ax + "min"])) { hasDomain = false; break; }
     }
-    this._showDomainEmptyHint(false);
+    this._showDomainEmptyHint(!hasDomain);
+    if (!hasDomain) {
+      const vb = this._geometryBounds(cfg.geometry) || {
+        xmin: -5e-7, xmax: 5e-7, ymin: -5e-7, ymax: 5e-7,
+        zmin: -5e-7, zmax: 5e-7,
+      };
+      Object.assign(d, vb);
+      this._domRanges = null;
+      if (this._rulerLayer) this._rulerLayer.textContent = "";
+    }
     const cx = (d.xmin + d.xmax) / 2, cy = (d.ymin + d.ymax) / 2, cz = (d.zmin + d.zmax) / 2;
     const sx = d.xmax - d.xmin, sy = d.ymax - d.ymin, sz = d.zmax - d.zmin;
     this._domRanges = d;            /* 剖面平面按域范围换算位置 */
@@ -575,7 +537,6 @@ class Scene3D {
       const pcx = (pmlBox.xmin + pmlBox.xmax) / 2, pSx = pmlBox.xmax - pmlBox.xmin;
       const pcy = (pmlBox.ymin + pmlBox.ymax) / 2, pSy = pmlBox.ymax - pmlBox.ymin;
       const pcz = (pmlBox.zmin + pmlBox.zmax) / 2, pSz = pmlBox.zmax - pmlBox.zmin;
-      const boxGeo = new THREE.BoxGeometry(pSx, pSy, pSz);
       /* PML 外边界：细杆边（msaa 抗锯齿） + 去掉整盒薄壳填充。
        * 2026-10-21：六面各 0.04 琥珀叠在浅底画布上，会把整个域染成米黄。 */
       /* 边杆粗细按"域尺度"取（不能取 camera.top：updateScene 里相机取景在
@@ -589,20 +550,15 @@ class Scene3D {
     }
 
     // ── 六面 BC 着色面：2026-10-21 用户定案移除 ──
-    /* 「边界条件不必画在域面上」——域体保持全透明，只有黑色棱线读作范围框；
-     * BC 语义去检查器（Domain · 边界）读文字，不再用半透明面染色。
-     * 旧的 addFace/霓虹边条整段已删（连同它的亚像素点线问题）。 */
 
-    // ── 域框：黑色棱线（唯一可见的域体表达）──
-    const tg2 = Math.max(sx, sy, sz) * 0.0032;
-    this.domainGroup.add(this._edgeBars(cx, cy, cz, sx, sy, sz, tg2,
-      SCENE_PALETTE.DOMAIN.EDGE, 0.82));
+    if (hasDomain) {
+      const tg2 = Math.max(sx, sy, sz) * 0.0032;
+      this.domainGroup.add(this._edgeBars(cx, cy, cz, sx, sy, sz, tg2,
+        SCENE_PALETTE.DOMAIN.EDGE, 0.5));
+      /* 边框坐标尺（刻度 + µm 读数）：随域存在，用户没定义域就不画。 */
+      this._buildAxisRulers(cx, cy, cz, sx, sy, sz);
+    }
 
-    /* 边框坐标尺（刻度 + µm 读数）：用户核心需求，始终显示、不受标签开关影响 */
-    this._buildAxisRulers(cx, cy, cz, sx, sy, sz);
-
-    /* 角点标记：2026-10-21 随 BC 面一起退役（域体只需黑色棱线；八颗蓝点
-     * 是"边界条件"语汇的残留）。 */
 
     // ── 结构（geometry，按 priority 排序绘制）──
     // 记录原索引 → mesh 映射（3D 组感：structure 选中高亮其子项）
@@ -631,15 +587,15 @@ class Scene3D {
           this.structureMeshes.push(mesh);
           this._geoIdxMeshes[idx] = mesh;
         }
-        this._buildStructureLabel(rg, d);
       }
     }
 
     this.fitCamera();
+    this._applyWireMode();   /* 重建后按当前三态上色/显隐（新对象默认全可见） */
 
     // ── 网格线（本地按名义格距画，大幅抽稀）──
-    if (this.showGrid) this._updateGridLines(cfg, d);
-    if (this.showGrid) this._updateRefineLines(cfg, d);
+    if (hasDomain && this.showGrid) this._updateGridLines(cfg, d);
+    if (hasDomain && this.showGrid) this._updateRefineLines(cfg, d);
 
     // ── 源与监视器标记 ──
     const domainSz = Math.max(sx, sy, sz);
@@ -659,11 +615,6 @@ class Scene3D {
       }
     }
 
-    // ── 标签碰撞推挤（Round D）：把叠在同一屏幕位置的标签沿相机 up/right
-    // 推开，保证 busy 场景下没有两个标签互压。不动对象几何，只挪 label
-    // sprite 与其关联的指示线顶点。──
-    this._resolveLabelOverlaps();
-    this._updateLabelScales();   /* 标签一律屏幕等大（G42） */
     /* 重建后：显示模式（X 光）与选中描边都要重新落到新对象上——
      * 否则改一次参数，选中高亮就消失了 */
     if (this.showXray) this.setXray(true);
@@ -699,10 +650,6 @@ class Scene3D {
   }
 
   resolveNum(v, fieldName) {
-    /* 阶段 5②：浏览器不再携带 JS 求值镜像（expr 语义单一实现 =
-     * genie.models）——数值需求吃服务端 resolved 显示副本（app.js 以
-     * resolved 作为 updateScene 入参）。本方法收缩为数值守卫：字符串
-     * = 副本未解析（坏表达式/端点降级），对应对象跳过并 warn。 */
     if (typeof v === "number") return Number.isFinite(v) ? v : null;
     if (typeof v === "string" && v.trim())
       console.warn("[scene3d] 字段", fieldName,
@@ -814,11 +761,6 @@ class Scene3D {
         pos = { x: c[0], y: c[1], z: c[2] };
         break;
       }
-      /* 2026-10 真缺口修复：工具栏/树可一键添加的 ngon_z/ellipse_z/
-       * ring_z/polygon_z/polygon_swept 此前 buildStructureMesh 一律
-       * return null → 3D 只落标签不落几何（「增加对象后 3D 不显示」）。
-       * 五者都是 z 轴挤出棱柱，复用 cylinder 的 Shape+ExtrudeGeometry
-       * 同款管线（shape 建在原点、mesh.position=center）。 */
       case "ngon_z": {
         const c = g.center || [0, 0, 0];
         const n = Math.max(3, Math.floor(g.n_sides || 6));
@@ -927,8 +869,69 @@ class Scene3D {
         transparent: wireOp < 1, opacity: wireOp }));
     wire.visible = this.showWireframe;
     mesh.add(wire);
+    /* 曲面体的轮廓线（2026-11-23 站长）：EdgesGeometry 只给"角度突变"的棱，
+     * 圆柱/椭球/圆环的侧面是曲面（竖线不生成）、球体完全没有棱——纯线框下
+     * 只剩上下圆或什么都不显示。这里补一组显式轮廓线，只在 wire 模式画。 */
+    const outlineGeo = this._outlineGeometry(g);
+    if (outlineGeo) {
+      const outline = new THREE.LineSegments(outlineGeo,
+        new THREE.LineBasicMaterial({
+          color: new THREE.Color(SCENE_PALETTE.STRUCTURE.EDGE).convertSRGBToLinear(),
+          transparent: wireOp < 1, opacity: wireOp }));
+      outline.userData.outline = true;
+      outline.visible = this.wireMode === "wire";
+      mesh.add(outline);
+    }
     if (this.wireMode === "wire") mat.visible = false;   /* 纯线框：面不画 */
     return mesh;
+  }
+
+  /* 曲面体的显式轮廓线（局部坐标，挂在 mesh 下随其平移）：
+   * 圆柱/椭球 4 条纵向母线；圆环外内圈各 4 条；球体三条正交大圆。 */
+  _outlineGeometry(g) {
+    const v = [];
+    const seg = (a, b) => v.push(a[0], a[1], a[2], b[0], b[1], b[2]);
+    if (g.type === "cylinder" || g.type === "ellipse_z") {
+      const rx = g.type === "cylinder" ? Math.abs(g.radius || 1e-7)
+                                       : Math.abs(g.rx || 1e-7);
+      const ry = g.type === "cylinder" ? rx : Math.abs(g.ry || 1e-7);
+      const h = Math.abs(g.height || 2e-7);
+      for (let i = 0; i < 4; i++) {
+        const a = (Math.PI / 2) * i;
+        const x = Math.cos(a) * rx, y = Math.sin(a) * ry;
+        seg([x, y, -h / 2], [x, y, h / 2]);
+      }
+    } else if (g.type === "ring_z") {
+      const ri = Math.abs(g.inner_radius || 0);
+      const ro = Math.abs(g.outer_radius || 1e-7);
+      const h = Math.abs(g.height || 2e-7);
+      for (let i = 0; i < 4; i++) {
+        const a = (Math.PI / 2) * i;
+        const c = Math.cos(a), s = Math.sin(a);
+        seg([c * ro, s * ro, -h / 2], [c * ro, s * ro, h / 2]);
+        if (ri > 0) seg([c * ri, s * ri, -h / 2], [c * ri, s * ri, h / 2]);
+      }
+    } else if (g.type === "sphere") {
+      const r = Math.abs(g.radius || 1e-7);
+      const N = 48;
+      const circles = [
+        (t) => [Math.cos(t) * r, Math.sin(t) * r, 0],
+        (t) => [Math.cos(t) * r, 0, Math.sin(t) * r],
+        (t) => [0, Math.cos(t) * r, Math.sin(t) * r],
+      ];
+      for (const f of circles) {
+        for (let i = 0; i < N; i++) {
+          const t1 = (i / N) * Math.PI * 2, t2 = ((i + 1) / N) * Math.PI * 2;
+          seg(f(t1), f(t2));
+        }
+      }
+    } else {
+      return null;                      /* 棱柱/棱锥/方块：EdgesGeometry 已够 */
+    }
+    if (!v.length) return null;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(v, 3));
+    return geo;
   }
 
   _pointInPoly(pt, poly) {
@@ -959,12 +962,6 @@ class Scene3D {
     return out;
   }
 
-  /* polygon_z / polygon_swept 顶点 → z 轴挤出 shape（多轮廓嵌套语义版）。
-   * vertices = [[x,y],...]；[null,null]/NaN 哨兵分隔子多边形。
-   * 语义 = 平面点集包含关系：嵌套深度偶数 = 实体、奇数 = 归属最近
-   * 包含实体的孔。分离轮廓 = 独立实体（moiré 版图实测：871 三角曾被
-   * 旧版「孤岛读作孔」渲染成 1 三角 + 870 孔——预览与内核语义对齐）。
-   * 返回 {shapes, cx, cy}：全部实体已平移到原点，cx/cy = 首轮廓质心。 */
   _polygonShape(vertices) {
     const groups = [[]];
     for (const v of (vertices || [])) {
@@ -1027,6 +1024,28 @@ class Scene3D {
 
   /* 几何顶部点 + 特征尺寸（label 锚点/指示线终点；与 buildStructureMesh
    * 的几何语义一致：z 是物理 z，顶 = 最大 z） */
+  /* 几何包围盒（2026-11-23）：无 domain 时给渲染一个**尺度参考**——
+   * 只用来定标签/标记大小与虚拟范围，不画域体（用户没定义域）。 */
+  _geometryBounds(geoms) {
+    let lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (const g of geoms || []) {
+      const r = this._resolveGeometry(g);
+      if (!r) continue;
+      let top;
+      try { top = this._geoTop(r); } catch { continue; }
+      const p = top.p, s = Math.abs(Number(top.size));
+      if (!isFinite(s) || s <= 0 || !p) continue;
+      for (let i = 0; i < 3; i++) {
+        lo[i] = Math.min(lo[i], p[i] - s / 2);
+        hi[i] = Math.max(hi[i], p[i] + s / 2);
+      }
+    }
+    if (!isFinite(lo[0]) || !(hi[0] > lo[0])) return null;
+    return { xmin: lo[0], xmax: hi[0], ymin: lo[1], ymax: hi[1],
+             zmin: lo[2], zmax: hi[2] };
+  }
+
+
   _geoTop(g) {
     if (g.type === "box") {
       const xr = g.x_range || [-1e-7, 1e-7], yr = g.y_range || [-1e-7, 1e-7],
@@ -1059,140 +1078,15 @@ class Scene3D {
     return { p: [c[0], c[1], c[2] + h / 2], size: Math.max(2 * r, h) };
   }
 
-  /* 结构 label：实例名（未命名回退类型名）+ 指示线（label 底 → 对象顶）。
-   * 颜色取材料调色板色，与 mesh 同色系。Round D：sprite 纵横比与画布同源，
-   * 尺寸略收敛（不再是旧 0.6 拉伸）；注册进 _labelItems 供碰撞推挤。 */
-  _buildStructureLabel(g, d) {
-    const { p, size } = this._geoTop(g);
-    const domainSz = Math.max(d.xmax - d.xmin, d.ymax - d.ymin, d.zmax - d.zmin);
-    const text = g.name || g.type || "box";
-    const col = this._materialColor(g.material);
-    const s = THREE.MathUtils.clamp(size * 1.05, domainSz * 0.05, domainSz * 0.16);
-    const label = this._makeLabelSprite3D(text, col);
-    label.userData.kind = "structure";
-    const off = s * 0.55;
-    label.position.set(p[0], p[1], p[2] + off);
-    this._setLabelScale(label, s);
-    this.labelGroup.add(label);
-    const line = this._leaderLine(
-      [p[0], p[1], p[2] + off - s * 0.3], [p[0], p[1], p[2]], col);
-    this.labelGroup.add(line);
-    this._labelItems.push({
-      sprite: label, line, anchor: new THREE.Vector3(p[0], p[1], p[2]) });
-  }
 
-  /* 标签指示线：label 底边 → 对象顶部（细实线，同色半透明） */
-  _leaderLine(from, to, colorHex) {
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.Float32BufferAttribute(
-      [from[0], from[1], from[2], to[0], to[1], to[2]], 3));
-    const mat = new THREE.LineBasicMaterial(
-      { color: colorHex, transparent: true, opacity: 0.55, depthTest: false });
-    return new THREE.Line(geo, mat);
-  }
-
-  /* 标签 sprite 缩放：纵横比与画布同源（200×90），scale.y = s × aspect，
-   * 避免旧 scale.set(s, s*0.6) 把卡片横竖拉伸糊字（Round D）。 */
-  _setLabelScale(sprite, s) {
-    sprite.scale.set(s, s * this._labelAspect(), 1);
-  }
 
   /* ── 标签屏幕等大（2026-10-21 G42 缓解）──
    * 贴片精灵的尺寸原本锚在"域半径"，放大视角时纹理被拉伸 → 糊成灰块。
    * 这里按"可见世界高度 / 画布像素高"把每张卡固定成 ~96px 宽：缩放相机时
    * 卡不变形、纹理始终 1:1 附近采样，读得清；同时标签之间的大小关系稳定。 */
-  _viewHeightWorld() {
-    if (this.camera.isPerspectiveCamera) {
-      const c = this._rulerCenter || new THREE.Vector3();
-      const dist = Math.max(this.camera.position.distanceTo(c), 1e-12);
-      return 2 * dist * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2);
-    }
-    /* 正交：滚轮改的是 camera.zoom，视锥上下界不变——必须除掉 zoom，否则
-     * 放大后"可见高度"算出来恒定，标签会跟着世界尺寸无限涨大（G44 实测：
-     * 正交滚轮比例 1.000 而透视 0.940，根因就是这里漏了 zoom）。 */
-    return (this.camera.top - this.camera.bottom) / (this.camera.zoom || 1);
-  }
-  _updateLabelScales() {
-    const items = this._labelItems || [];
-    if (!items.length) return;
-    const pxH = this.container.clientHeight || 600;
-    const worldPerPx = this._viewHeightWorld() / pxH;
-    const w = Math.max(96, pxH * 0.16) * worldPerPx;   /* 目标像素宽 */
-    for (const it of items) {
-      if (!it || !it.sprite) continue;
-      it.sprite.scale.set(w, w * this._labelAspect(), 1);
-    }
-  }
 
-  /* 标签碰撞推挤（Round D）：把 _labelItems 里投影到同一屏幕区域的 label
-   * sprite 沿最小重叠轴推开，保持各自指示线仍指向 anchor。正交相机下视图
-   * 与屏幕线性映射，故用两次投影求屏幕半宽/半高与每像素世界步长；迭代数次
-   * 让多标签收敛、不再互压。不动对象几何，只挪 sprite 与指示线顶端。 */
-  _resolveLabelOverlaps() {
-    const items = (this._labelItems || []).filter((it) => it && it.sprite);
-    if (items.length < 2) return;
-    const cam = this.camera;
-    const W = this.container.clientWidth, H = this.container.clientHeight;
-    cam.updateMatrixWorld(true);
-    cam.updateProjectionMatrix();
-    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(cam.quaternion);
-    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(cam.quaternion);
-    const proj = (v) => {
-      const p = v.clone().project(cam);
-      return [(p.x + 1) / 2 * W, (1 - p.y) / 2 * H];
-    };
-    const meta = items.map((it) => {
-      const c = it.sprite.position;
-      const [sx, sy] = proj(c);
-      const [ex] = proj(c.clone().add(right.clone().multiplyScalar(it.sprite.scale.x / 2)));
-      const [, vy] = proj(c.clone().add(up.clone().multiplyScalar(it.sprite.scale.y / 2)));
-      // 每像素世界步长（right→dx, up→dy）
-      const pxR = Math.abs(proj(c.clone().add(right))[0] - sx) || 1;
-      const pxU = Math.abs(proj(c.clone().add(up))[1] - sy) || 1;
-      return { it, sx, sy, hw: Math.abs(ex - sx), hh: Math.abs(vy - sy), pxR, pxU };
-    });
-    const offsetItem = (m, dsx, dsy) => {
-      const world = right.clone().multiplyScalar(dsx / m.pxR)
-        .add(up.clone().multiplyScalar(-dsy / m.pxU));
-      m.it.sprite.position.add(world);
-      // 指示线顶端跟着 label 走，底端（anchor）不动
-      const pos = m.it.line.geometry.attributes.position.array;
-      pos[0] += world.x; pos[1] += world.y; pos[2] += world.z;
-      m.it.line.geometry.attributes.position.needsUpdate = true;
-      const [nx, ny] = proj(m.it.sprite.position);
-      m.sx = nx; m.sy = ny;
-    };
-    const pad = 5; // 相邻标签额外呼吸间隙（px）
-    for (let iter = 0; iter < 8; iter++) {
-      let moved = false;
-      for (let i = 0; i < meta.length; i++) {
-        for (let j = i + 1; j < meta.length; j++) {
-          const a = meta[i], b = meta[j];
-          const ox = Math.min(a.sx + a.hw, b.sx + b.hw) - Math.max(a.sx - a.hw, b.sx - b.hw) + pad * 2;
-          const oy = Math.min(a.sy + a.hh, b.sy + b.hh) - Math.max(a.sy - a.hh, b.sy - b.hh) + pad * 2;
-          if (ox <= 0 || oy <= 0) continue;
-          // 沿较小重叠轴分开（水平优先，标签多为横排）；各让一半
-          if (ox / a.hw + ox / b.hw <= oy / a.hh + oy / b.hh) {
-            const dir = a.sx <= b.sx ? -1 : 1;
-            offsetItem(a, dir * -ox / 2, 0);
-            offsetItem(b, dir * ox / 2, 0);
-          } else {
-            const dir = a.sy <= b.sy ? -1 : 1;   // 屏幕 y 向下：小 = 上
-            offsetItem(a, 0, dir * -oy / 2);
-            offsetItem(b, 0, dir * oy / 2);
-          }
-          moved = true;
-        }
-      }
-      if (!moved) break;
-    }
-  }
 
   /* 标签显示开关（🏷 按钮）——只切可见性，不重建 */
-  setLabels(on) {
-    this.showLabels = !!on;
-    if (this.labelGroup) this.labelGroup.visible = this.showLabels;
-  }
 
   /* 网格线：三个远侧面按名义格距画（每轴 ≤200 条，超出抽稀；
    * Q30 起基础格距住 domain） */
@@ -1278,66 +1172,6 @@ class Scene3D {
     this.meshGroup.add(new THREE.LineSegments(geo, mat));
   }
 
-  /* ── agent mesh_preview 叠加（2026-09 实时编辑可见性）──
-   * 服务端 mesh_preview 的真实格距网格线 + PML 内边界框，画在
-   * meshGroup。非均匀网格以 spacing_min 示意（节点分布前端不可知）。
-   * 下一次 updateScene 的 clearGroup(meshGroup) 会自然清掉本叠加；
-   * 对话轮结束由 app.js 显式调 clearMeshPreview()。 */
-  applyMeshPreview(preview) {
-    if (!this._cfg || !preview || !preview.axes) return;
-    const dom = this._cfg.domain || {};
-    const d = {
-      xmin: dom.x_range ? dom.x_range[0] : -1e-6,
-      xmax: dom.x_range ? dom.x_range[1] : 1e-6,
-      ymin: dom.y_range ? dom.y_range[0] : -1e-6,
-      ymax: dom.y_range ? dom.y_range[1] : 1e-6,
-      zmin: dom.z_range ? dom.z_range[0] : -1e-6,
-      zmax: dom.z_range ? dom.z_range[1] : 1e-6,
-    };
-    const nominal = (this._cfg.domain && this._cfg.domain.dx) || 20e-9;
-    const stepOf = (ax) =>
-      (preview.axes[ax] && preview.axes[ax].spacing_min_m) || nominal;
-    // 三远侧面网格线（真实格距，每轴 ≤200 条抽稀——同 _updateGridLines）
-    const sp = {};
-    for (const ax of ["x", "y", "z"]) {
-      const step = stepOf(ax);
-      const lo = d[ax + "min"], hi = d[ax + "max"];
-      const n = Math.floor((hi - lo) / step);
-      if (n < 1) { sp[ax] = [lo, hi]; continue; }
-      const stride = Math.ceil(n / 200);
-      const pts = [];
-      for (let i = 0; i <= n; i += stride) pts.push(lo + i * step);
-      if (pts[pts.length - 1] < hi) pts.push(hi);
-      sp[ax] = pts;
-    }
-    const mat = new THREE.LineBasicMaterial(
-      { color: SCENE_PALETTE.GRID.MESH_PREVIEW, transparent: true, opacity: 0.8, depthTest: true });
-    this._addGridPlane(sp.x, sp.y, d.zmin, null, mat);
-    this._addGridPlane(sp.x, sp.z, d.ymin, { axis: 1 }, mat);
-    this._addGridPlane(sp.y, sp.z, d.xmin, { axis: 0 }, mat);
-    // PML 内边界框（pml 层数 × 最小格距内缩；黄色细线，比照 PML 壳色）
-    const ins = {};
-    let anyPml = false;
-    for (const ax of ["x", "y", "z"]) {
-      const a = preview.axes[ax] || {};
-      ins[ax] = { lo: (a.pml_lo || 0) * stepOf(ax), hi: (a.pml_hi || 0) * stepOf(ax) };
-      if ((a.pml_lo || 0) > 0 || (a.pml_hi || 0) > 0) anyPml = true;
-    }
-    if (anyPml) {
-      const bx = d.xmin + ins.x.lo, ex = d.xmax - ins.x.hi;
-      const by = d.ymin + ins.y.lo, ey = d.ymax - ins.y.hi;
-      const bz = d.zmin + ins.z.lo, ez = d.zmax - ins.z.hi;
-      const edges = this._edgesOf(new THREE.BoxGeometry(ex - bx, ey - by, ez - bz), 1);
-      const line = new THREE.LineSegments(edges, new THREE.LineBasicMaterial(
-        { color: SCENE_PALETTE.BC.pml, transparent: true, opacity: 0.45 }));
-      line.position.set((bx + ex) / 2, (by + ey) / 2, (bz + ez) / 2);
-      this.meshGroup.add(line);
-    }
-  }
-
-  clearMeshPreview() {
-    this.clearGroup(this.meshGroup);
-  }
 
   clearGroup(group) {
     while (group.children.length > 0) {
@@ -1393,8 +1227,16 @@ class Scene3D {
     }
     const mkInstanced = (geo, list, opacity) => {
       if (!list.length) return;
-      const mat = new THREE.MeshBasicMaterial({ transparent: true, opacity });
+      /* 与逐对象路径同一套材质语言（Standard + 环境光），只是合批绘制：
+       * 无光照的 Basic 会让大批量对象读成一堆色块贴纸。 */
+      const mat = new THREE.MeshStandardMaterial({
+        transparent: opacity < 1, opacity,
+        metalness: 0.0, roughness: 0.55, envMapIntensity: 0.12,
+        side: THREE.DoubleSide,
+      });
       const im = new THREE.InstancedMesh(geo, mat, list.length);
+      /* InstancedMesh 的包围球按基础几何算，容易整批被误剔 */
+      im.frustumCulled = false;
       const m4 = new THREE.Matrix4();
       list.forEach((it, i) => {
         m4.makeScale(it.scale[0], it.scale[1], it.scale[2]);
@@ -1404,29 +1246,62 @@ class Scene3D {
       });
       im.instanceMatrix.needsUpdate = true;
       if (im.instanceColor) im.instanceColor.needsUpdate = true;
+      im.userData.sim = true;        /* 合批实例：三态由 _applyWireMode 统一管 */
       this.structureGroup.add(im);
+      this.structureMeshes.push(im);
+    };
+    /* 合批线框层：一次绘制；可见性交给 _applyWireMode（solid 隐藏） */
+    const mkSimLines = (pts, opacity) => {
+      if (!pts.length) return;
+      const eg = new THREE.BufferGeometry();
+      eg.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+      const line = new THREE.LineSegments(eg, new THREE.LineBasicMaterial(
+        { color: new THREE.Color(SCENE_PALETTE.STRUCTURE.EDGE).convertSRGBToLinear(),
+          transparent: opacity < 1, opacity }));
+      line.userData.simLine = true;
+      this.structureGroup.add(line);
     };
     const boxes = items.filter((i) => i.kind === "box");
-    mkInstanced(new THREE.BoxGeometry(1, 1, 1), boxes, 0.85);
+    mkInstanced(new THREE.BoxGeometry(1, 1, 1), boxes, 1.0);
     /* 合并线框层：所有 box 的 12 条棱合成一条 LineSegments（一次绘制）——
      * 简化模式的"脆感"来源就是只画半透明填充块没有棱线 */
-    if (boxes.length) {
+    {
       const pts = [];
       const H = [[-1, -1, -1], [1, -1, -1], [1, 1, -1], [-1, 1, -1],
                  [-1, -1, 1], [1, -1, 1], [1, 1, 1], [-1, 1, 1]];
       const E = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
       for (const it of boxes) {
-        const [cx, cy, cz] = it.pos, [hx, hy, hz] = [it.scale[0]/2, it.scale[1]/2, it.scale[2]/2];
+        /* 1.01× 外扩：棱线与面共面时深度相等，会被面遮挡成"零线" */
+        const [cx, cy, cz] = it.pos, [hx, hy, hz] = [it.scale[0]*0.53, it.scale[1]*0.53, it.scale[2]*0.53];
         const v = H.map(([a, b, c]) => [cx + a*hx, cy + b*hy, cz + c*hz]);
         for (const [a, b] of E) pts.push(...v[a], ...v[b]);
       }
-      const eg = new THREE.BufferGeometry();
-      eg.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
-      this.structureGroup.add(new THREE.LineSegments(eg, new THREE.LineBasicMaterial(
-        { color: 0x5a6a7a, transparent: true, opacity: 0.55 })));
+      mkSimLines(pts, SCENE_PALETTE.STRUCTURE.EDGE_OPACITY);
     }
-    mkInstanced(new THREE.SphereGeometry(1, 16, 12),
-      items.filter((i) => i.kind === "sphere"), 0.9);
+    const spheres = items.filter((i) => i.kind === "sphere");
+    mkInstanced(new THREE.SphereGeometry(1, 16, 12), spheres, 1.0);
+    /* 球合批的轮廓线：每球三条正交大圆（16 段）——否则简化模式纯线框下
+     * 球体什么都不显示（与逐对象路径同病，2026-11-23）。 */
+    {
+      const pts = [];
+      const N = 16;
+      for (const it of spheres) {
+        const [cx, cy, cz] = it.pos, r = it.scale[0] * 1.06;
+        const rings = [
+          (t) => [cx + Math.cos(t) * r, cy + Math.sin(t) * r, cz],
+          (t) => [cx + Math.cos(t) * r, cy, cz + Math.sin(t) * r],
+          (t) => [cx, cy + Math.cos(t) * r, cz + Math.sin(t) * r],
+        ];
+        for (const f of rings) {
+          for (let i = 0; i < N; i++) {
+            const a = f((i / N) * Math.PI * 2);
+            const b = f(((i + 1) / N) * Math.PI * 2);
+            pts.push(...a, ...b);
+          }
+        }
+      }
+      mkSimLines(pts, SCENE_PALETTE.STRUCTURE.EDGE_OPACITY);
+    }
     for (const { rg, idx } of others) {
       const mesh = this.buildStructureMesh(rg);
       if (mesh) { this.structureGroup.add(mesh); this.structureMeshes.push(mesh); this._geoIdxMeshes[idx] = mesh; }
@@ -1445,7 +1320,14 @@ class Scene3D {
   fitCamera() {
     let box = new THREE.Box3();
     box.makeEmpty();
-    box.union(new THREE.Box3().setFromObject(this.structureGroup));
+    /* 结构组逐个 child 取盒（2026-11-23）：Box3.setFromObject 对
+     * InstancedMesh 用基础几何（BoxGeometry(1,1,1) = 世界 1 米）——
+     * 合批后相机被拉到 1 米外，1e-7 的对象全成空。合批实例一律跳过，
+     * 由 _simBox（合批器手算的真实包围盒）补上。 */
+    for (const ch of this.structureGroup.children) {
+      if (ch.userData && ch.userData.sim) continue;
+      box.union(new THREE.Box3().setFromObject(ch));
+    }
     box.union(new THREE.Box3().setFromObject(this.domainGroup));
     box.union(new THREE.Box3().setFromObject(this.markerGroup));
     if (this._simBox) box.union(this._simBox);   /* 合批实例的手算包围盒 */
@@ -1492,27 +1374,34 @@ class Scene3D {
       const fov = THREE.MathUtils.degToRad(this.camera.fov);
       const dist = (halfHFit / Math.tan(fov / 2)) * 1.02;
       this.camera.aspect = aspect;
-      this.camera.near = dist * 0.01;
-      this.camera.far = dist * 40 + maxDim * 4;
+      this.camera.near = dist * 0.05;
+      this.camera.far = dist * 3 + maxDim * 2;
       this.camera.position.set(
         center.x + viewDir.x * dist,
         center.y + viewDir.y * dist,
         center.z + viewDir.z * dist);
+      /* 雾化景深：按**相机距离**定（2026-11-23）——按场景尺寸定会把
+       * 相机放在 far 之外，整场全白。 */
+      this.scene.fog = new THREE.Fog(SCENE_PALETTE.BG.FOG,
+                                     dist - maxDim * 1.1,
+                                     dist + maxDim * 2.4);
     } else {
       const viewDist = maxDim * 3.2;
-      this.camera.near = 1e-9; this.camera.far = viewDist * 8;
+      /* 裁剪面按场景尺度收紧（2026-11-23）：near 曾经是 1e-9 → near/far
+       * 比 1e4 量级，深度缓冲精度被耗光，合批棱线外扩 3% 也照样被面吃掉。 */
+      this.camera.near = Math.max(viewDist - maxDim * 2, maxDim * 1e-3);
+      this.camera.far = viewDist + maxDim * 2;
       this.camera.left = -halfHFit * aspect; this.camera.right = halfHFit * aspect;
       this.camera.top = halfHFit; this.camera.bottom = -halfHFit;
       this.camera.position.set(
         center.x + viewDir.x * viewDist,
         center.y + viewDir.y * viewDist,
         center.z + viewDir.z * viewDist);
+      this.scene.fog = new THREE.Fog(SCENE_PALETTE.BG.FOG,
+                                     viewDist - maxDim * 1.1,
+                                     viewDist + maxDim * 2.4);
     }
     this.camera.lookAt(center);
-    /* 复位 = 角度 + 大小。正交相机滚轮缩放改的是 camera.zoom（视锥上下界
-     * 不变），fitCamera 只重设 left/right/top/bottom——不清 zoom 就变成
-     * "只复位角度、缩放留着"（2026-10-30 站长实测）。透视相机 zoom 恒 1，
-     * 这里一并归位无副作用。 */
     this.camera.zoom = 1;
     this.camera.updateProjectionMatrix();
     if (this.controls) {
@@ -1726,11 +1615,6 @@ class Scene3D {
     this._applyClipPlane();            /* 把盖板放到当前切面位置 */
   }
 
-  /* ── 边线几何（2026-10-21 修精度塌陷）──
-   * three r128 的 EdgesGeometry 用 **整数取整后的顶点坐标** 做哈希：我们的
-   * 几何都是 SI 米（1e-7 量级），所有顶点取整后都变成 (0,0,0)，于是"每一
-   * 条边都被共享两次"→ 输出 0 条边。表现就是结构线框/选中描边**根本画不
-   * 出来**（开关点了没反应）。修法：把几何缩放到 ~1 单位再算边，算完缩回。 */
   _edgesOf(geo, threshold) {
     if (!geo || !geo.attributes || !geo.attributes.position) return new THREE.BufferGeometry();
     const bb = new THREE.Box3().setFromBufferAttribute(geo.attributes.position);
@@ -1836,8 +1720,6 @@ class Scene3D {
     if (!targets.length) { this.markDirty(); return; }
     const col = SCENE_PALETTE.HIGHLIGHT.SELECT;
     const hl = new THREE.Group();
-    const lineMat = new THREE.LineBasicMaterial({
-      color: col, transparent: true, opacity: 0.95, depthTest: false });
     /* 外壳描边（BackSide 微放大）：1px 线在实心体上太细，外面套一层极淡的
      * 同色壳，读作"选中光晕"——不污染实体本色（emissive 会把蓝体染成紫）。 */
     const shellMat = new THREE.MeshBasicMaterial({
@@ -1893,6 +1775,7 @@ class Scene3D {
     this.showXray = !!v;
     for (const mesh of this.structureMeshes) {
       if (!mesh || !mesh.material) continue;
+      if (mesh.userData && mesh.userData.sim) continue;   /* 合批实例自带半透明 */
       mesh.material.transparent = this.showXray || false;
       mesh.material.opacity = this.showXray ? 0.34 : 1;
       mesh.material.depthWrite = !this.showXray;
@@ -1928,7 +1811,8 @@ class Scene3D {
       }
       mesh.traverse(function (child) {
         if (child.isLineSegments) {
-          child.visible = showEdges;
+          /* 轮廓线只在纯线框出现；普通棱线在 edges/wire 两态出现 */
+          child.visible = child.userData.outline === true ? wire : showEdges;
           if (child.material) {
             child.material.opacity = op;
             child.material.transparent = op < 1;
@@ -1937,6 +1821,16 @@ class Scene3D {
         }
       });
     }
+    /* 合批线框层（简化渲染）：不在 structureMeshes 的子树里，单独管 */
+    this.structureGroup.traverse(function (child) {
+      if (!child.userData || !child.userData.simLine) return;
+      child.visible = showEdges;
+      if (child.material) {
+        child.material.opacity = wire ? 0.95 : 0.55;
+        child.material.transparent = true;
+        child.material.needsUpdate = true;
+      }
+    });
   }
   resetCamera() { this.fitCamera(); }
   takeScreenshot() {
@@ -2079,7 +1973,6 @@ class Scene3D {
 
       this.markerGroup.add(g);
       this._srcGroups[index] = g;
-      this._srcLabel(src, index, pos, radius, col, t, k);
       return;
     }
 
@@ -2182,25 +2075,6 @@ class Scene3D {
     return { axis, k, pos, t };
   }
 
-  /* 源标签（贴 marker 顶缘, 与 monitor 标签同款偏移约定）+ 指示线。
-   * k 存在 = 平面源：注入面横向大板时标签高度取 radius 量的帽值，
-   * 不随 t[1]（= 全域面幅）把标签顶飞出域外（Round C 修正）。
-   * s 收敛为 radius*3.4（原 4：稍大）；纵横比与画布同源。 */
-  _srcLabel(src, index, pos, radius, col, t, k) {
-    const label = this._makeLabelSprite3D(src.name || ("S" + (index + 1)), col);
-    label.userData.kind = "source";
-    const latY = k ? Math.min(t && t[1] ? t[1] : 0, radius * 4) : (t && t[1] ? t[1] : 0);
-    const y = pos[1] + Math.max(latY, radius) + radius * 2;
-    label.position.set(pos[0], y, pos[2]);
-    const s = radius * 2.9;
-    this._setLabelScale(label, s);
-    this.labelGroup.add(label);
-    const line = this._leaderLine(
-      [pos[0], y - s * 0.3, pos[2]], [pos[0], pos[1], pos[2]], col);
-    this.labelGroup.add(line);
-    this._labelItems.push({
-      sprite: label, line, anchor: new THREE.Vector3(pos[0], pos[1], pos[2]) });
-  }
 
   /* 监视器标记（2026-10-21 重刻）：监视器 = 「记录面」而不是发光体。
    * 旧值用 emissive 让它们自己发亮，观感与源混淆；现在统一为
@@ -2249,71 +2123,10 @@ class Scene3D {
     }
     this.markerGroup.add(g);
     this._monGroups[index] = g;
-    const label = this._makeLabelSprite3D(
-      mon.name || ("M" + (index + 1)), col, mon.field || "all");
-    label.userData.kind = "monitor";
-    const y = pos[1] + Math.max(dim[1], radius) + radius * 2;
-    label.position.set(pos[0], y, pos[2]);
-    const s = radius * 2.9;
-    this._setLabelScale(label, s);
-    this.labelGroup.add(label);
-    const line = this._leaderLine(
-      [pos[0], y - s * 0.3, pos[2]], [pos[0], pos[1], pos[2]], col);
-    this.labelGroup.add(line);
-    this._labelItems.push({
-      sprite: label, line, anchor: new THREE.Vector3(pos[0], pos[1], pos[2]) });
   }
 
-  /* 标签精灵（Round D 精修）：字号/画布按高分辨率重绘——浅卡 + 深墨
-   * 保持三层面身份，但描边转"细强调"不再读作光晕；卡片比例与 sprite
-   * scale 同源（_labelAspect），避免横竖拉伸糊字。
-   * subtitle（Round C/D）：monitor 的 field 分量小字（如 Ex/all），
-   * 用对象色作强调，读作"采的是哪个场"——须在卡片上仍清晰可辨。 */
-  _makeLabelSprite3D(text, colorHex, subtitle) {
-    /* 2× 内部分辨率（2026-10-21）：旧画布 200×90 + bold 36px 无衬线，贴到
-     * 屏幕上等于 90px 高的字再缩到 ~14px——全部糊成一团灰。现在画布 400×180
-     * （sprite 显示尺寸不变），字族改 UI 字、字重 600、卡角 12→8，并在卡下加
-     * 一层极淡落影，读作「贴在实体旁的标签」而不是一团渐隐色块。 */
-    const W = 400, H = 180;
-    const canvas = document.createElement("canvas");
-    canvas.width = W; canvas.height = H;
-    const ctx = canvas.getContext("2d");
-    const color = "#" + colorHex.toString(16).padStart(6, "0");
-    const card = (r) => {
-      if (ctx.roundRect) ctx.roundRect(14, 12, W - 28, H - 24, r);
-      else ctx.fillRect(14, 12, W - 28, H - 24);
-    };
-    /* 卡片：白纸 + 对象色 1px 描边（2026-10-21：去掉落影——阴影让这些小牌
-     * 读作贴纸；1px 描边 + 无阴影才像仪器窗上的标注牌）。 */
-    ctx.fillStyle = this._cssRgba(SCENE_PALETTE.BG.LABEL_CARD, 0.95);
-    card(16); ctx.fill();
-    ctx.lineWidth = 3;
-    ctx.globalAlpha = 0.5;
-    ctx.strokeStyle = color;
-    card(16); ctx.stroke();
-    ctx.globalAlpha = 1;
-    ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    const font = "'Segoe UI', 'Microsoft YaHei UI', system-ui, sans-serif";
-    if (subtitle) {
-      ctx.font = "600 46px " + font;
-      ctx.fillStyle = this._cssRgba(SCENE_PALETTE.BG.LABEL_INK, 1);
-      ctx.fillText(String(text).slice(0, 12), W / 2, 66);
-      ctx.font = "500 34px " + font;
-      ctx.fillStyle = this._cssRgba(colorHex, 1);
-      ctx.fillText(String(subtitle).slice(0, 16), W / 2, 124);
-    } else {
-      ctx.font = "600 52px " + font;
-      ctx.fillStyle = this._cssRgba(SCENE_PALETTE.BG.LABEL_INK, 1);
-      ctx.fillText(String(text).slice(0, 14), W / 2, H / 2);
-    }
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.needsUpdate = true;
-    return new THREE.Sprite(new THREE.SpriteMaterial(
-      { map: texture, transparent: true, depthTest: false }));
-  }
 
   /* 标签卡纵横比（画布 200×90，与 sprite scale.y = s×_labelAspect 同源） */
-  _labelAspect() { return 90 / 200; }
 
   render() {
     this.controls.update();          /* 阻尼平滑：动 → change → markDirty → 下一帧画 */
@@ -2347,14 +2160,4 @@ class Scene3D {
   }
 
   /* 世界单位/像素：正交按视锥高度，透视按到框心的距离 × 视场角 */
-  _worldPerPx() {
-    const pxH = this.container.clientHeight || 600;
-    if (this.camera.isPerspectiveCamera) {
-      const c = this._rulerCenter || new THREE.Vector3();
-      const d = Math.max(this.camera.position.distanceTo(c), 1e-12);
-      const hgt = 2 * d * Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2);
-      return hgt / pxH;
-    }
-    return (this.camera.top - this.camera.bottom) / pxH;
-  }
 }
