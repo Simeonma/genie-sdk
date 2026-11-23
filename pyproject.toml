@@ -26,7 +26,7 @@ dependencies = [
     # dependency on purpose, no extra: an extra's failure mode is silent (the
     # SDK installs, the agent then reports "not found") — Q6.6.
     "mcp>=2",
-    # Studio native window (2026-11-22, 站长拍 A): pywebview wraps the same
+    # Studio native window (2026-11-22, owner's decision A): pywebview wraps the same
     # static GUI in a WebView2 window; `genie studio --browser` keeps the old
     # server-in-a-browser mode (dev self-test).
     "pywebview>=6,<7",
@@ -39,7 +39,7 @@ genie = "genie.host.cli:main"
 # inclusion); package-dir maps the two source roots to their import names:
 # genie-sdk/ → genie, protocol/genie_protocol → genie_protocol. The wire
 # protocol source lives in exactly one place (protocol/); this wheel carries a
-# byte-identical copy (2026-11-23, 站长拍), while the standalone genie-protocol
+# byte-identical copy (2026-11-23, owner's decision), while the standalone genie-protocol
 # wheel is built from the same source for the kernel / gateway.
 [tool.setuptools]
 packages = ["genie", "genie.core", "genie.core.model", "genie.core.archive",
