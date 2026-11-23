@@ -1,6 +1,14 @@
 """genie_protocol — the single source of truth for the SimConfig wire
-format (a top-level package shipped inside the genie-sdk wheel, lazy-import
-shell).
+format. Two packaging faces of one source (lazy-import shell):
+
+- ``genie-sdk`` wheel carries a copy as top-level ``genie_protocol/``
+  (users install one package);
+- ``genie-protocol`` is its own wheel for the kernel / gateway
+  (genie-fdtd, genie-service), which do not install the SDK.
+
+Both wheels ship byte-identical files. Two owners of ``genie_protocol/`` in
+one environment is refused at import (2026-11-11 V100 incident: install order
+silently decided which copy loaded).
 
 pydantic v2, zero other runtime dependencies. The trio:
 
@@ -16,7 +24,38 @@ when an attribute is first touched; star imports trigger the full load per
 """
 from __future__ import annotations
 
-__version__ = "2.0.3a1"
+__version__ = "2.0.2a1"
+
+
+def _forbid_double_owner() -> None:
+    """Two distributions both registering ``genie_protocol/`` = loud failure.
+
+    The SDK wheel bundles a copy; the kernel/gateway install the standalone
+    ``genie-protocol`` wheel. If both land in one environment, pip's file
+    order decides which copy wins and nothing reports it (2026-11-11 V100).
+    Judge on RECORD ownership, not on "both distributions are installed":
+    editable installs (dev checkouts) register no package files and are fine.
+    """
+    import importlib.metadata as md
+    owners = []
+    for name in ("genie-sdk", "genie-protocol"):
+        try:
+            dist = md.distribution(name)
+        except md.PackageNotFoundError:
+            continue
+        files = {str(f).replace("\\", "/") for f in (dist.files or ())}
+        if "genie_protocol/__init__.py" in files:
+            owners.append(name)
+    if len(owners) == 2:
+        raise ImportError(
+            "genie-sdk 与 genie-protocol 都装了，且都带 genie_protocol/——"
+            "两份副本并存时由装包顺序决定加载哪份，必出错。只留一个："
+            "用户机 `pip uninstall genie-protocol`；"
+            "内核/网关 `pip uninstall genie-sdk`，再重跑一次安装。"
+        )
+
+
+_forbid_double_owner()
 
 __all__ = [
     # basic type aliases

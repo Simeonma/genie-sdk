@@ -1,0 +1,190 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "genie-protocol"
+version = "2.0.2a1"
+description = "GENIE wire-format protocol layer - SimConfig models, expression evaluator, resolver, estimator (single source shared by SDK client, gateway and compute kernel)"
+requires-python = ">=3.10"
+dependencies = [
+    # _wire/resolve are pydantic v2 models; expr is pure stdlib (lazy import,
+    # does not pull pydantic).
+    # 2.0.0b1 breaking: sweep_expand/errors moved into genie-sdk (Q7.1);
+    #   timeout retired (Q7.2).
+    # 2.0.0b2 batch (released 2026-11-05): run.gpu renamed to n_gpu (Q7.4) +
+    #   comment cleanup; the gateway-side batch endpoints are NOT in protocol
+    #   (HTTP body shapes live in genie-service).
+    # 2.0.0b3 (released 2026-11-05): Q7.5 — monitor field defaults
+    #   (time/freq = 'all', index = 'both') + down_sample moved from
+    #   _MonitorMixin down to TimeMonSpec (freq/index carrying it = 422 at
+    #   validation).
+    # 2.0.0b4 (released 2026-11-07): Q13 — built-in constants pi / c0 / eps0 /
+    #   mu0 in the expression dialect (a parameter of the same name wins); the
+    #   expression-slot entry itself lives in the SDK's model layer (Q13).
+    # 2.0.0b5 (2026-11-07): Q14 — kind="rational" pole (num=(a0,a1,a2),
+    #   den=(b0,b1), i.e. χ(s)=(a0+a1s+a2s²)/(s²+b1·s+b0)); lorentz/drude
+    #   become the shorthand forms of it and reject num/den, the rational form
+    #   rejects omega_0/omega_p/gamma/delta_eps (no silent drops). a2 is a
+    #   feedthrough term — applied through the raster-time ε_eff, NOT folded
+    #   into eps_inf, so α≠β (instantaneous non-reciprocal) stays legal.
+    #   Breaking: a shorthand pole that carried the *other* strength field
+    #   (lorentz with omega_p / drude with omega_0) was silently ignored and
+    #   now fails loudly.
+    # 2.0.0b6 (2026-11-09, unreleased): solver-selection surface —
+    #   `solver` (open set: a lower-case identifier, deliberately NOT a Literal
+    #   so adding an algorithm does not bump the protocol) and `plan`
+    #   (list[PlanStageSpec]: solver/id/consumes) on SimConfig, with three
+    #   shape invariants (mutually exclusive, non-empty, ids unique +
+    #   consumes only earlier stages). Both default to None → every existing
+    #   payload validates byte-identically. "solver declared but not installed
+    #   here" is a deployment fact, rejected by the consumer (kernel: 400 +
+    #   available list), not by the protocol.
+    # 2.0.1a1 (2026-11-11, BREAKING — Q17 nested house): SimConfig
+    #   restructured to {model: {materials, geometry, parameters},
+    #   solver|plan, config: <solver envelope>, run: {n_gpu}}. domain/mesh/
+    #   source/monitor belong to the fdtd solver (FdtdConfigSpec) — the
+    #   flat legacy payload is fdtd posing as the model and is now 422.
+    #   ModeConfigSpec (ex kernel-private ModeSection) enters the wire;
+    #   plan stages carry their own config ({solver, id, consumes,
+    #   config}); n_gpu moved to the top-level run (orchestration, any
+    #   solver may use it). Model-section guards (dup materials/geometry,
+    #   material refs) moved into ModelSpec; monitor-name uniqueness and
+    #   boundary pairing into FdtdConfigSpec. Solver set stays open —
+    #   unknown solvers' config passes through as a dict (deployment
+    #   fact).
+    # 2.0.1a15 (2026-11-18, additive — attributes enter the wire): a new
+    #   model-level `attributes` list of named, reusable objects (today one
+    #   type: type="matrix_frame", a real 3×3 material-frame -> lab
+    #   rotation), referenced by every geometry spec via `attribute: <name>`
+    #   — the same naming + foreign-key pattern as materials. There is NO
+    #   inline geometry frame field: one representation, one path. The
+    #   attribute belongs to the object (one material may be used by framed
+    #   and unframed structures; several objects may share one frame); the
+    #   kernel projects U with an SVD and applies T_lab = U·T_mat·Uᵀ. With
+    #   a non-identity frame the material constants must be scalar/diagonal
+    #   in the material frame (full tensor + frame = two rotations =
+    #   rejected at build). `attributes` absent/None = no attributes;
+    #   legacy payloads validate verbatim (no empty list is written).
+    # 2.0.1a13 (2026-11-16, additive — M3 mode source enters the wire):
+    #   the fdtd source union gains type="mode" (ModeSourceSpec): temporal
+    #   five (freq/bandwidth/delay/phase/name, shared with every source;
+    #   freq is the carrier AND fixes the solve wavelength, lambda =
+    #   ref/freq), amplitude (injection power = amplitude^2), placement
+    #   (center/size/propagation_axis — size is the full-span plane:
+    #   transverse slots null, propagation-axis slot non-positive), nested
+    #   mode_selection {n_modes, index, neff_target} (index<n_modes;
+    #   neff_target=None = section max index, weak-contrast guides must
+    #   give their own estimate), and the tilted solve plane's three
+    #   sentences rotate_axis/rotate_angle/rotate_radius (same vocabulary
+    #   and guards as ModeConfigSpec: axis in x/y/z, not the propagation
+    #   axis, angle!=0 requires axis, |angle|<90). Legacy payloads are
+    #   untouched (the union is discriminated by type).
+    # 2.0.1a8 (2026-11-13, additive — multi-wavelength mode sweep): the
+    #   ModeConfigSpec top-level `wavelength` widens from float to
+    #   float | list[float] (single field union — a float IS the
+    #   length-1 special case, no second concept). A list must be
+    #   non-empty, all positive and STRICTLY ASCENDING (duplicates and
+    #   unsorted input are 422 — ascending is the parsing contract, silent
+    #   sorting would create two "different" jobs with identical results).
+    #   Storage keeps the given form verbatim (a float is NOT rewritten to
+    #   [float] — legacy payloads stay byte-identical). Kernel side:
+    #   per-λ serial solve with warm start + overlap branch matching
+    #   (sorted_by="branch_cont"); results h5 gains the lam_### sweep
+    #   layout (single-λ layout unchanged).
+    # 2.0.1a20 (2026-11-21, REMOVES FIELD — Q32 plan retirement): the
+    #   never-implemented `plan` multi-stage surface is deleted
+    #   (PlanStageSpec + SimConfig.plan + its three b6 invariants). A
+    #   b6-era leftover with zero real payloads in the 725-job history
+    #   (the 11 "plan" hits were all null shells from an old SDK
+    #   serializer); its only envisioned consumer — a mode→fdtd mode
+    #   handoff — is served better by fdtd's in-job mode solving
+    #   (same-grid consistency, no extra interpolation). A payload
+    #   carrying "plan" now 422s as an unknown field (anti-resurrection
+    #   lock in tests/protocol/test_contract.py). `solver` stays the
+    #   sole selection face. (Note: the P1-22 auto-shutoff release
+    #   shipped as 2.0.1a19 — the entry below previously mislabeled it
+    #   a20 and is corrected in the same round.)
+    # 2.0.1a19 (2026-11-20, additive — P1-22 auto-shutoff): DomainSpec
+    #   gains `auto_shutoff` (float | None): field-energy decay
+    #   early-stop threshold — the kernel checks the digest
+    #   energy_ratio (total field energy incl. PML ÷ running peak) at
+    #   every progress tick and finishes gracefully
+    #   (termination="autoshutoff") once it drops below. Payload
+    #   default None = OFF (legacy payloads undisturbed, verbatim
+    #   validation); 0 is the explicit off spelling; (0,1] enables;
+    #   recommended 1e-6. Kernel side = optics P1-22.
+    # 2.0.1a18 (2026-11-19, additive — Q31 auto-mesh groundwork, P1-11):
+    #   DomainSpec gains per-axis x/y/z_spacing tables (list of
+    #   SpacingSegmentSpec: lo/hi/d/growth_rate) — the non-uniform BASE
+    #   grid lives on domain (Q30 model-1 generalised). A table must tile
+    #   the axis with no gaps/overlaps and is mutually exclusive with dx
+    #   globally (once any axis uses a table, every axis needs its own d
+    #   or table — tables do not inherit across axes). mode: transverse
+    #   d/coords/spacing are now three-way exclusive; a table requires
+    #   the axis range. Mesh absolute-spacing coarsen guards compare
+    #   against the finest COVERED segment on table axes. estimate takes
+    #   per-segment cell counts. Legacy payloads validate verbatim.
+    # 2.0.1a17 (2026-11-19, BREAKING — Q30 grid language refactor, P1-18):
+    #   the base grid spacing dx/dy/dz moves from MeshSpec to DomainSpec
+    #   (dy/dz still default to dx); MeshSpec dissolves into a LIST of
+    #   named refinement-box objects (name + per-axis factor_x/y/z
+    #   [int >= 1, default 1] XOR absolute dx/dy/dz [must be <= the
+    #   domain base on that axis — meshes refine, never coarsen; both on
+    #   one axis = 422 when both are meaningful — factor=1 is a no-op and
+    #   legal alongside an absolute override, keeping JSON round-trip
+    #   identity]); growth_rate transition
+    #   bands carry over. Global caps max_refinement/min_cells are
+    #   DELETED (grid density is the user's responsibility). Q30 amends
+    #   Q22: an all-factor-1 mesh is now legal (a no-op box). RefineSpec
+    #   and ModeRefineSpec retire. mode migrates symmetrically in the
+    #   same round: ModeDomainSpec carries the base grid (per transverse
+    #   axis spacing XOR coords vector, prop-axis slots rejected),
+    #   ModeMeshSpec becomes the named 2D refinement-box list.
+    # 2.0.1a7 (2026-11-13, additive — geometry rotation, task 4): all
+    #   seven geometry specs take an optional `rotation: Vec3` (Euler
+    #   angles in degrees, default (0,0,0) = unrotated; convention:
+    #   R = Rz(gamma)·Ry(beta)·Rx(alpha), extrinsic about the fixed
+    #   global axes x→y→z; membership = contains(body, Rᵀ·(p − reference
+    #   centre)); reference centre = the shape's `center` field / box
+    #   range midpoints / polygon bbox centre + z-range midpoint; sphere
+    #   rotation about its own centre is the identity). Legacy payloads
+    #   validate verbatim; kernels consume it via the point-membership
+    #   single source (model.geometry.contains / fdtd _shapes mirror).
+    # 2.0.1a6 (2026-11-12, additive — Q23 mode refine: ModeRefineSpec
+    #   (2D zone, per-axis factor >= 1, at least one >= 2); coords repositioned
+    #   as fdtd-coordination/expert escape (user entry = refine).
+    # 2.0.1a6 (2026-11-12, additive — Q22 refine factor per-axis >= 1
+    #   (factor=1 = no refinement on that axis; at least one axis >= 2);
+    #   kernel guard relaxed in the same round (fdtd Mesh.refine).
+    # 2.0.1a4 (2026-11-12, additive — Q20 mode wire v2.1: n_ref on
+    #   ModeConfigSpec (search index, default None = max transverse index);
+    #   transverse domain range optional when mesh coords given (both = 422).
+    # 2.0.1a3 (2026-11-12, BREAKING for mode — Q18 mode language
+    #   structuring): ModeConfigSpec reshaped from the flat 13-field
+    #   kernel carry-over into domain/mesh/boundary sections + top-level
+    #   wavelength/n_modes. Window/mesh speak REAL axis names (transverse
+    #   pair required by `axis`, propagation-axis fields rejected);
+    #   center/span_h/v and dh/dv retire. Mesh takes per-axis spacing OR
+    #   coordinate vectors (strictly increasing, >=2 points; both on one
+    #   axis = two truths = 422) — the kernel converts vectors to its
+    #   standard grid input. boundary reuses fdtd's BoundarySpec (per-edge
+    #   dict on the four cross-section edges; bloch and n_background
+    #   rejected; n_pml retires into layers, default 8 -> 12 visible).
+    #   No source/monitor sections (eigenproblems take no excitations).
+    #   Kernel write side + mode-results h5 ride the mode-M1 batch.
+    "pydantic>=2,<3",
+]
+license = "Apache-2.0"
+# The license text ships with the package (2026-10-25): the a1 wheel carried
+# only a License-Expression and no LICENSE file, so an installed copy amounted
+# to a bare SPDX identifier. The protocol layer is an independently
+# distributed package and needs its own copy of the text.
+license-files = ["LICENSE"]
+
+# The protocol layer = an independent distribution identity (its own wheel /
+# version); the source lives in the SDK repo's protocol/ subdirectory (next
+# to the JS mirror, keeping changes atomic — see docs/ARCHITECTURE.md,
+# "Protocol layer").
+[tool.setuptools]
+packages = ["genie_protocol"]

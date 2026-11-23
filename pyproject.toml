@@ -11,11 +11,13 @@ license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
 dependencies = [
-    # Wire format ships in this same wheel as the top-level package
-    # genie_protocol/ (see [tool.setuptools] below): one download, one install.
-    # There is no genie-protocol distribution any more — two owners of
-    # genie_protocol/ would let install order silently decide which copy wins
-    # (2026-11-11 V100 incident), so the source tree keeps exactly one owner.
+    # Wire format: this wheel carries a copy as top-level genie_protocol/
+    # (see [tool.setuptools] below), so users install one package. There is
+    # also a standalone genie-protocol wheel for the kernel / gateway, which
+    # do not install the SDK — but it is deliberately NOT a dependency here:
+    # declaring it would put two owners of genie_protocol/ in the same
+    # environment, and install order would silently decide which copy wins
+    # (2026-11-11 V100 incident; genie_protocol.__init__ now refuses that).
     "pydantic>=2,<3",
     "numpy>=1.24",
     # Result reading (genie-results-h5: the SimData behind results()/post_analyze)
@@ -36,9 +38,9 @@ genie = "genie.host.cli:main"
 # Packaging whitelist (the explicit v2 package list guards against accidental
 # inclusion); package-dir maps the two source roots to their import names:
 # genie-sdk/ → genie, protocol/genie_protocol → genie_protocol. The wire
-# protocol is a top-level package inside this one distribution (2026-11-23,
-# 站长拍): users install one wheel; the source still lives in exactly one
-# place, protocol/, next to the SDK sources.
+# protocol source lives in exactly one place (protocol/); this wheel carries a
+# byte-identical copy (2026-11-23, 站长拍), while the standalone genie-protocol
+# wheel is built from the same source for the kernel / gateway.
 [tool.setuptools]
 packages = ["genie", "genie.core", "genie.core.model", "genie.core.archive",
             "genie.core.material", "genie.core.results",
