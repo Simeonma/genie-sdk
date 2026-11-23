@@ -4,12 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "genie-protocol"
-version = "2.0.2a1"
+version = "2.0.2a2"
 description = "GENIE wire-format protocol layer - SimConfig models, expression evaluator, resolver, estimator (single source shared by SDK client, gateway and compute kernel)"
 requires-python = ">=3.10"
 dependencies = [
     # _wire/resolve are pydantic v2 models; expr is pure stdlib (lazy import,
     # does not pull pydantic).
+    # 2.0.2a2 (2026-11-23): double-owner guard — import refuses when both
+    #   genie-sdk and genie-protocol RECORDs register genie_protocol/ (RECORD
+    #   judged; editable installs excluded). No wire change. 2.0.2a1 shipped
+    #   without it, so this is a new version, not a rebuild of the same one.
     # 2.0.0b1 breaking: sweep_expand/errors moved into genie-sdk (Q7.1);
     #   timeout retired (Q7.2).
     # 2.0.0b2 batch (released 2026-11-05): run.gpu renamed to n_gpu (Q7.4) +

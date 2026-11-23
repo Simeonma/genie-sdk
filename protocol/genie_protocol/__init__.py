@@ -24,7 +24,7 @@ when an attribute is first touched; star imports trigger the full load per
 """
 from __future__ import annotations
 
-__version__ = "2.0.2a1"
+__version__ = "2.0.2a2"
 
 
 def _forbid_double_owner() -> None:
