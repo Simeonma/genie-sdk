@@ -22,6 +22,14 @@ Tsinghua PyPI mirror. Prefer plain pip:
 pip install genie_sdk-<ver>-py3-none-any.whl
 ```
 
+Upgrading from an older release that also installed `genie-protocol`? Remove
+both first — the SDK now carries the protocol and refuses to import when two
+copies are present:
+
+```
+pip uninstall -y genie-sdk genie-protocol
+```
+
 From a source checkout (the tree ships `protocol/` next to the SDK sources;
 `pyproject.toml` maps both roots into the same wheel):
 
