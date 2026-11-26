@@ -23,7 +23,7 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
-from typing import Any, Optional, Union, get_args, get_origin
+from typing import Any, Literal, Optional, Union, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, create_model
 
@@ -149,13 +149,20 @@ def _draftify(ann: Any) -> Any:
     return Optional[_draftify_inner(ann)]
 
 
+#: 可选“继承全局频段”的对象（SDK 私有字段，不进 wire；文档保留、载荷解析）
+_FREQ_FROM = frozenset({
+    "SoftSourceSpec", "PlaneWaveSpec", "GaussianBeamSpec", "ModeSourceSpec",
+    "TimeMonSpec", "FreqMonSpec", "IndexMonSpec",
+})
+
 for _cls in _ordered():
     _name = (_cls.__name__[:-4] if _cls.__name__.endswith("Spec")
              else _cls.__name__) + "Draft"
-    DRAFT_OF[_cls] = create_model(
-        _name, __base__=_DraftBase,
-        **{n: (_draftify(f.annotation), None)
-           for n, f in _cls.model_fields.items()})
+    _fields = {n: (_draftify(f.annotation), None)
+               for n, f in _cls.model_fields.items()}
+    if _cls.__name__ in _FREQ_FROM:
+        _fields["freq_from"] = (Optional[Literal["global", "own"]], None)
+    DRAFT_OF[_cls] = create_model(_name, __base__=_DraftBase, **_fields)
 
 
 def to_wire(value: Any) -> Any:

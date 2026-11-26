@@ -652,6 +652,12 @@ export function SOURCE_SCHEMA(cfg, commit, s) {
   };
   const pol = (Array.isArray(s.polarization) && Array.isArray(s.polarization[0]))
     ? s.polarization : [[1, 0], [0, 0], [0, 0]];
+  /* 全局频段继承（2026-11-27）：选 global 时 freq/bw 显示解析值且只读。 */
+  const sim = (cfg && cfg.simulation) || {};
+  const bandOk = (sim.band_lo != null && sim.band_hi != null);
+  const bound = s.freq_from === "global" && bandOk;
+  const freqVal = bound ? (sim.band_lo + sim.band_hi) / 2 : s.freq;
+  const bwVal = bound ? (sim.band_hi - sim.band_lo) : s.bandwidth;
   return { sections: [{
     type: "section", key: "src:general", title: "General settings", open: true,
     items: [
@@ -663,6 +669,10 @@ export function SOURCE_SCHEMA(cfg, commit, s) {
           kind: "select", value: s.kind || "electric",
           options: ["electric", "magnetic"], rerender: true,
           onPick: (v) => commit("kind", py(v)) }] },
+      { type: "row", label: "Band", controls: [{
+          kind: "select", value: s.freq_from === "global" ? "global" : "own",
+          options: ["own", "global"], rerender: true,
+          onPick: (v) => commit("freq_from", py(v)) }] },
       /* 复数直接输入（2026-11-26 站长拍）：xyz 三列，一格一个复数
        * （`1` / `2j` / `1-0.5j`），写回线格式的 [[re,im]×3]。 */
       { type: "table", caption: "Polarization",
@@ -692,10 +702,14 @@ export function SOURCE_SCHEMA(cfg, commit, s) {
       { type: "table", caption: "Spectrum",
         cols: [{ label: "freq", unit: "THz" }, { label: "bw", unit: "THz" }],
         rows: [{ cells: [
-          { kind: "num", path: "source.freq", value: s.freq, unit: "freq",
-            onSet: (v) => commit("freq", py(v)) },
-          { kind: "num", path: "source.bandwidth", value: s.bandwidth,
-            unit: "freq", onSet: (v) => commit("bandwidth", py(v)) },
+          bound
+            ? { kind: "num", path: "source.freq", value: freqVal, unit: "freq" }
+            : { kind: "num", path: "source.freq", value: s.freq, unit: "freq",
+                onSet: (v) => commit("freq", py(v)) },
+          bound
+            ? { kind: "num", path: "source.bandwidth", value: bwVal, unit: "freq" }
+            : { kind: "num", path: "source.bandwidth", value: s.bandwidth,
+                unit: "freq", onSet: (v) => commit("bandwidth", py(v)) },
         ] }] },
       { type: "table", caption: "Timing",
         cols: [{ label: "delay", unit: "fs" }, { label: "phase", unit: "rad" },
