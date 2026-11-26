@@ -25,6 +25,9 @@ __all__ = ["n_of_material", "project_axis", "suggest_table",
 
 #: 每波长格数缺省（Q31 开题：工程惯例 10–20，取保守中值）
 DEFAULT_PPW = 14
+#: 背景恒为真空（n_bg 概念已从 wire 删除，2026-11-26）——自动网格的
+#: 空区折射率就是 1.0；要背景就画 block，它会作为几何进入折影。
+_VACUUM_N = 1.0
 
 _C0 = 299792458.0
 
@@ -125,9 +128,9 @@ def _axis_extent(g, axis):
     return ext["xyz".index(axis)]
 
 
-def project_axis(axis, geometries, materials, f_lo, f_hi, n_bg=1.0):
+def project_axis(axis, geometries, materials, f_lo, f_hi):
     """一根轴的 1D 折影：几何区间 → [(lo, hi, n_local)]，重叠取 max n
-    （保守不错值），空区/背景由 suggest_table 补 n_bg。断点扫描：k 个
+    （保守不错值），空区/背景由 suggest_table 按真空补。断点扫描：k 个
     几何 O(k²)，k 是物体数（个位到几十），不值得上堆。"""
     intervals = []
     for g in geometries:
@@ -151,7 +154,7 @@ def project_axis(axis, geometries, materials, f_lo, f_hi, n_bg=1.0):
         mid = 0.5 * (lo + hi)
         covering = [n for l, h, n in intervals if l <= mid <= h]
         n = max(covering)
-        if n > n_bg:
+        if n > _VACUUM_N:
             if out and out[-1][2] == n and out[-1][1] == lo:
                 out[-1] = (out[-1][0], hi, n)      # 相邻同 n 段合并
             else:
@@ -160,10 +163,10 @@ def project_axis(axis, geometries, materials, f_lo, f_hi, n_bg=1.0):
 
 
 def suggest_table(axis_range, segments, lam_min, ppw=DEFAULT_PPW,
-                  growth=1.2, n_bg=1.0):
+                  growth=1.2):
     """投影段表 → 无缝覆盖全域的 spacing 段表（wire 形 dict 列表）。
 
-    d = λ₀_min / (ppw · n)；空区/背景区 n = n_bg。相邻同 d 段合并。"""
+    d = λ₀_min / (ppw · n)；空区/背景区 n = 1.0（真空）。相邻同 d 段合并。"""
     lo0, hi0 = float(axis_range[0]), float(axis_range[1])
     spans = [(lo, hi, n) for lo, hi, n in segments if hi > lo0 and lo < hi0]
     spans.sort()
@@ -173,12 +176,12 @@ def suggest_table(axis_range, segments, lam_min, ppw=DEFAULT_PPW,
         lo = max(lo, lo0)
         hi = min(hi, hi0)
         if lo > cur:
-            covered.append((cur, lo, n_bg))
+            covered.append((cur, lo, _VACUUM_N))
             cur = lo
         covered.append((lo, hi, n))
         cur = max(cur, hi)
     if cur < hi0:
-        covered.append((cur, hi0, n_bg))
+        covered.append((cur, hi0, _VACUUM_N))
     # 相邻同间距合并 → wire 段表
     table = []
     for lo, hi, n in covered:
@@ -191,7 +194,7 @@ def suggest_table(axis_range, segments, lam_min, ppw=DEFAULT_PPW,
     return table
 
 
-def auto_grid_tables(ranges, geometries, materials, band, n_bg=1.0,
+def auto_grid_tables(ranges, geometries, materials, band,
                      ppw=DEFAULT_PPW, growth=1.2):
     """三轴一次算齐（fdtd 用法）。
 
@@ -203,6 +206,6 @@ def auto_grid_tables(ranges, geometries, materials, band, n_bg=1.0,
     lam_min = _C0 / max(f_lo, f_hi)
     out = {}
     for axis, rng in ranges.items():
-        segs = project_axis(axis, geometries, materials, f_lo, f_hi, n_bg)
-        out[axis] = suggest_table(rng, segs, lam_min, ppw, growth, n_bg)
+        segs = project_axis(axis, geometries, materials, f_lo, f_hi)
+        out[axis] = suggest_table(rng, segs, lam_min, ppw, growth)
     return out

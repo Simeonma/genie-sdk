@@ -790,7 +790,7 @@ class Surface:
         段表。fit_material 同族：一次性生成动作，产物是普通数据（三
         张/两张段表写在该求解器的 domain 上），之后可改可删——不搞
         提交期隐藏重算。fdtd 频段 = 源频谱并集；mode = wavelength
-        （取最短 λ），背景 = domain.n_bg。``n`` = 每波长格数（缺省
+        （取最短 λ）；背景恒为真空。``n`` = 每波长格数（缺省
         core.grid.DEFAULT_PPW=14）。库材先懒拟合（与 validate/run 同
         一入口）。返回 {axis: 段数} 便于终端回显。"""
         from ..core import grid as core_grid
@@ -807,7 +807,6 @@ class Surface:
             lam_min = min(lam) if isinstance(lam, list) else float(lam)
             f_hi = core_grid._C0 / lam_min
             f_lo = f_hi / 2.0          # 单 λ：以 λ 为中心的一个倍频程
-            n_bg = 1.0          # 背景恒为真空（A 案：n_bg 概念已删）
             ranges = {}
             for a in (t1, t2):
                 rng = getattr(env.domain, f"{a}_range")
@@ -819,10 +818,10 @@ class Surface:
             out = {}
             for a, rng in ranges.items():
                 segs = core_grid.project_axis(a, geometries, materials,
-                                              f_lo, f_hi, n_bg)
+                                              f_lo, f_hi)
                 table = core_grid.suggest_table(rng, segs, lam_min,
                                                 core_grid.DEFAULT_PPW if n is None else n,
-                                                growth, n_bg)
+                                                growth)
                 setattr(env.domain, f"{a}_spacing", table)
                 setattr(env.domain, f"d{a}", None)   # 同轴互斥（wire 422）
                 out[a] = len(table)
@@ -839,7 +838,7 @@ class Surface:
         d = env.domain
         ranges = {"x": d.x_range, "y": d.y_range, "z": d.z_range}
         tables = core_grid.auto_grid_tables(
-            ranges, geometries, materials, (f_lo, f_hi), n_bg=1.0,
+            ranges, geometries, materials, (f_lo, f_hi),
             ppw=core_grid.DEFAULT_PPW if n is None else n, growth=growth)
         for a, table in tables.items():
             setattr(d, f"{a}_spacing", table)
