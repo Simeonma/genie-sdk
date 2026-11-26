@@ -455,7 +455,11 @@ export const KIT = {
       throw new Error("range item needs `order` (e.g. [\"center\",\"size\",\"min\",\"max\"])");
     /* 第二列两种叫法：size（fdtd 域范围）或 span（频段）；同一套换算。 */
     const WIDTH = ORDER.includes("span") ? "span" : "size";
-    const cols = ORDER.map((label) => ({ label, unit: ul }));
+    /* 可选首格（2026-11-27 站长拍）：一行 5 列——首格放一个控件（如
+     * frequency/wavelength 下拉），后面仍是 range 四列互算。 */
+    const lead = it.lead || null;
+    const cols = (lead ? [{ label: lead.header || "" }] : [])
+      .concat(ORDER.map((label) => ({ label, unit: ul })));
     const rows = (it.rows || []).map((r) => {
       if (r.centerOnly) {
         /* 传播轴那一行：只有 center 可编（它就是这个轴的 position），
@@ -480,6 +484,7 @@ export const KIT = {
           this._clearFieldError(center);
           r.onCenter(v);
         });
+        if (lead) cells.unshift(this._ctl(it, lead, true).el);
         return { label: r.label, cells };
       }
       const v0 = Array.isArray(r.value) ? r.value.map(Number) : [NaN, NaN];
@@ -522,7 +527,9 @@ export const KIT = {
         this._edit(ins[name]);
         ins[name].addEventListener("change", fire(name));
       }
-      return { label: r.label, cells: ORDER.map((name) => ins[name]) };
+      const cells = ORDER.map((name) => ins[name]);
+      if (lead) cells.unshift(this._ctl(it, lead, true).el);
+      return { label: r.label, cells };
     });
     const mtx = this._matrix({ cols, rows, min: 52 });
     const wrap = this._el("div", "tbl");

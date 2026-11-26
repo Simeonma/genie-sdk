@@ -739,13 +739,13 @@ export function GLOBAL_SCHEMA(cfg, setBand, sim) {
     type: "section", key: "sim:general",
     title: "Global frequency/wavelength settings", open: true,
     items: [
-      { type: "row", label: "Quantity", controls: [{
-          kind: "select", value: wl ? "wavelength" : "frequency",
-          options: ["frequency", "wavelength"], rerender: true,
-          onPick: (v) => { SIM_UNIT = v; } }] },
-      /* 频段：四列互算；真身 band_lo/band_hi（Hz）。波长模式按 c/λ 折回。 */
+      /* 一张 1×5 表（2026-11-27 站长拍）：首列 = 量（frequency/wavelength），
+       * 后四列 = center/span/min/max 互算；真身 band_lo/band_hi（Hz）。 */
       { type: "range", caption: "Frequency band", unit: wl ? "len" : "freq",
         order: ["center", "span", "min", "max"],
+        lead: { kind: "select", value: wl ? "wavelength" : "frequency",
+                options: ["frequency", "wavelength"], rerender: true,
+                header: "", onPick: (v) => { SIM_UNIT = v; } },
         rows: [{ value: pair,
           onSet: (v) => {
             let lo, hi;
