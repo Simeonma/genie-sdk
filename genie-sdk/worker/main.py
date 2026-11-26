@@ -17,7 +17,6 @@ from genie import ipc
 from genie.core.model import Model
 
 from .exec import ExecContext
-from .run import load_model, load_recipes, load_sweeps
 
 __all__ = ["main", "ENV_GW_BASE_URL", "ENV_WORKER_TOKEN", "ENV_DOC_PATH"]
 
@@ -29,13 +28,11 @@ ENV_DOC_PATH = "GENIE_DOC_PATH"
 
 
 def _restore(doc_path: "str | None") -> Model:
-    """Startup restore: if the ``.gensim`` at the spawn env path exists,
-    restore the model from it (single implementation = ``run.load_model``,
-    the same logic as ``f._open``; the id allocator takes max); otherwise
-    a new model. Result members stay in the document (reads go through
-    f.get_* / f.results)."""
-    if doc_path and os.path.isfile(doc_path):
-        return load_model(doc_path)[0]
+    """Startup = **empty model** (2026-11-25 站长拍)：默认打开不载入任何设定。
+
+    早先这里会自动恢复 spawn env 指向的 ``.gensim``；文档格式断代后，一个旧档
+    就能让整个进程起不来（窗口打不开）。现在载入只有一条路：``genie.open(path)``。
+    ``doc_path`` 仍保留为默认保存目标（GUI 的 Save 走它）。"""
     return Model()
 
 
@@ -62,6 +59,10 @@ def main(read_lines=None, emit=None, env=None) -> None:
     env = os.environ if env is None else env
 
     doc_path = env.get(ENV_DOC_PATH)
+    if doc_path and os.path.isfile(doc_path):
+        # 不载入它，就也不把它当默认保存目标——绝不覆盖一份没打开过的旧档。
+        # 用户显式 open 之后 doc_path 才会重新指过去。
+        doc_path = None
     ctx = ExecContext(
         emit=emit,
         model=_restore(doc_path),
@@ -69,8 +70,9 @@ def main(read_lines=None, emit=None, env=None) -> None:
         worker_token=env.get(ENV_WORKER_TOKEN),
         doc_path=doc_path,
     )
-    ctx.post_recipes = load_recipes(doc_path)   # recipes are restored with the document
-    ctx.sweeps = load_sweeps(doc_path)          # sweep definitions too (the document is the authoritative copy)
+    # 配方 / 扫参只在 open 时随档恢复；启动不读文件（同一理由：默认不载入）
+    ctx.post_recipes = {}
+    ctx.sweeps = {}
 
     emit(ipc.ready())
     emit(ipc.cfg(ctx.gui_snapshot()))          # initial emission right after ready

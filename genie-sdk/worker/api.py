@@ -210,6 +210,8 @@ class Surface:
                     f"address {addr!r}: {fam} has no object named {name!r} "
                     f"(existing: {self._names_hint(members)})")
             return _Target(fam, fam, name, members[name])
+        if addr == "simulation":                            # 全局仿真设置（文档级）
+            return _Target("simulation", None, addr, self._model)
         if addr in self._model._solvers:                    # the solver itself
             return _Target("solver", None, addr, self._model.envelope(addr))
         cands = self._all_candidates().get(addr, [])
@@ -367,6 +369,16 @@ class Surface:
 
     # -- per-kind writers ------------------------------------------------
 
+    def _set_simulation(self, t, fields):
+        """全局仿真设置（2026-11-26）：只收 freq_center / freq_span（SI Hz）。"""
+        allowed = {"freq_center", "freq_span"}
+        self._only(t, fields, allowed)
+        for k, v in fields.items():
+            if not isinstance(v, (int, float)) or not v > 0:
+                raise ValueError(f"simulation.{k} must be a positive number, got {v!r}")
+            t.obj.simulation = {**t.obj.simulation, k: float(v)}
+        return "simulation"
+
     def _set_parameter(self, t, fields):
         self._only(t, fields, {"value"})
         val = fields["value"]
@@ -423,6 +435,10 @@ class Surface:
     def _set_solver(self, t, fields):
         env = t.obj
         for k, v in fields.items():
+            if k == "name":
+                # 名字是字段（身份是 id，2026-11-25）：改名走同一条写通道
+                self._model.rename_solver(t.name, v)
+                continue
             if "." in k:                  # nested path (GUI boundary edits)
                 node, attr = env, None
                 parts = k.split(".")
@@ -440,12 +456,15 @@ class Surface:
                 else:
                     setattr(node, attr, v)
                 continue
+            if hasattr(env, "_FIELDS") and k in env._FIELDS:
+                # 包络自有字段优先（mode：boundary 在 ModeConfigSpec 顶层，
+                # 不在 domain——_SOLVER_FIELDS 的 domain.boundary 是 fdtd
+                # 形状，先查包络才不会把 mode 的边界写进 domain）
+                setattr(env, k, v)
+                continue
             if k in _SOLVER_FIELDS:
                 section, wire = _SOLVER_FIELDS[k]
                 setattr(getattr(env, section), wire, v)
-                continue
-            if hasattr(env, "_FIELDS") and k in env._FIELDS:
-                setattr(env, k, v)
                 continue
             if k in getattr(type(env.domain), "model_fields", {}):
                 setattr(env.domain, k, v)
@@ -492,7 +511,8 @@ class Surface:
                     raise ValueError(
                         f"mode_expansion reference has unknown key(s) "
                         f"{sorted(extra)} (only mode_solver / freq)")
-                object.__setattr__(draft, "_mode_expansion_ref", ref)
+                object.__setattr__(draft, "_mode_expansion_ref",
+                                   {**ref, "mode_solver_id": env.id})
                 continue
             if k == "mode_expansion":
                 object.__setattr__(draft, "_mode_expansion_ref", None)
@@ -605,7 +625,14 @@ class Surface:
         env = t.obj
         out = {}
         for user, (section, wire) in _SOLVER_FIELDS.items():
-            out[user] = getattr(getattr(env, section), wire)
+            if hasattr(env, "_FIELDS") and user in env._FIELDS:
+                out[user] = getattr(env, user)   # mode：boundary 在包络顶层
+                continue
+            holder = getattr(env, section)
+            # 只读该求解器形状里真有的字段（mode 的 domain 没有
+            # total_time/cfl——fdtd 形状的扁平表不能盲读全量）
+            if user in getattr(type(holder), "model_fields", {}):
+                out[user] = getattr(holder, wire)
         return out
 
     def _get_source(self, t):
@@ -644,8 +671,12 @@ class Surface:
         try:
             t = self._resolve(addr)
         except ValueError:
-            if isinstance(addr, str) and "." in addr:
-                return addr            # idempotent for qualified addresses
+            # 幂等：已不存在的限定地址 / 求解器名 = 无操作（裸名只有
+            # 求解器一种，词形判定与声明规则同源）。
+            from ..core.model.handle import _SOLVER_RE
+            if isinstance(addr, str) and ("." in addr
+                                          or _SOLVER_RE.fullmatch(addr)):
+                return addr
             raise
         if t.kind == "parameter":
             self._model.parameters.pop(t.name, None)
@@ -662,7 +693,10 @@ class Surface:
             self._env.sweeps.pop(t.name, None)
             sweep_mod.sync_sweeps(self._env)
         elif t.kind == "solver":
-            raise ValueError(f"remove({addr!r}): solvers cannot be removed")
+            # 声明制对称（2026-11-24 站长拍）：删求解器 = 其包络整体
+            # 消失（domain/source/monitor/mesh 级联——它们住在包络里）；
+            # 被 mode_expansion 引用的拒删（报错列引用者）。
+            self._model.remove_solver(t.name)
         else:                                   # solver child
             env = self._model.envelope(t.solver)
             if t.kind == "source":
@@ -773,7 +807,7 @@ class Surface:
             lam_min = min(lam) if isinstance(lam, list) else float(lam)
             f_hi = core_grid._C0 / lam_min
             f_lo = f_hi / 2.0          # 单 λ：以 λ 为中心的一个倍频程
-            n_bg = float(env.domain.n_bg or 1.0)
+            n_bg = 1.0          # 背景恒为真空（A 案：n_bg 概念已删）
             ranges = {}
             for a in (t1, t2):
                 rng = getattr(env.domain, f"{a}_range")
@@ -825,16 +859,28 @@ class Surface:
 
     def run_fdtd(self, *, n_gpu=None):
         self._fit_pending()
-        return self._run_solver("fdtd", n_gpu=n_gpu)
+        return self._run_solver("fdtd", n_gpu=n_gpu, expect="fdtd")
 
     def build_fdtd(self, *, n_gpu=None):
         """Q35 build 预演：run.build=true 提交，内核 build 后即收——
         格/dt/步数、实测显存、index 监视器、mode 源 neff 一份报告，
         不跑时间步（计费 run_s=0）。fdtd 专属（mode 无贵的后半段）。"""
         self._fit_pending()
-        return self._run_solver("fdtd", n_gpu=n_gpu, build=True)
+        return self._run_solver("fdtd", n_gpu=n_gpu, build=True,
+                                expect="fdtd")
 
-    def _run_solver(self, solver, *, n_gpu=None, build=False):
+    def _run_solver(self, solver, *, n_gpu=None, build=False,
+                    expect="fdtd"):
+        # verb↔kind guard (2026-11-24): solver names are document labels;
+        # the wire carries the kind — a name declared under another kind
+        # must fail loudly here, not silently submit the other solver.
+        got = getattr(self._model.envelope(solver), "kind", None)
+        if got != expect:
+            raise ValueError(
+                f"solver {solver!r} is declared as kind {got!r} — this "
+                f"verb runs {expect!r} envelopes (the wire payload "
+                f"carries the kind, so this would silently submit a "
+                f"{got!r} job)")
         env = self._env
         cfg = self._model.to_config(solver)
         chain._validate([cfg])
@@ -862,7 +908,7 @@ class Surface:
 
     def run_mode(self, name="mode", *, n_gpu=None):
         self._fit_pending()
-        return self._run_solver(name, n_gpu=n_gpu)
+        return self._run_solver(name, n_gpu=n_gpu, expect="mode")
 
     def run_sweep(self, name):
         self._fit_pending()

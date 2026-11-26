@@ -10,7 +10,7 @@ Physics ruler: per merged projection segment, d = λ₀_min / (N · n_local),
 n_local = max Re(n(ω)) over the working band (evaluated from the FITTED
 poles via core.material.fit.evaluate_dispersion — the surface the P0-2
 cross-repo anchor locks bitwise against the kernel eps_at). Empty regions
-take the background index (fdtd: vacuum 1.0; mode: domain.n_bg).
+take the background index (vacuum 1.0; background materials are blocks).
 """
 from __future__ import annotations
 

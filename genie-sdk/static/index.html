@@ -57,6 +57,8 @@
       aria-selected="true" aria-controls="page-design" tabindex="0">Design</button>
     <button class="app-tab" id="tab-fdtd" type="button" role="tab" data-page="fdtd"
       aria-selected="false" aria-controls="page-fdtd" tabindex="-1">FDTD</button>
+    <button class="app-tab" id="tab-mode" type="button" role="tab" data-page="mode"
+      aria-selected="false" aria-controls="page-mode" tabindex="-1">MODE</button>
     <!-- Agent（站长裁决 2026-10-19）：与 FDTD 同级——页签行右端，非页面页签
          故独立类 .tab-action（不入 TABS 激活逻辑） -->
     <button id="agent-open-btn" class="tab-action" type="button" title="Agent 对话面板">
@@ -78,31 +80,9 @@
   <!-- 仿真要素横条（2026-08-31bk：站长裁决——域/网格/材料/几何是仿真
        重要信息, 置于顶部横条而非左栏上方） -->
   <div id="workspace-bar">
-      <!-- ══ FILE：项目 I/O（原 File 框整组迁入；Lumerical FILE=Project） ══ -->
+      <!-- ══ FILE：空壳（L-35 清空；文件功能随 M6/L-41 重接）══ -->
       <div class="obj-toolbar tb-page" id="page-file" role="tabpanel"
            aria-labelledby="tab-file" hidden>
-        <div class="tb-box" id="tb-file-box">
-          <span class="tb-box-title">Project</span>
-          <div class="tb-box-btns">
-            <button id="file-new-btn" class="tb-btn" type="button" data-preview="file_new"
-              title="新建空白项目 (Ctrl+N)">
-              <span>New</span></button>
-            <button id="file-open-btn" class="tb-btn" type="button" data-preview="file_open"
-              title="打开仿真文件 (.gensim) — 系统文件对话框 (Ctrl+O)">
-              <span>Open…</span></button>
-            <button id="file-save-btn" class="tb-btn" type="button" data-preview="file_save"
-              title="保存到当前文件 (Ctrl+S)；未命名时存为 &lt;工作区&gt;/genie.gensim">
-              <span>Save</span></button>
-            <button id="file-saveas-btn" class="tb-btn" type="button" data-preview="file_saveas"
-              title="另存为 .gensim (Ctrl+Shift+S)">
-              <span>Save As…</span></button>
-            <button id="file-folder-btn" class="tb-btn" type="button" data-preview="file_folder"
-              title="在资源管理器中显示当前文档（或工作区）">
-              <span>Open folder</span></button>
-            <span id="file-doc-path" class="file-doc" title="当前文档"></span>
-            <span id="file-workspace-path" class="file-ws-path" title=""></span>
-          </div>
-        </div>
       </div>
 
       <!-- ══ VIEW：脸的摆法 + 3D 显示开关（原 Layout 组 + 场景工具钮镜像）══ -->
@@ -148,19 +128,14 @@
         </div>
       </div>
 
-      <!-- ══ FDTD：域/网格 + 源 + 监视器 + Run（Lumerical FDTD=仿真侧） ══ -->
+      <!-- ══ FDTD：源 + 监视器 + Run（Lumerical FDTD=仿真侧；域/网格入口在左树）══ -->
       <div class="obj-toolbar tb-page" id="page-fdtd" role="tabpanel"
            aria-labelledby="tab-fdtd" hidden>
-        <div class="tb-box" id="tb-domain-box">
-          <span class="tb-box-title">Domain &amp; Mesh</span>
-          <div class="tb-box-btns">
-            <button id="domain-edit-btn" class="tb-btn" type="button" data-preview="domain"
-              title="编辑仿真域（范围 / 总时长 / CFL / 边界）">Domain</button>
-            <button id="mesh-edit-btn" class="tb-btn" type="button" data-preview="mesh"
-              title="编辑网格（dx / dy / dz）">Mesh</button>
-          </div>
-        </div>
-        <div class="tb-box" id="tb-src-box">
+        <div class="tb-box" id="tb-mesh-box">
+        <span class="tb-box-title">Mesh</span>
+        <div class="tb-box-btns" id="tb-mesh-btns"></div>
+      </div>
+      <div class="tb-box" id="tb-src-box">
           <span class="tb-box-title">Sources</span>
           <div class="tb-box-btns" id="tb-src-btns"></div>
         </div>
@@ -170,7 +145,16 @@
         </div>
         <div class="tb-box tb-run-box" id="tb-run-box">
           <span class="tb-box-title">Simulation</span>
-          <div id="bar-run-slot"><div id="run-mount"></div></div>
+          <div class="tb-box-btns" id="tb-fdtd-run-btns"></div>
+        </div>
+      </div>
+
+      <!-- ══ MODE：mode 求解器页（2026-11-24 站长拍：与 FDTD 同级；声明后才显示）══ -->
+      <div class="obj-toolbar tb-page" id="page-mode" role="tabpanel"
+           aria-labelledby="tab-mode" hidden>
+        <div class="tb-box tb-run-box" id="tb-mode-run-box">
+          <span class="tb-box-title">Simulation</span>
+          <div class="tb-box-btns" id="tb-mode-run-btns"></div>
         </div>
       </div>
 
@@ -198,14 +182,12 @@
       </main>
     </div>
 
-    <!-- Col 3: 3D 场景（2026-10 站长裁决：Plot 升格为同级 Visualize 模块，
-         场景区回归纯 3D——view-tabbar/plot-view 已迁 #visualize-panel） -->
+    <!-- Col 3: 3D 场景（2026-11-25 起独占右列：Visualize 空模块已摘除） -->
     <div id="scene-panel">
       <div id="scene-stage">
         <div id="three-container"></div>
-      <!-- B3/B4 工作区文件面板（col3 标签卡「文件」）：脚本/savefig 图片/
-           数据文件统一列、看、传、下。走 view-tabbar 现成 tab 框架；
-           .py 编辑仍归 col4 脚本工作流，这里只管文件。 -->
+      <!-- 场景内浮条：视角 / 图层 / 剖面 / 截图（无页签容器；文件面板已随
+           v1 遗产删除，.py 编辑归 col4） -->
       <div id="scene-tools" class="scene-tools">
         <!-- 分组（2026-10-21）：视角 → 图层 → 分析 → 输出。分隔线 1px。 -->
         <button class="tool-btn" id="btn-fitcam" title="复位视角" aria-label="复位视角" data-preview="view_fit"></button>
@@ -231,65 +213,20 @@
                aria-label="剖面位置">
       </div>
       </div><!-- /scene-stage -->
-      <div id="term-dock">
-        <!-- 内嵌代码卡：与脚本面板 #code-wrap 同构（白纸面板 + 卡面代码） -->
-        <div id="term-card" class="code-card">
-          <div id="term-out" aria-live="polite"></div>
-          <div id="term-in-row">
-            <span id="term-prompt" aria-hidden="true">❯</span>
-            <textarea id="term-in" rows="2" spellcheck="false" autocomplete="off"
-              aria-label="Terminal 指令输入（Python，直接操作会话 f）"></textarea>
-          </div>
-        </div>
-      </div><!-- /term-dock -->
     </div><!-- /scene-panel -->
 
-    <!-- Col 3b: Visualize 模块（2026-10 站长裁决：Plot 与 3D/文件同级）。
-         每个 Plot = 本模块一个页签；页签条右端 chip = 作业摘要/流水进度。
-         无 Plot 时显示空态引导（树选监视器 → 检查器「新建 Plot」）。 -->
-    <div id="visualize-panel">
-      <div id="view-tabbar">
-        <div id="view-tabs" role="tablist"></div>
-        <div id="result-chip" class="hidden"></div>
-      </div>
-      <div id="viz-empty" class="viz-empty empty-state">
-        <span class="empty-ic" data-icon="results" aria-hidden="true"></span>
-        <div class="empty-title">还没有 Plot</div>
-        <div class="empty-hint">左树选一个监视器 → 检查器里「新建 Plot」；每张 Plot 会
-          成为本模块的一个页签。</div>
-      </div>
-      <div id="plot-view" class="hidden"></div>
-    </div>
+    <!-- Visualize/Plot 面（2026-11-25 摘除）：空模块占 58% 宽度且空态指向已删的
+         「新建 Plot」（inspector.js:47）。M8/L-43 重建时按面板页签形态加回，
+         不要复活空态教程。作业进度 chip 改住 Terminal 头（dock 收养）。 -->
 
-    <!-- Col 3c: 工作区文件（dock 面板，默认与 3D 叠成多标签） -->
-      <div id="files-view" class="hidden">
-        <div class="files-head">
-          <button id="files-upload" class="mini" type="button"
-            title="上传文件到工作区（.py/.png/.jpg/.npz/.csv/.h5/.json/.txt；文本 ≤256KiB，数据 ≤512MiB）">上传…</button>
-          <input id="files-file" type="file" class="hidden" tabindex="-1" aria-hidden="true">
-          <button id="files-refresh" class="mini" type="button" title="刷新列表">刷新</button>
-          <span class="files-hint">图片点行内联预览；数据文件只下载不预览。</span>
-        </div>
-        <div id="files-table-wrap">
-          <table id="files-table">
-            <thead>
-              <tr><th class="col-kind" aria-label="类型"></th><th>名称</th><th>大小</th><th class="col-act" aria-label="下载"></th><th class="col-act" aria-label="删除"></th></tr>
-            </thead>
-            <tbody id="files-tbody"></tbody>
-          </table>
-          <div id="files-empty" class="dim empty-state">
-            <span class="empty-ic" data-icon="upload" aria-hidden="true"></span>
-            <div class="empty-title">工作区暂无文件</div>
-            <div class="empty-hint">上传文件，或跑一次脚本产出（savefig / 数据落盘）后出现在这里。</div>
-          </div>
-        </div>
-        <div id="files-preview" class="files-preview hidden"></div>
-      </div>
+    <!-- 工作区文件面板已删（2026-11-24 清理）：上传/列表是 v1 遗产，
+         Import 随 L-11（API 动词先行）重做 -->
 
     <!-- Col 4: Python SDK 代码（唯一视图；2026-10 站长裁决：JSON 视图
          整体移除——线格式是生成物不是工作面） -->
     <!-- 面板动作钮暂存区（dock 统一头收养；原件全局唯一） -->
     <div id="panel-actions-staging" hidden>
+      <div id="result-chip" class="hidden"></div>
       <button id="run-py" class="mini icon-btn primary" type="button" data-icon="run"
         title="Run — executes in the Terminal session (f.run submits)"
         aria-label="Run script"></button>
@@ -307,6 +244,9 @@
       <button id="term-reset" class="mini" type="button" data-icon="refresh"
         title="清理重启会话（停止无效时使用；模型与历史保留）"
         aria-label="清理重启会话" hidden></button>
+      <!-- 清屏：只清可见输出，不碰会话环与 since 游标（刷新后按环回放恢复） -->
+      <button id="term-clear" class="mini" type="button"
+        title="清屏（只清可见输出；会话历史保留）" aria-label="清屏">Clear</button>
     </div>
     <div id="json-panel">
       <div id="py-view">
@@ -318,6 +258,20 @@
           </div>
         </div>
       </div>
+      <div id="term-split" aria-orientation="horizontal" role="separator"
+           aria-label="拖拽调整脚本/终端高度"></div>
+      <div id="term-dock">
+        <!-- 内嵌代码卡：与脚本面板 #code-wrap 同构（白纸面板 + 卡面代码） -->
+        <div id="term-card" class="code-card">
+          <div id="term-out" aria-live="polite"></div>
+          <div id="term-in-row">
+            <span id="term-prompt" aria-hidden="true">❯</span>
+            <textarea id="term-in" rows="2" spellcheck="false" autocomplete="off"
+              aria-label="Terminal 指令输入（Python，直接操作会话 f）"></textarea>
+          </div>
+        </div>
+      </div><!-- /term-dock -->
+
       <!-- P3 对话面板（v1 遗留，已删除）：Agent 入口只明说「随宿主模式」，
            不再保留一套无接线的死 UI。 -->
 

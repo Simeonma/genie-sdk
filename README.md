@@ -65,11 +65,12 @@ Open the printed address in your browser (something like
 model directly with Python; exit with `Ctrl+C`. To pick a fixed port use
 `genie studio --port 8777` (by default the system assigns one).
 
-Minimal script (paste into the editor and run). The default `fdtd` solver is
-already declared — set its fields directly (`genie.add_solver` is for adding
-another solver, such as `mode`):
+Minimal script (paste into the editor and run). Solvers are declared on
+demand — there is no default (`genie.fdtd` exists only after
+`add_solver`):
 
 ```python
+genie.add_solver(name="fdtd", type="fdtd")
 genie.set_named("fdtd", x_range=(-1e-6, 1e-6), y_range=(-1e-6, 1e-6),
                 z_range=(-1e-6, 1e-6), total_time=60e-15, dx=40e-9)
 

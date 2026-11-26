@@ -1,15 +1,14 @@
 
-import { activeTab, addPlot, jobPhase, jobProgress, plots, setLastJobId, setResultStatus, sweepProgress } from "./result.js";
+import { enterResult, jobPhase, jobProgress, refreshResultChip, resultMode,
+         setLastJobId, setResultStatus, sweepProgress } from "./result.js";
 
 import { $, guiViewOf } from "./util.js";
 import { apiNotice } from "./api.js";
-import { _pendingExec, scheduleValidate, setPendingExec } from "./edit.js";
 import { exec } from "../core/bus.js";
 import { pollOnce } from "../core/ring.js";
 import { cancel, restart } from "./app.js";
 import { FormPanel } from "../views/form.js";
 import { renderInspector } from "./inspector.js";
-import { enterResult, refreshResultChip, renderPlotInto } from "./result.js";
 import { updateScene } from "./scene.js";
 import { cfg, setCfg, setDisplayCfg, toast } from "./state.js";
 import { runBtnRefresh } from "./toolbar.js";
@@ -85,13 +84,6 @@ export const SessionSync = {
         sweepProgress(l.data || {});
         continue;
       }
-      if (kind === "plot" && l.data) {
-        /* G148 腿 A：worker 内 genie.visualize(mon, field) → Plot 面板自动
-         * 开卡（job_id 用实例自己的——外部注入腿带自己的 id）。 */
-        if (typeof addPlot === "function")
-          addPlot(l.data.mon, l.data.field, l.data.job_id);
-        continue;
-      }
       if (kind === "job-done" && l.data) {
         /* G13② 结果事件：worker 里任何键盘跑完（或失败了结）的 run 都推到
          * 本页——记 job_id、清结果缓存、刷新结果卡与已开曲线（结果=投影）。
@@ -104,14 +96,6 @@ export const SessionSync = {
         }
         if (!resultMode) enterResult(SessionSync._boot);
         refreshResultChip();
-        /* 活动页签的 Plot 重画（新数据到了）。原为 renderPlot(sp)——
-         * 该函数从未存在（2026-10 重构走查补漏：__plots 非空 + job-done
-         * 即 ReferenceError 炸 ingest）。 */
-        const act = (plots || []).find(p => p.id === activeTab);
-        if (act) {
-          const pv = document.getElementById("plot-view");
-          if (pv && !pv.classList.contains("hidden")) renderPlotInto(pv, act);
-        }
       }
       termAppend(l.text, kindClass(kind));
     }
@@ -140,6 +124,7 @@ export function kindClass(kind) {
 export function renderTermInput(l) {
   const out = $("term-out");
   if (!out) return;
+  _termLast = null;          /* 命令回显 = 合并链断开 */
   termCloseBlock();          /* 命令回显 = 上一段输出的封口 */
   if (l.mark) termAppend("⋯ " + l.mark + "\n", "term-note");
   const sym = document.createElement("span");
@@ -158,8 +143,10 @@ export function termQueueScroll() {
   _termScrollQueued = true;
   requestAnimationFrame(() => {
     _termScrollQueued = false;
-    const dock = $("term-dock");
-    if (dock) dock.scrollTop = dock.scrollHeight;
+    /* 滚动面 = #term-out（唯一 overflow-y:auto 的元素）。#term-dock 自身
+     * overflow:hidden 且内容恒等于容器高，对它设 scrollTop 永远钳在 0。 */
+    const out = $("term-out");
+    if (out) out.scrollTop = out.scrollHeight;
   });
 }
 
@@ -236,25 +223,45 @@ export function termAppendFoldable(text) {
   termQueueScroll();
 }
 
+/* ── 连续同文同色的行合并成一条 ×N（2026-11-25）──
+ * 同一条 ValueError 连刷七行会把输出区占满，用户分不清是"同一次失败点了
+ * 七次"还是"七种失败"。计数只活在 DOM；环仍是唯一记录（session 逐条留），
+ * 重连按环回放会重算。断连续的任何行（输入/note/stdout）都会清空游标。 */
+let _termLast = null;   // {cls, text, el, n}
+
 export function termAppend(text, cls) {
   const out = $("term-out");
   if (!out || !text) return;
   if (!cls) {                     /* 无着色 = stdout → 可折叠流 */
+    _termLast = null;
     termAppendFoldable(text);
     return;
   }
   termCloseBlock();
+  const body = text.replace(/\n$/, "");
+  if (_termLast && _termLast.cls === cls && _termLast.text === body
+      && _termLast.el.parentNode) {
+    _termLast.n += 1;
+    _termLast.el.textContent = body + "  ×" + _termLast.n + "\n";
+    termQueueScroll();
+    return;
+  }
   const sp = document.createElement("span");
   sp.className = cls;
   sp.textContent = text;
   out.appendChild(sp);
+  _termLast = { cls, text: body, el: sp, n: 1 };
   termQueueScroll();
 }
 
 
-/* 执行主流程：排队 → 置忙 → flush 未决表单编辑 → 提交 → 轮询到 done。
+/* 执行主流程：排队 → 置忙 → 提交 → 轮询到 done。
  * 排队而非丢弃（G13①）：worker 先发 cfg 快照后发 done，丢弃语义曾静默
  * 吞命令；kernel 本就串行，单槽排队即正确语义（Jupyter 同款）。 */
+/* busy 期提交的待执行命令（单槽排队；L-35 起 edit.js 已删，唯一消费者在此） */
+let _pendingExec = null;
+function setPendingExec(v) { _pendingExec = v; }
+
 export async function _execFlow(label, submit) {
   if (termBusy) {
     setPendingExec({ label, submit });
@@ -276,15 +283,33 @@ export async function _execFlow(label, submit) {
 export function termExec(code, opts = {}) {
   code = code || "";
   if (!code.trim()) { setStopVisible(false); return; }
-  /* v2 连线层：/exec（mode=build = fresh 整份换模型）；输入回显在层内 */
-  return _execFlow("exec", () => execToTerminal(code, {
-    fresh: (opts.mode || "run") === "build", mark: opts.label || "" }));
+  /* 用户代码腿（终端输入行 / 脚本编辑器 Run）：mode=build = fresh 整份
+   * 换模型；输入回显在本地（L-35：execToTerminal 断链改为直连 exec）。 */
+  const fresh = (opts.mode || "run") === "build";
+  return _execFlow("exec", () => {
+    renderTermInput({ text: code, mark: opts.label || "" });
+    return exec(code, { fresh, echo: true });
+  });
 }
 
-/** 提交当前模型（工具栏 Run）。**不改模型**，也不经终端命名空间。 */
+/* ── 工具栏执行腿（M1 重接，Q44：按钮 → exec → 公开动词）────────── */
+
+/** FDTD 页 Run：提交当前 fdtd 模型（不改模型，回显进终端）。 */
 export function runModel() {
-  /* v2 连线层：Run = 提交当前模型（genie.fdtd.run） */
-  return _execFlow("run", () => runModelRaw());
+  return _execFlow("run", () =>
+    exec("genie.run_fdtd()", { fresh: false, echo: true }));
+}
+
+/** FDTD 页 Build：Q35 本地预演（网格/步数，不提交云端）。 */
+export function runBuild() {
+  return _execFlow("build", () =>
+    exec("genie.build_fdtd()", { fresh: false, echo: true }));
+}
+
+/** MODE 页 Run：mode 求解（缺省实例名 mode；多实例走脚本）。 */
+export function runMode() {
+  return _execFlow("run", () =>
+    exec("genie.run_mode()", { fresh: false, echo: true }));
 }
 
 export function _startPolling() {
@@ -335,21 +360,43 @@ export function applyCfgSnapshot(c, resolved, seq, origin, paths) {
   if (resolved) resolved = guiViewOf(resolved);
   setCfg(c);
   setDisplayCfg(resolved || c);                /* 表达式槽 → 数值副本（3D/小注用） */
+  syncSolverTabs(c);                           /* 求解器页签：声明了才显示（Q44） */
   FormPanel.setCfg(cfg);
+  /* 唯一的状态保护：**正在敲字的输入框不被重建**（焦点/光标/半截输入）。
+   * 2026-11-25 收窄：只保护 text input / textarea。此前把"焦点在 #config-content
+   * 里"一律算编辑中——下拉框切完焦点还在 select 上，快照到了面板却不重画
+   * （Boundary kind 切到 pml 后 Advanced 段不出现，就是这个洞）。 */
   const ae = document.activeElement;
-  const editing = ae && ae.closest && ae.closest(".inspector, #config-content");
+  const typing = ae && (ae.tagName === "TEXTAREA"
+    || (ae.tagName === "INPUT" && !ae.readOnly));
+  const editing = typing && ae.closest
+    && ae.closest(".inspector, #config-content");
   if (!editing) {
     renderInspector();
     renderTree();
   }
   updateScene();
-  scheduleValidate();
   if (origin === "reject") {
     apiNotice("改动没被接受（原因见终端）", "err");
   }
 }
 
 SessionSync.onSnapshot(applyCfgSnapshot);   /* 投影订阅同步器（收敛③） */
+
+/* 求解器页签显隐（Q44：一个求解器一页，声明了才显示）。
+ * 数据源 = 快照的 solvers:[{name,kind}]（exec.py gui_snapshot）。
+ * 当前页被隐藏时回落 DESIGN。 */
+export function syncSolverTabs(c) {
+  const kinds = new Set((c && c.solvers || []).map(s => s && s.kind));
+  const fdtdTab = document.getElementById("tab-fdtd");
+  const modeTab = document.getElementById("tab-mode");
+  if (fdtdTab) fdtdTab.hidden = !kinds.has("fdtd");
+  if (modeTab) modeTab.hidden = !kinds.has("mode");
+  for (const t of [fdtdTab, modeTab]) {
+    if (t && t.hidden && t.getAttribute("aria-selected") === "true")
+      document.getElementById("tab-design")?.click();
+  }
+}
 
 /* ── 空闲持续订阅（G13①）：GUI 是 worker 的投影，不是"执行期才睁眼的
  * 观察者"。exec 期间 termExec 的 350ms 轮询在跑；空闲期本 2s 节拍
@@ -405,5 +452,16 @@ $("term-stop").addEventListener("click", (e) => {
 if (termResetBtn) termResetBtn.addEventListener("click", (e) => {
   e.stopPropagation();
   restart().catch(() => {});   /* 重启 worker */
+});
+
+/* 清屏（2026-11-25）：只清可见 DOM，不碰环/游标——刷新后按环回放自然恢复。
+ * 与 ↻ 清理重启分工不同：那个换执行态，这个什么都不换。 */
+const termClearBtn = $("term-clear");
+if (termClearBtn) termClearBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  const out = $("term-out");
+  if (out) out.textContent = "";
+  termCloseBlock();
+  _termLast = null;
 });
 

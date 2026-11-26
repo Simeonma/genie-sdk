@@ -173,8 +173,8 @@ class Genie:
     delegate to the model (structure: materials / geometry / attributes /
     parameters);
     a declared solver name resolves to its handle (``genie.fdtd`` —
-    auto-vivified default — or any name declared via
-    ``genie.add_solver``); ``genie.lib`` is the package escape hatch.
+    or any name declared via ``genie.add_solver``); ``genie.lib`` is
+    the package escape hatch.
     Read / material / post / sweep verbs + the document commands;
     ``run`` lives on the solver handles; **there is no cancel** —
     public cancel is a session-intercepted command, not in worker."""
@@ -201,8 +201,7 @@ class Genie:
         if attr is not None:
             return attr
         # solver access: a well-formed but undeclared name raises with
-        # add_solver guidance (as AttributeError, so hasattr() behaves);
-        # the fdtd default auto-vivifies inside envelope()
+        # add_solver guidance (as AttributeError, so hasattr() behaves)
         try:
             self._model.envelope(name)
         except LookupError as e:
@@ -535,6 +534,7 @@ class Genie:
 
     def add_solver(self, name=None, type=None):  # noqa: A002
         return self._surface.add_solver(name, type)
+
 
     def set_named(self, addr, node=None, **fields):
         return self._surface.set_named(addr, node, **fields)

@@ -5,7 +5,7 @@
  * **零显示层依赖**——拿到批次后交给注册的回调（boot 里注册），
  * 由回调喂终端/表单/树/3D。没有 origin/回声抑制（纯投影后不需要）。
  */
-import { get, settle } from "./bus.js";
+import { get } from "./bus.js";
 
 const S = { epoch: null, since: 0, busy: false };
 let _onBatch = null;
@@ -27,9 +27,10 @@ export function snapshot(batch) {
     const ev = evs[i], seq = base + i;
     if (ev.ev === "out") {
       const kind = ev.kind || null;
+      /* L-35 拔线：meta/series/matfit/matlib/plot 都是已拔读桥的回程
+       * 事件——静默丢弃（重接对应模块时恢复分发）。 */
       if (kind === "meta" || kind === "series" || kind === "matfit" ||
-          kind === "matlib") {
-        settle(kind, ev.data || {});       /* 结果/材料回程（不进终端） */
+          kind === "matlib" || kind === "plot") {
         continue;
       }
       if (kind === "progress") {

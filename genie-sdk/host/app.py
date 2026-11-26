@@ -10,21 +10,9 @@ pure proxy). Studio plate ``~/.genie/studio.json``: 0600, only
 removes its own pid, no default port — binds ``127.0.0.1:0`` and lets the
 system assign; no scanning.
 
-**Form delta generation lives here**: the browser sends only a structured
-thin intent (collection / kind / id /
-field / value) → ``form_delta`` produces one line of the Q15 API
-language (values are
-always ``repr`` literals, never concatenated strings; **field types are
-asked of protocol — field-type reflection against the source of truth, no
-second copied table**: collection→SimConfig field, kind→discriminated
-union member, tuple annotation→JSON list collapsed into a tuple) → the
-session dispatches ``exec(echo=False)`` (terminal does not echo).
-Envelope collections (domain / mesh / sources / monitors) are generated
-against the fdtd default solver (the GUI is fdtd-bound v1; structure
-collections live on the ``genie`` handle).
-Add-structure / remove-structure intents grow with the GUI shell's real
-needs (``genie.geometry.add_box('name')`` followed by field-by-field
-assignment).
+**No form-intent channel** (2026-11-25 站长拍，L-39 裁决)：GUI 表单直接
+exec 公开动词（值插值走 static `util.py()` 字面量编码器），host 不生成
+第二套 Python 行——写路径只有一条（`/exec`）。
 """
 from __future__ import annotations
 
@@ -35,19 +23,14 @@ import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
-from typing import Literal, Union, get_args, get_origin
 from urllib.parse import parse_qs, urlparse
 
-from pydantic.fields import FieldInfo
-from genie_protocol import _wire
-
-from . import auth, card, cred, dialogs, gw
+from . import auth, card, cred, gw
 from .script import ScriptState
 from genie.net.client import WORKER_TOKEN_HEADER
 from genie.session import Session
 
-__all__ = ["App", "form_delta", "form_intent", "form_fields",
-           "write_plate", "read_plate", "remove_plate",
+__all__ = ["App", "write_plate", "read_plate", "remove_plate",
            "SESSION_TOKEN_HEADER", "DEFAULT_PLATE"]
 
 #: Local session token header for the agent surface (same-origin browser requests carry none)
@@ -93,242 +76,6 @@ def remove_plate(path) -> None:
         return
     if isinstance(data, dict) and data.get("pid") == os.getpid():
         os.remove(p)
-
-
-# ── form delta generation ────────────────────────────────────────────────
-
-#: f collection attribute name → SimConfig field name (reflection entry; no copied model field list)
-_F_ATTR = {"domain": "domain", "mesh": "mesh", "geom": "geometry",
-           "mat": "materials", "src": "source", "mon": "monitor"}
-
-#: Q17 nested house: which wire section each GUI collection reflects
-#: against (structure → ModelSpec, fdtd envelope → FdtdConfigSpec).
-_SECTION_OF = {"geom": _wire.ModelSpec, "mat": _wire.ModelSpec,
-               "domain": _wire.FdtdConfigSpec, "mesh": _wire.FdtdConfigSpec,
-               "src": _wire.FdtdConfigSpec, "mon": _wire.FdtdConfigSpec}
-
-
-def _resolve_spec(coll: str, kind):
-    """collection (+kind) → the protocol's Spec class (all via reflection against the source of truth)."""
-    ann = _SECTION_OF[coll].model_fields[_F_ATTR[coll]].annotation
-    if get_origin(ann) is list:                 # collection field: list[Annotated[...]]
-        ann = get_args(ann)[0]
-    args = get_args(ann)
-    if args and len(args) == 2 and isinstance(args[1], FieldInfo):
-        disc = args[1].discriminator            # Annotated[Union, Field(...)]
-        for cls in get_args(args[0]):
-            fld = cls.model_fields.get(disc)
-            if fld is not None and fld.default == kind:
-                return cls
-        raise ValueError(f"unknown kind {kind!r} for {coll}")
-    return ann                                 # singleton: the annotation is the model class
-
-
-def _coerce(ann, value):
-    """JSON value → model-annotation shape (a tuple annotation collapses a list into a tuple; the rest pass through)."""
-    if get_origin(ann) is Union:
-        for a in get_args(ann):
-            if get_origin(a) is tuple:
-                return _coerce(a, value)
-        return value
-    if get_origin(ann) is tuple and isinstance(value, list):
-        args = get_args(ann)
-        if len(args) == 2 and args[1] is Ellipsis:
-            return tuple(value)
-        return tuple(_coerce(a, v) for a, v in zip(args, value))
-    return value
-
-
-#: GUI collection → (address family prefix, add verb / solver). Q30: mesh
-#: = named refinement-box objects on the solver (``fdtd.<name>``), like
-#: sources / monitors; the base grid lives on the solver's domain.
-_ADDR_OF = {
-    "geom": ("geometry", "genie.add_geometry"),
-    "mat": ("material", "genie.add_material"),
-    "src": ("fdtd", "genie.fdtd.add_source"),
-    "mon": ("fdtd", "genie.fdtd.add_monitor"),
-    "mesh": ("fdtd", "genie.fdtd.add_mesh"),
-}
-
-
-def _addr_of(coll: str, name) -> str:
-    """collection + name → the Q25 address string."""
-    if coll == "domain":
-        return "fdtd"
-    fam = _ADDR_OF[coll][0]
-    if fam == "fdtd":
-        return f"fdtd.{name}" if name else "fdtd"
-    return f"{fam}.{name}" if name else fam
-
-
-def _solver_field(field: str) -> str:
-    """domain. GUI paths → the solver-flattened field / nested path."""
-    if field.startswith("domain."):
-        return field[len("domain."):]
-    return field
-
-
-def form_delta(intent: dict) -> str:
-    """Browser thin intent → one line of the Q25 API (set_named)."""
-    coll = intent.get("collection")
-    field = intent.get("field")
-    if coll not in _F_ATTR or not isinstance(field, str) \
-            or not field.isidentifier() and "." not in field:
-        raise ValueError(f"bad form intent: {intent!r}")
-    if coll == "domain":
-        field = _solver_field(field)
-        spec = None
-    else:
-        spec = _resolve_spec(coll, intent.get("kind"))
-        if "." not in field and field not in spec.model_fields:
-            raise ValueError(f"unknown field {field!r} on {coll}")
-    value = _coerce(spec.model_fields[field].annotation, intent.get("value")) \
-        if spec is not None and "." not in field else intent.get("value")
-    name = intent.get("name")
-    if intent.get("id") is not None and not name:
-        raise ValueError("form intent needs the item name (address-based API)")
-    addr = _addr_of(coll, name)
-    if "." in field:
-        return (f"genie.set_named({addr!r}, **{{{field!r}: {value!r}}})")
-    return f"genie.set_named({addr!r}, {field}={value!r})"
-
-
-def _is_union(origin) -> bool:
-    return origin is Union or str(origin) == "types.UnionType"
-
-
-def _unwrap(ann):
-    """Optional[X] / X | None → (X, optional=True); Annotated[X, ...] → X."""
-    if get_origin(ann) is not None and hasattr(ann, "__metadata__"):
-        ann = get_args(ann)[0]
-    if _is_union(get_origin(ann)):
-        args = [a for a in get_args(ann) if a is not type(None)]
-        if len(args) == 1:
-            return _unwrap(args[0])[0], True
-    return ann, False
-
-
-def _field_type(ann) -> dict:
-    """Annotation → a serializable field descriptor (reflection; no copied field table)."""
-    inner = ann
-    origin = get_origin(inner)
-    if origin is not None and hasattr(inner, "__metadata__"):   # Annotated[...]
-        inner = get_args(inner)[0]
-        origin = get_origin(inner)
-    if _is_union(origin):
-        args = [a for a in get_args(inner) if a is not type(None)]
-        if len(args) == 1:
-            return _field_type(args[0])
-        return {"type": "json"}
-    if origin is Literal:
-        return {"type": "enum", "options": list(get_args(inner))}
-    if origin is tuple:
-        return {"type": "vec"}
-    if origin in (list, dict):
-        return {"type": "json"}
-    if inner is bool:
-        return {"type": "bool"}
-    if inner is int:
-        return {"type": "int"}
-    if inner is float:
-        return {"type": "float"}
-    if inner is str:
-        return {"type": "str"}
-    if hasattr(inner, "model_fields"):                       # nested Spec model
-        return {"type": "json"}
-    return {"type": "json"}
-
-
-def _jsonable(value):
-    try:
-        json.dumps(value)
-        return value
-    except (TypeError, ValueError):
-        return None
-
-
-def form_fields(collection: str, kind=None) -> list[dict]:
-    """The inspector's field list for a collection (+kind), reflected from
-    the protocol spec (single source of field names/types — Q1.1.4).
-    ``required`` marks what wire validation will demand; the live model is
-    a draft, so every field stays editable."""
-    if collection not in _F_ATTR:
-        raise ValueError(f"unknown collection {collection!r}")
-    spec = _resolve_spec(collection, kind)
-    out = []
-    for name, f in spec.model_fields.items():
-        if name in ("type", "id"):          # discriminator + system-issued id: not editable (Q1.2)
-            continue
-        ann, optional = _unwrap(f.annotation)
-        desc = {"name": name, "required": f.is_required() and not optional}
-        desc.update(_field_type(ann))
-        default = f.default
-        if default is not None and default.__class__.__name__ != "PydanticUndefined":
-            desc["default"] = _jsonable(default)
-        out.append(desc)
-    return out
-
-
-#: Which add_* shells the GUI may create per collection. Materials are
-#: narrowed to the two online wire shapes: ``from_library`` is a dead node
-#: the line format rejects (the library flow goes through
-#: add_material(type='library') + fit_material instead); geometry /
-#: source / monitor kinds are reflected below.
-_MAT_ADD_KINDS = ("const", "lorentz")
-
-
-def form_intent(intent: dict) -> str:
-    """A form intent → one line of Python. Ops: ``param`` (parameter
-    object), ``add`` (identity + type only), ``remove`` (by name), and the
-    default ``set`` (delegated to form_delta)."""
-    op = intent.get("op") or "set"
-    if op == "param":
-        name = intent.get("name")
-        if not isinstance(name, str) or not name.isidentifier():
-            raise ValueError(f"bad parameter name: {name!r}")
-        if intent.get("remove") or intent.get("value") is None:
-            return f"genie.remove(\"parameter.{name}\")"
-        call = (f"genie.set_named(\"parameter.{name}\", "
-                f"value={intent.get('value')!r})")
-        if intent.get("add"):
-            return f"genie.add_parameter(name={name!r})\n{call}"
-        return call
-    coll = intent.get("collection")
-    if coll not in _F_ATTR:
-        raise ValueError(f"bad form intent: {intent!r}")
-    name = intent.get("name")
-    if op == "auto_grid":
-        # Q31：auto 按钮 → 一行 auto_grid()（fit_material 同族动词；
-        # 产物 = domain 段表，随下一次 cfg 快照回显）。
-        n = intent.get("n")
-        tail = f", n={int(n)}" if n is not None else ""
-        return f"genie.auto_grid(){tail}"
-    if op == "add":
-        kind = intent.get("kind")
-        if coll == "mesh":
-            # Q30: mesh objects are one-kind — identity only, no type.
-            if not isinstance(name, str) or not name:
-                raise ValueError("add needs a name (identity only)")
-            return f"genie.fdtd.add_mesh(name={name!r})"
-        if not isinstance(kind, str) or not kind.isidentifier():
-            raise ValueError(f"bad add kind: {kind!r}")
-        if coll == "mat":
-            if kind not in _MAT_ADD_KINDS:
-                raise ValueError(f"materials cannot add {kind!r} "
-                                 f"(use the library flow)")
-        elif coll in ("geom", "src", "mon"):
-            _resolve_spec(coll, kind)
-        else:
-            raise ValueError(f"cannot add into {coll!r}")
-        if not isinstance(name, str) or not name:
-            raise ValueError("add needs a name (identity + type only)")
-        verb = _ADDR_OF[coll][1]
-        return f"{verb}(name={name!r}, type={kind!r})"
-    if op == "remove":
-        if not isinstance(name, str) or not name:
-            raise ValueError("remove needs the item name")
-        return f"genie.remove({_addr_of(coll, name)!r})"
-    return form_delta(intent)
 
 
 # ── App (HTTP surface + session wiring) ────────────────────────────────
@@ -487,10 +234,13 @@ class _RouteHandler(BaseHTTPRequestHandler):
 
     # -- response helpers ----------------------------------------------------
 
-    def _send(self, status: int, data: bytes, ctype: str) -> None:
+    def _send(self, status: int, data: bytes, ctype: str,
+              no_cache: bool = False) -> None:
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
+        if no_cache:
+            self.send_header("Cache-Control", "no-cache")   # 本地 GUI：改静态刷新即生效
         self.end_headers()
         self.wfile.write(data)
 
@@ -573,17 +323,8 @@ class _RouteHandler(BaseHTTPRequestHandler):
                 return self._json(200, auth.status(app))
             if path == "/usage":                    # month ledger + quota (gateway /api/usage)
                 return self._json(200, auth.usage(app))
-            if path == "/workspace":                # the process working directory (read-only info)
-                return self._json(200, {"root": app.workspace})
             if path == "/sweeps":                   # sweep accounts (parameter_sweep_<name>/index.json)
                 return self._json(200, {"sweeps": _sweeps(app.workspace)})
-            if path == "/form/fields":              # inspector field list (protocol reflection)
-                try:
-                    fields = form_fields(q.get("collection", [""])[0],
-                                         q.get("kind", [None])[0])
-                except ValueError as e:
-                    return self._json(400, {"error": str(e)})
-                return self._json(200, {"fields": fields})
             if path == "/script":                   # editor backfill
                 focused = q.get("focus", ["0"])[0] == "1"
                 return self._json(200, app.script.read(focused=focused))
@@ -597,36 +338,13 @@ class _RouteHandler(BaseHTTPRequestHandler):
             return self._json(404, {"error": "no route"})
 
         body = self._read_json()
-        if path == "/pick":                        # native file dialog (browser can't)
-            mode = (body or {}).get("mode") or "open"
-            fn = dialogs.ask_save if mode == "save" else dialogs.ask_open
-            picked = fn((body or {}).get("title") or "",
-                        [(body.get("label") or "Genie simulation",
-                          (body or {}).get("pattern") or "*.gensim")],
-                        (body or {}).get("initial"))
-            return self._json(200, {"path": picked})
-        if path == "/reveal":                      # Explorer at the document
-            target = (body or {}).get("path") or app.workspace
-            try:
-                os.startfile(os.path.dirname(target) or target)
-            except OSError as e:
-                return self._json(400, {"error": str(e)})
-            return self._json(200, {"ok": True})
         if path == "/auth/login":                  # the GUI login (token captured host-side)
             return self._json(200, auth.login(
                 app, str(body.get("username") or ""),
                 str(body.get("password") or "")))
         if path == "/auth/logout":
             return self._json(200, auth.logout(app))
-        if path == "/form":                         # form intent → Python delta (echo=False)
-            try:
-                line = form_intent(body)
-            except (ValueError, TypeError) as e:
-                return self._json(400, {"error": str(e)})
-            rid = app.session.submit_exec(line, fresh=False, echo=False)
-            return self._json(200,
-                              {"id": rid} if rid is not None else {"busy": True})
-        if path == "/exec":                         # exec downstream (form/terminal/Run)
+        if path == "/exec":                         # exec downstream (terminal/Run/form)
             rid = app.session.submit_exec(
                 body.get("code", ""), fresh=bool(body.get("fresh")),
                 echo=bool(body.get("echo", True)))
@@ -657,7 +375,7 @@ class _RouteHandler(BaseHTTPRequestHandler):
         data = f.read_bytes()
         if ctype.startswith("text/"):           # bytes go out as-is; only the label gains a charset
             ctype = ctype + "; charset=utf-8"
-        self._send(200, data, ctype)
+        self._send(200, data, ctype, no_cache=True)
 
 
 def _page(name: str) -> str:

@@ -364,7 +364,6 @@ class BoundarySpec(_StrictModel):
     # bloch
     k: Optional[Vec3] = None
     from_source: bool = False
-    n_background: Optional[float] = Field(default=None, gt=0)
 
     @model_validator(mode="after")
     def _check(self):
@@ -1042,8 +1041,7 @@ class _TemporalMixin(_Identified, _StrictModel):
 
 class SoftSourceSpec(_TemporalMixin):
     type: Literal["soft_source"] = "soft_source"
-    center: Vec3 = (0.0, 0.0, 0.0)
-    size: Vec3 = (0.0, 0.0, 0.0)          # per-slot <= 0 = single cell
+    center: Vec3 = (0.0, 0.0, 0.0)   # 点源：无 size（P1-1，2026-11-26）
     # Default [[1,0],[0,0],[0,0]] (x̂ linear polarization); an explicit
     # JSON null is also normalized to this
     polarization: Optional[Union[list[float], list[list[float]]]] = [
@@ -1671,7 +1669,6 @@ class ModeDomainSpec(_StrictModel):
     x_range: Optional[Range2] = None
     y_range: Optional[Range2] = None
     z_range: Optional[Range2] = None
-    n_bg: float = Field(default=1.0, gt=0.0)  # 背景折射率
     # ── 基础网格（Q30 自旧 ModeMeshSpec 搬入；Q31 加段表）──
     dx: Optional[float] = Field(default=None, gt=0.0)
     dy: Optional[float] = Field(default=None, gt=0.0)
@@ -1805,8 +1802,7 @@ class ModeConfigSpec(_StrictModel):
     n_modes: int = Field(default=1, ge=1)
     #: 搜索折射率（Q20，直通内核 ``ModeSpec.neff_guess``：shift-invert
     #: 中心 + 结果按 |neff−它| 排序）。缺省 None = 截面最大横向折射率
-    #: （内核现缺省行为，零变化）——与 ``domain.n_bg`` 语义不同：一个
-    #: 说"在哪个折射率附近找模"（数值），一个说"世界是什么介质"（物理）。
+    #: （内核现缺省行为，零变化）。
     n_ref: Optional[float] = Field(default=None, gt=0.0)
     #: 两个面（2026-11-16）：计算面相对交货面（= domain）的摆放——一个
     #: 旋转的三句话。交货面 = domain 本身（轴/位置/窗口）；计算面 = 绕
@@ -1976,8 +1972,6 @@ class ModeConfigSpec(_StrictModel):
 
         # boundary：键 = 横截面四缘；kind 限 pec/pmc/periodic/pml/bloch
         # （bloch 需显式 k——from_source 是 fdtd 的斜入射概念，mode 无源可读）；
-        # n_background 是 fdtd 侧的边界背景——mode 的背景在 domain.n_bg
-        # （一条事实一个主人）。
         edges = {f"{a}_{s}" for a in (t1, t2) for s in ("min", "max")}
         for face, b in self.boundary.items():
             if face not in edges:
@@ -1990,11 +1984,6 @@ class ModeConfigSpec(_StrictModel):
                     f"boundary {face}: bloch needs an explicit k (3-tuple, "
                     f"SI) — from_source is an fdtd-side knob; mode has no "
                     f"source to read")
-            if b.n_background is not None:
-                raise ValueError(
-                    f"boundary {face}: n_background is an fdtd knob — "
-                    f"mode's background is domain.n_bg (one fact, one "
-                    f"owner)")
         return self
 
 

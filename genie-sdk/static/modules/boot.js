@@ -1,12 +1,9 @@
 import { runScript } from "./script.js";
 import { login, logout, status } from "./app.js";
-import { exec } from "../core/bus.js";
 import { SessionSync } from "./term.js";
 import { onBatch, pollOnce } from "../core/ring.js";
 import { jobProgress, refreshResultChip, resultStatus, setLastJobId,
          setResultStatus } from "./result.js";
-import { sweepRun } from "./state.js";
-import { sweepPaneEvent } from "./sweep.js";
 
 import { $ } from "./util.js";
 import { post } from "../core/bus.js";
@@ -18,7 +15,7 @@ import { renderInspector, selectObj } from "./inspector.js";
 import { previewEl } from "../views/previews.js";
 import { animate, initScene } from "./scene.js";
 import { renderPythonHighlight } from "./script.js";
-import { cfg, docDirty, scene, setDocDirty, toast } from "./state.js";
+import { cfg, scene, toast } from "./state.js";
 
 import { buildToolbar, syncViewMirror } from "./toolbar.js";
 import { renderTree } from "./tree.js";
@@ -144,7 +141,7 @@ Dock.init();   /* dock 工作台（2026-10-15）：面板收养 + splitter + 布
   setLabel();
 })();
 (() => {
-  const TABS = ["file", "view", "design", "fdtd"];
+  const TABS = ["file", "view", "design", "fdtd", "mode"];
   const KEY = "genie.tab.v1";
   const tabs = [...document.querySelectorAll(".app-tab")];
   const pages = new Map(TABS.map((k) => [k, document.getElementById("page-" + k)]));
@@ -181,13 +178,7 @@ $("agent-open-btn")?.addEventListener("click", () => {
   toast("Agent 面板：阶段 6 宿主模式提供（本地 Studio 暂无）", "info");
 });
 
-/* Domain / Mesh 直达（FDTD 页）：选中树内对应单例并激活 Objects 工作面。 */
-for (const [id, kind] of [["domain-edit-btn", "domain"], ["mesh-edit-btn", "mesh"]]) {
-  $(id)?.addEventListener("click", () => {
-    Dock.activatePanel("struct-panel");
-    selectObj(kind);
-  });
-}
+/* Domain / Mesh 直达钮已删（2026-11-24 站长拍）：入口在左树，直达是冗余。 */
 
 requestAnimationFrame(animate);
 window.addEventListener("resize", () => scene && scene.onResize());
@@ -209,14 +200,8 @@ document.querySelectorAll("[data-preview]").forEach((b) => {
   if (pv) b.insertBefore(pv, b.firstChild);
 });
 
-/* 文件 I/O 直上工具栏（2026-10 站长裁决：File▾ 下拉取消）——
- * 打开/存储按钮直接触发原菜单项 click（import-cfg / export-cfg
- * 的处理器语义不变，仅入口从菜单项换成栏上按钮）。 */
-{
-  const open = $("file-open-btn"), save = $("file-save-btn");
-  open?.addEventListener("click", () => $("import-cfg").click());
-  save?.addEventListener("click", () => $("export-cfg").click());
-}
+/* 文件 I/O 直上工具栏的转发块已删（L-35）：$("import-cfg") 在
+ * index.html 里本就不存在——原块点击即抛。文件腿随 M6 重接。 */
 
 /* 行号 gutter（站长反馈找回）：white-space:pre 保证逻辑行=视觉行，
  * scrollTop 同步零漂移。行数变化才重建数字，滚动只做 transform。
@@ -283,139 +268,7 @@ $("download-py").addEventListener("click", () => {
   a.click();
   URL.revokeObjectURL(a.href);
 });
-/* ── FILE：项目 I/O（2026-11-22 重构，站长批）────────────────────
- * New / Open… / Save / Save As… / Open folder。原生文件对话框由 host 弹
- * （POST /pick，ctypes comdlg32——浏览器拿不到真实路径）；新建/打开/保存
- * 都走 worker 动词（genie._new / genie.open / genie.save），文档路径与
- * 未保存标记常显：用户不该猜文件在哪、有没有存。 */
-let _wsRoot = "";
-let _docPath = null;
-
-function docTarget() {
-  if (_docPath) return _docPath;
-  return _wsRoot ? (_wsRoot.replace(/[\\/]+$/, "") + "\\genie.gensim") : "";
-}
-
-function renderDocState() {
-  const el = $("file-doc-path");
-  if (!el) return;
-  const name = _docPath ? _docPath.split(/[\\/]/).pop() : "Untitled";
-  el.textContent = name + (docDirty ? " •" : "");
-  el.title = _docPath
-    ? "当前文档：" + _docPath + (docDirty ? "（有未保存改动）" : "")
-    : "未命名文档（Save 时落到工作区 genie.gensim）";
-  el.classList.toggle("dirty", docDirty);
-}
-window.addEventListener("genie-doc-dirty", renderDocState);
-
-export async function fileNew() {
-  try {
-    if (docDirty) {
-      const t = docTarget();
-      if (!t) return fileSaveAs();             /* 没路径：让用户先选位置 */
-      await _doSave(t);
-    }
-    await exec("genie._new()", { fresh: false, echo: false });
-    _docPath = null;
-    setDocDirty(false);
-    renderDocState();
-    toast("新建空白项目", "ok");
-    return true;
-  } catch (e) {
-    toast("新建失败：" + e.message, "err");
-    return false;
-  }
-}
-
-export async function fileOpen() {
-  try {
-    const j = await post("/pick", {
-      mode: "open", label: "Genie simulation", pattern: "*.gensim",
-      initial: _docPath || docTarget() || undefined,
-    });
-    const p = j && j.path;
-    if (!p) return null;                       /* 用户取消 */
-    await exec("genie.open(" + JSON.stringify(p) + ")",
-                        { fresh: false, echo: false });
-    _docPath = p;
-    setDocDirty(false);
-    renderDocState();
-    toast("已打开 " + p, "ok");
-    return true;
-  } catch (e) {
-    toast("打开失败：" + e.message, "err");
-    return null;
-  }
-}
-
-async function _doSave(target) {
-  await exec("genie.save(" + JSON.stringify(target) + ")",
-                      { fresh: false, echo: false });
-  _docPath = target;
-  setDocDirty(false);
-  renderDocState();
-  toast("已保存到 " + target, "ok");
-  return target;
-}
-
-export async function fileSave() {
-  const target = docTarget();
-  if (!target) return fileSaveAs();            /* 工作区未知 → 让用户选位置 */
-  try {
-    return await _doSave(target);
-  } catch (e) {
-    toast("保存失败：" + e.message, "err");
-    return null;
-  }
-}
-
-export async function fileSaveAs() {
-  try {
-    const j = await post("/pick", {
-      mode: "save", label: "Genie simulation", pattern: "*.gensim",
-      initial: docTarget() || undefined,
-    });
-    const p = j && j.path;
-    if (!p) return null;
-    return await _doSave(p);
-  } catch (e) {
-    toast("保存失败：" + e.message, "err");
-    return null;
-  }
-}
-
-export async function fileReveal() {
-  try {
-    await post("/reveal", { path: docTarget() || _wsRoot });
-  } catch (e) {
-    toast("打开文件夹失败：" + e.message, "err");
-  }
-}
-
-$("file-new-btn").addEventListener("click", () => fileNew());
-$("file-open-btn").addEventListener("click", () => fileOpen());
-$("file-save-btn").addEventListener("click", () => fileSave());
-$("file-saveas-btn").addEventListener("click", () => fileSaveAs());
-$("file-folder-btn").addEventListener("click", () => fileReveal());
-
-export function setFileWorkspacePath(root) {
-  _wsRoot = root || "";
-  const el = $("file-workspace-path");
-  if (el) {
-    el.textContent = _wsRoot;
-    el.title = _wsRoot ? "工作区：" + _wsRoot : "";
-  }
-  renderDocState();                           /* 工作区决定未命名文档的落点 */
-}
-export async function loadFileWorkspace() {
-  let root = "";
-  try {
-    const r = await fetch("/workspace");
-    root = (await r.json()).root || "";
-  } catch { /* 状态面失败不拦页面 */ }
-  setFileWorkspacePath(root);   /* 渲染在 try 外：渲染错不能被网络 catch 吞掉 */
-}
-loadFileWorkspace();
+/* ── FILE：空壳（2026-11-24 站长拍清空；文件腿随 M6/L-41 重接）──────── */
 
 /* load-py 本机文件上岗（G17 走查补漏 2026-10-16）：f4d1e23 只上了钮
  * 没接线——出生即死钮。语义同工作区点行载入：File API 读用户笔记本
@@ -455,7 +308,7 @@ export function ensureConnStyle() {
 #v2-conn .gc-box{background:var(--bg-elevated,#fff);border:1px solid var(--border,#DCE0E6);
   border-radius:var(--radius-lg,6px);padding:0 22px 18px;width:368px;position:relative;
   box-sizing:border-box;box-shadow:var(--shadow-3);
-  font-size:var(--fs-sm,14px);color:var(--text-primary,#10151A)}
+  font-size:var(--fs-sm,14px);color:var(--text-primary,#000)}
 /* 关闭钮（2026-10-21）：右上角 24px 静默图标，hover 才浮底——与主界面
  * 面板动作钮同一语言；也补上「看得见的退出路径」（Esc 之外）。 */
 #v2-conn .gc-x{position:absolute;top:8px;right:8px;width:24px;height:24px;
@@ -463,19 +316,19 @@ export function ensureConnStyle() {
   background:none;border:1px solid transparent;border-radius:var(--radius-sm,3px);
   color:var(--text-muted,#5E6A76);cursor:pointer;padding:0;
   transition:background .12s,color .12s,border-color .12s}
-#v2-conn .gc-x:hover{background:var(--bg-hover,#EDF0F4);color:var(--text-primary,#10151A);
+#v2-conn .gc-x:hover{background:var(--bg-hover,#EDF0F4);color:var(--text-primary,#000);
   border-color:var(--border,#DCE0E6)}
 #v2-conn .gc-head{padding:18px 0 12px;margin-bottom:14px;
   border-bottom:1px solid var(--border-soft,#EDEFF2)}
 #v2-conn .gc-title{font-size:var(--fs-xl,17px);font-weight:600;margin:6px 0 0;
-  letter-spacing:.01em;color:var(--text-primary,#10151A)}
+  letter-spacing:.01em;color:var(--text-primary,#000)}
 #v2-conn .gc-field{margin-top:13px}
 #v2-conn .gc-field:first-of-type{margin-top:0}
 #v2-conn .gc-label{display:flex;justify-content:space-between;align-items:baseline;
   font-size:var(--fs-xs,12px);font-weight:500;color:var(--text-secondary,#39434E);
   margin-bottom:5px;letter-spacing:.01em}
 #v2-conn .gc-input{width:100%;box-sizing:border-box;height:30px;padding:0 9px;
-  font-size:var(--fs-xs,12px);color:var(--text-primary,#10151A);background:var(--bg-input,#fff);
+  font-size:var(--fs-xs,12px);color:var(--text-primary,#000);background:var(--bg-input,#fff);
   border:1px solid var(--border-raise,#C3CAD3);border-radius:var(--radius-sm,3px);
   transition:border-color .15s,box-shadow .15s;font-family:inherit}
 #v2-conn .gc-input:hover{border-color:var(--text-muted,#5E6A76)}
@@ -513,7 +366,7 @@ export function ensureConnStyle() {
   transition:background .15s,border-color .15s,color .15s}
 #v2-conn .gc-btn.secondary{background:var(--bg-secondary,#fff);
   border-color:var(--border-raise,#C3CAD3);color:var(--text-secondary,#39434E)}
-#v2-conn .gc-btn.secondary:hover{background:var(--bg-tertiary,#F6F7F9);color:var(--text-primary,#10151A)}
+#v2-conn .gc-btn.secondary:hover{background:var(--bg-tertiary,#F6F7F9);color:var(--text-primary,#000)}
 #v2-conn .gc-btn.primary{background:var(--accent,#1F62B0);color:#fff;
   border-color:var(--accent,#1F62B0)}
 #v2-conn .gc-btn.primary:hover{background:var(--accent-2,#1A518F);border-color:var(--accent-2,#1A518F)}
@@ -537,7 +390,7 @@ export function ensureConnStyle() {
 #v2-conn .gc-usage-row:first-child{border-top:0}
 #v2-conn .gc-usage-row .k{color:var(--text-muted,#5E6A76);
   font-weight:600;letter-spacing:.04em}
-#v2-conn .gc-usage-row .v{color:var(--text-primary,#10151A);
+#v2-conn .gc-usage-row .v{color:var(--text-primary,#000);
   font-variant-numeric:tabular-nums;text-align:right}
 #v2-conn .gc-usage-row .n{color:var(--text-muted,#5E6A76);
   font-variant-numeric:tabular-nums;min-width:52px;text-align:right}
@@ -764,15 +617,6 @@ function feedJobProgress(data) {
   }
   const finished = Math.max((Number(data.done) || 0) + failed, terminal);
   const allTerminal = total > 0 && finished >= total;
-  if (sweepRun.name) {
-    sweepPaneEvent({
-      sweep_id: sweepRun.name,
-      total: total || sweepRun.total,
-      rollup: { succeeded: Math.max(0, finished - failed), failed },
-      state: allTerminal ? "done" : "running",
-    });
-    if (allTerminal) sweepRun.name = "";
-  }
   if (!allTerminal) {
     const running = ids.filter((id) => {
       const st = (jobs[id] || {}).state;
@@ -818,27 +662,14 @@ onBatch((snap, epochChanged) => {
   if (snap.job_progress) feedJobProgress(snap.job_progress);
 });
 
-/* 窗口内刷新 + 项目快捷键（2026-11-22）：Ctrl+R / F5 重载；
- * Ctrl+N/O/S 与 Ctrl+Shift+S（Save As）——Ctrl+S 是浏览器"保存网页"，
- * 必须 preventDefault；窗口与浏览器行为一致。 */
+/* 窗口内刷新（2026-11-22）：Ctrl+R / F5 重载。
+ * Ctrl+N/O/S 文件快捷键已删（L-35，文件腿随 M6 重接）。 */
 document.addEventListener("keydown", (e) => {
   const ctrl = e.ctrlKey || e.metaKey;
   const k = e.key.toLowerCase();
   if ((ctrl && !e.shiftKey && !e.altKey && k === "r") || e.key === "F5") {
     e.preventDefault();
     location.reload();
-    return;
-  }
-  if (!ctrl || e.altKey) return;
-  if (k === "s") {
-    e.preventDefault();
-    (e.shiftKey ? fileSaveAs : fileSave)();
-  } else if (k === "o") {
-    e.preventDefault();
-    fileOpen();
-  } else if (k === "n") {
-    e.preventDefault();
-    fileNew();
   }
 });
 

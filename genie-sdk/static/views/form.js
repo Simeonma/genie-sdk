@@ -1,10 +1,12 @@
 import { apiNotice } from "../modules/api.js";
 import { exec } from "../core/bus.js";
-import { removeIntent, sendIntent, submitField } from "../modules/edit.js";
-import { autoGrid } from "../modules/app.js";
+import { py, parseComplex, formatComplex } from "../modules/util.js";
 import { GEO_TYPE_LABEL, previewEl } from "./previews.js";
 import { matColor } from "./scene3d.js";
 import { cfg, scene } from "../modules/state.js";
+import { KIT } from "./kit.js";
+import { BOUNDARY_DEFAULTS, MODE_TRANSVERSE, modeSeed,
+         fieldsArg } from "../modules/defaults.js";
 /* Genie FDTD service — 参数面板（Phase B2 工作台版，2026-08-30）
  *
  * 旧 Studio 排版复活：config 栏一次只渲染 nav 选中的一节（Materials/
@@ -24,16 +26,18 @@ import { cfg, scene } from "../modules/state.js";
  * 纯数字按此换算写回；后缀输入（UNIT_SUFFIXES）优先。hint 显示 SI 等效。 */
 export const FIELD_UNITS = {
   len:  { toSI: (v) => v * 1e-6,  toUser: (v) => v * 1e6,
-          label: "µm", si: "m",  hint: "len" },
+          label: "µm", suffix: "µm", si: "m",  hint: "len" },
   wl:   { toSI: (v) => v * 1e-9,  toUser: (v) => v * 1e9,
-          label: "nm", si: "m",  hint: "len" },
+          label: "nm", suffix: "nm", si: "m",  hint: "len" },
   time: { toSI: (v) => v * 1e-15, toUser: (v) => v * 1e15,
-          label: "fs", si: "s",  hint: "time" },
+          label: "fs", suffix: "fs", si: "s",  hint: "time" },
   freq: { toSI: (v) => v * 1e12,  toUser: (v) => v / 1e12,
-          label: "THz", si: "Hz", hint: "freq" },
+          label: "THz", suffix: "THz", si: "Hz", hint: "freq" },
+  /* ang 的值口径是 THz(ω=2πf)，后缀写不下也不该误读——框内不出后缀，
+   * 单位仍在标签里说明 */
   ang:  { toSI: (v) => v * 2 * Math.PI * 1e12,
           toUser: (v) => v / (2 * Math.PI * 1e12),
-          label: "THz(ω=2πf)", si: "rad/s", hint: "ang" },
+          label: "THz(ω=2πf)", suffix: null, si: "rad/s", hint: "ang" },
 };
 
 /* 可解析的友好显示：6 位有效数字、非极端量级用十进制（0.5 / 381.97） */
@@ -84,34 +88,654 @@ export function parseSuffixed(t) {
   return f === undefined ? NaN : Number(m[1]) * f;
 }
 
-/* 写回换算（最小版）：纯数 × 字段单位 → SI（15 位有效数字杀浮点噪声）；
- * 单位后缀见 parseSuffixed；其余非纯数（表达式串）原样透传——实时校验在
- * 服务端 /api/validate（genie.models 同一双手），浏览器零求值（阶段 5②）。 */
-export function writeBackValue(raw, kind, unitKey) {
-  const txt = String(raw == null ? "" : raw).trim();
-  const unit = FIELD_UNITS[unitKey] || null;
-  const toSI = (t) => {
-    const f = Number(t);
-    if (t !== "" && !Number.isFinite(f)) {
-      const s = parseSuffixed(t);            /* `1um` / `500 nm` / `2ns` */
-      return Number.isFinite(s) ? parseFloat(s.toPrecision(15)) : NaN;
-    }
-    if (t === "" || !Number.isFinite(f)) return NaN;
-    return unit ? parseFloat(unit.toSI(f).toPrecision(15)) : f;
-  };
-  if (kind === "num3") {
-    const parts = txt.split(/[,\s]+/).filter(Boolean);
-    if (parts.length === 3 && parts.every((t) => Number.isFinite(toSI(t))))
-      return parts.map(toSI);
-    const v = toSI(txt);
-    return Number.isFinite(v) ? v : txt;
-  }
-  if (kind === "num") {
-    const v = toSI(txt);
-    return Number.isFinite(v) ? v : txt;
-  }
-  return txt;
+/* ═══ fdtd 设置页 = 一份描述符（B 批 2026-11-25）══════════════════════
+ * 这张卡的全部内容都在下面：加字段 / 换分组只加数据，DOM 由
+ * FormPanel.renderPage 生成；写字段只经 commit（exec set_named + py）。
+ * DOMAIN_FIELDS / BOUNDARY_FIELDS = 本卡覆盖 wire 的哪些字段，测试按
+ * DomainSpec / BoundarySpec 反射校验（不抄类型、不抄默认值）。 */
+export const DOMAIN_FIELDS = ["x_range", "y_range", "z_range", "dx", "dy",
+  "dz", "x_spacing", "y_spacing", "z_spacing", "total_time", "cfl",
+  "auto_shutoff", "boundary"];
+export const BOUNDARY_FIELDS = ["kind", "layers", "kappa_max", "order",
+  "k", "from_source"];
+const DOMAIN_FACES = ["x_min", "x_max", "y_min", "y_max", "z_min", "z_max"];
+
+function _fmtSeg(t) {
+  return t.map((s) => `${(s.d * 1e9).toPrecision(3)}nm`).join(" | ");
 }
+
+/* mode 卡覆盖的字段（测试按 ModeDomainSpec / ModeConfigSpec 反射校验）。 */
+export const MODE_FIELDS = ["axis", "position", "x_range", "y_range", "z_range",
+  "n_bg", "dx", "dy", "dz", "x_spacing", "y_spacing", "z_spacing",
+  "boundary", "wavelength", "n_modes", "n_ref",
+  "rotate_axis", "rotate_angle", "rotate_radius"];
+
+const MODE_FACES = { x: ["y_min", "y_max", "z_min", "z_max"],
+                     y: ["x_min", "x_max", "z_min", "z_max"],
+                     z: ["x_min", "x_max", "y_min", "y_max"] };
+
+export function DOMAIN_SCHEMA(cfg, commit) {
+  const d = (cfg && cfg.domain) || {};
+  const range = (a) => {
+    const r = d[`${a}_range`];
+    if (!Array.isArray(r)) return null;
+    const lo = Number(r[0]), hi = Number(r[1]);
+    return isFinite(lo) && isFinite(hi) ? [lo, hi] : null;
+  };
+  const hasTable = ["x", "y", "z"].some((a) => d[`${a}_spacing`]);
+  const bnd = d.boundary || {};
+  const kindOf = (f) => (bnd[f] || {}).kind || "";
+  const commitFace = (f, face) => {
+    const cur = d.boundary || {};      /* 每次读最新表：连改两面不互相覆盖 */
+    const nb = {};
+    for (const k of Object.keys(cur)) nb[k] = Object.assign({}, cur[k]);
+    nb[f] = face;                      /* 整面替换：旧 kind 的专属参数自然消失 */
+    d.boundary = nb;
+    commit("boundary", py(nb));
+  };
+  /* 换 kind = 丢掉旧 kind 的参数 + 补新 kind 的默认值（GUI 侧规则） */
+  const setFaceKind = (f, kind) => {
+    const face = { kind };
+    if (BOUNDARY_DEFAULTS[kind]) Object.assign(face, BOUNDARY_DEFAULTS[kind]);
+    commitFace(f, face);
+  };
+
+  /* 1. General settings —— 域范围（min/max/center/size 同时可编）+ 时间步进 */
+  const rangeRows = ["x", "y", "z"].map((a) => ({
+    label: a,
+    value: range(a),
+    onSet: (v) => commit(`${a}_range`, `(${py(v[0])}, ${py(v[1])})`),
+  }));
+
+  const sections = [{
+    type: "section", key: "domain:general", title: "General settings", open: true,
+    items: [
+      { type: "range", caption: "Domain range", unit: "len",
+        order: ["center", "size", "min", "max"], rows: rangeRows },
+      { type: "table", caption: "fdtd solver control",
+        cols: [{ label: "time", unit: "fs" }, { label: "CFL" },
+               { label: "auto shutoff" }],
+        rows: [{
+          cells: [
+            { kind: "num", path: "domain.total_time", value: d.total_time,
+              unit: "time", onSet: (v) => commit("total_time", py(v)) },
+            { kind: "num", path: "domain.cfl", value: d.cfl,
+              onSet: (v) => commit("cfl", py(v)) },
+            { kind: "num", path: "domain.auto_shutoff", value: d.auto_shutoff,
+              hint: "0 = off (field-energy ratio; recommended 1e-6)",
+              onSet: (v) => commit("auto_shutoff", py(v)),
+              onClear: () => commit("auto_shutoff", "0.0") },
+          ],
+        }],
+      },
+    ],
+  }];
+
+  /* 2. Base mesh —— Manual（均匀步长）/ Auto（auto_grid 段表）互斥 */
+  const gridItems = [
+    { type: "row", label: "Grid mode", controls: [{
+        kind: "select", value: hasTable ? "Auto" : "Manual",
+        options: ["Manual", "Auto"],
+        confirm: hasTable
+          ? "Switching to Manual clears the auto-mesh segment tables. Continue?"
+          : null,
+        onPick: (v) => {
+          if (v === "Auto") {
+            if (!hasTable) exec("genie.auto_grid()", { echo: true }).catch(() => {});
+          } else if (hasTable) {
+            exec("genie.set_named('fdtd', x_spacing=None, y_spacing=None, "
+              + "z_spacing=None)", { echo: false }).catch(() => {});
+          }
+        } }] },
+  ];
+  if (hasTable) {
+    gridItems.push({ type: "row", label: "Mesh level",
+      controls: [{ kind: "text", text: "not implemented yet" }] });
+  } else {
+    gridItems.push({ type: "table", caption: "Base mesh step",
+      cols: [{ label: "dx", unit: "µm" }, { label: "dy", unit: "µm" },
+             { label: "dz", unit: "µm" }],
+      rows: [{ cells: ["x", "y", "z"].map((a) => ({
+        kind: "num", path: `domain.d${a}`, value: d[`d${a}`], unit: "len",
+        onSet: (v) => commit(`d${a}`, py(v)),
+      })) }] });
+  }
+  sections.push({ type: "section", key: "domain:grid", title: "Base mesh",
+    open: true, items: gridItems });
+
+  if (hasTable) {
+    const items = ["x", "y", "z"].filter((a) => d[`${a}_spacing`]).map((a) => ({
+      type: "row", label: `${a}_spacing`,
+      controls: [{ kind: "text",
+        text: `${d[`${a}_spacing`].length} segments · ${_fmtSeg(d[`${a}_spacing`])}` }],
+    }));
+    items.push({ type: "note",
+      text: "Segment tables are the nonuniform base mesh (mutually exclusive "
+        + "with dx); switching to Manual clears them." });
+    sections.push({ type: "section", key: "domain:segments",
+      title: "Auto mesh · segments", open: false, items });
+  }
+
+  /* 4. Boundary —— 顺序固定：Boundary type → Bloch → PML（2026-11-25 站长拍） */
+  const bItems = [];
+  let blochItem = null;
+  const blochFaces = DOMAIN_FACES.filter((f) => kindOf(f) === "bloch");
+  if (blochFaces.length) {
+    const b0 = bnd[blochFaces[0]] || {};
+    const k0 = Array.isArray(b0.k) ? b0.k : [];
+    /* Bloch 的 k / from_source 是**全局量**（对所有 bloch 面同时成立，
+     * 2026-11-25 站长拍）：读第一个 bloch 面，写广播到全部 bloch 面。 */
+    const commitBloch = (patch) => {
+      const cur = d.boundary || {};
+      const nb = {};
+      for (const kk of Object.keys(cur)) nb[kk] = Object.assign({}, cur[kk]);
+      for (const f of blochFaces) nb[f] = Object.assign({}, nb[f] || {}, patch);
+      d.boundary = nb;
+      commit("boundary", py(nb));
+    };
+    blochItem = {
+      type: "table", caption: "Bloch",
+      cols: [{ label: "from source" },
+             { label: "kx", unit: "rad/m" }, { label: "ky", unit: "rad/m" },
+             { label: "kz", unit: "rad/m" }],
+      rows: [{
+        cells: [
+          { kind: "select",
+            path: `domain.boundary.${blochFaces[0]}.from_source`,
+            value: b0.from_source === true ? "yes" : "no",
+            options: ["no", "yes"],
+            onSet: (v) => commitBloch({ from_source: v === "yes" }) },
+          ...["0", "1", "2"].map((i) => ({
+            kind: "num", group: true,
+            path: `domain.boundary.${blochFaces[0]}.k.${i}`, value: k0[i],
+          })),
+        ],
+        onRow: (v) => commitBloch({ k: v }),
+      }],
+    };
+  }
+
+  const hasPml = DOMAIN_FACES.some((f) => kindOf(f) === "pml");
+  const pmlRows = [
+    ["layers", "layers"], ["κ", "kappa_max"], ["order", "order"],
+  ].map(([label, key]) => ({
+    label,
+    cells: DOMAIN_FACES.map((f) => {
+      const isPml = kindOf(f) === "pml";
+      const b = bnd[f] || {};
+      return {
+        kind: "num", path: `domain.boundary.${f}.${key}`,
+        /* 值来自模型（2026-11-25）：pml 面在切换那一刻由 kernel 播种 layers/κ/order */
+        value: isPml ? b[key] : undefined,
+        disabled: !isPml,
+        aria: `${f} pml ${label}`,
+        hint: isPml ? `${f} · pml ${label}` : `${f} is not PML`,
+        onSet: (v) => commitFace(f, Object.assign({}, bnd[f] || {}, { [key]: v })),
+      };
+    }),
+  }));
+
+  /* Kind 表：行就是"边界类型"本身，不再要左边的 "Kind" 行头列
+   * （2026-11-25 站长拍）；列头 = 六面。 */
+  const faceCols = DOMAIN_FACES.map((f) => ({ label: f.replace("_", " ") }));
+  bItems.push({
+    type: "table", caption: "Boundary type", cols: faceCols,
+    rows: [{ cells: DOMAIN_FACES.map((f) => ({
+      kind: "select", path: `domain.boundary.${f}.kind`, value: kindOf(f),
+      options: ["", "pec", "pmc", "periodic", "pml", "bloch"],
+      unsetLabel: "—",          /* 6 面挤在 300px：空值用破折号，不写长词 */
+      aria: `${f} boundary type`,
+      onSet: (v) => setFaceKind(f, v),
+    })) }],
+  });
+  if (blochItem) bItems.push(blochItem);
+  /* PML 配置单独一张表：只在有 pml 面时出现，行 layers / κ / order。 */
+  if (hasPml) {
+    bItems.push({ type: "table", caption: "PML", cols: faceCols,
+      rows: pmlRows });
+  }
+
+  sections.push({ type: "section", key: "domain:boundary", title: "Boundary",
+    open: true, items: bItems });
+
+  return { sections };
+}
+
+/* ══════════════════ mode 卡（2026-11-25 站长拍）══════════════════
+ * 与 fdtd 同一副面板：节 → 题目 → 控件/表；范围四列公共件；Boundary
+ * type → Bloch → PML；Auto/Manual 基础网格。数据来自 mode 求解器自己的
+ * 包络（cfg.solvers 里 kind=mode），不是扁平 config。 */
+export function MODE_SCHEMA(cfg, commit, solverName) {
+  const sv = ((cfg && cfg.solvers) || []).find((s) => s && s.kind === "mode") || {};
+  const name = solverName || sv.name || "mode";
+  const mc = sv.config || {};
+  const d = mc.domain || {};
+  const axis = ["x", "y", "z"].includes(d.axis) ? d.axis : "z";
+  const [t1, t2] = MODE_TRANSVERSE[axis];
+  const edges = MODE_FACES[axis];
+  const bo = mc.boundary || {};
+  const kindOf = (f) => (bo[f] || {}).kind || "";
+  const range = (a) => {
+    const r = d[`${a}_range`];
+    if (!Array.isArray(r)) return null;
+    const lo = Number(r[0]), hi = Number(r[1]);
+    return isFinite(lo) && isFinite(hi) ? [lo, hi] : null;
+  };
+  const commitFace = (f, face) => {
+    const cur = mc.boundary || {};
+    const nb = {};
+    for (const k of Object.keys(cur)) nb[k] = Object.assign({}, cur[k]);
+    nb[f] = face;
+    mc.boundary = nb;
+    commit("boundary", py(nb));
+  };
+  const setFaceKind = (f, kind) => {
+    const face = { kind };
+    if (BOUNDARY_DEFAULTS[kind]) Object.assign(face, BOUNDARY_DEFAULTS[kind]);
+    commitFace(f, face);
+  };
+  const hasSpacing = [t1, t2].some((a) => Array.isArray(d[`${a}_spacing`]));
+  const nRef = (v) => (typeof v === "string" ? v : (v == null ? "" : String(v)));
+
+  const IDX = { x: 0, y: 1, z: 2 };
+  /* 换轴 = 布局重排（2026-11-25 站长拍，**面板规范**）：一条 set_named 同时
+   * 写下新轴与整套默认值——传播轴清窗口/网格，两条横轴回 ±1 µm 与 0.05 µm；
+   * 失效的旋转轴清成"无旋转"；边界换成新轴四缘（已有 kind 保留，缺席 pec）。 */
+  const switchAxis = (v) => {
+    /* 换轴 = 布局重排（2026-11-26 站长拍，**面板规范**）：整套默认值来自
+     * defaults.js——新轴清窗口/网格、横轴回 ±1 µm 与 0.05 µm、边界换四缘。 */
+    exec("genie.set_named(" + JSON.stringify(name) + ", "
+      + fieldsArg(modeSeed(v)) + ")", { echo: false }).catch(() => {});
+    if (mc.rotate_axis && !MODE_TRANSVERSE[v].includes(mc.rotate_axis)) {
+      exec("genie.set_named(" + JSON.stringify(name)
+        + ", rotate_axis=None, rotate_angle=0.0, rotate_radius=0.0)",
+        { echo: false }).catch(() => {});
+    }
+  };
+
+  const sections = [{
+    type: "section", key: "mode:general", title: "General settings", open: true,
+    items: [
+      { type: "row", label: "Propagation axis", controls: [{
+          kind: "select", value: axis, options: ["x", "y", "z"], rerender: true,
+          onPick: (v) => switchAxis(v) }] },
+      { type: "range", caption: "Domain range", unit: "len",
+        order: ["center", "size", "min", "max"],
+        rows: ["x", "y", "z"].map((a) => (a === axis
+          ? { label: a, centerOnly: true, position: d.position,
+              onCenter: (v) => commit("position", py(v)) }
+          : { label: a, value: range(a),
+              onSet: (v) => commit(`${a}_range`,
+                `(${py(v[0])}, ${py(v[1])})`) })) },
+      { type: "table", caption: "mode solver control",
+        cols: [{ label: "Wavelength", unit: "µm" }, { label: "Modes" },
+               { label: "Search index" }],
+        rows: [{ cells: [
+          { kind: "str", path: "mode.wavelength",
+            value: wavelengthText(mc.wavelength),
+            hint: "µm; comma-separated for several wavelengths (ascending)",
+            validate: wavelengthError,
+            onSet: (s) => commit("wavelength", wavelengthLiteral(s)) },
+          { kind: "num", path: "mode.n_modes", value: mc.n_modes,
+            onSet: (v) => commit("n_modes", py(v)) },
+          /* 空 = 内核取截面最大折射率（n_ref=None），不需要 auto 状态 */
+          { kind: "num", path: "mode.n_ref", value: mc.n_ref,
+            hint: "empty = largest index in the cross-section (kernel default)",
+            onSet: (v) => commit("n_ref", py(v)),
+            onClear: () => commit("n_ref", "None") },
+        ] }] },
+      { type: "table", caption: "Rotation",
+        cols: [{ label: "Axis" }, { label: "Angle" },
+               { label: "Radius", unit: "µm" }],
+        rows: [{ cells: [
+          /* axis 默认 none；选了轴才把 angle/radius 落成 0（2026-11-25 站长拍） */
+          { kind: "select", path: "mode.rotate_axis", value: mc.rotate_axis || "",
+            options: ["", t1, t2], rerender: true,
+            onSet: (v) => {
+              if (!v) {
+                exec("genie.set_named(" + JSON.stringify(name) + ", rotate_axis=None,"
+                  + " rotate_angle=None, rotate_radius=None)",
+                  { echo: false }).catch(() => {});
+              } else {
+                exec("genie.set_named(" + JSON.stringify(name) + ", rotate_axis="
+                  + py(v) + ", rotate_angle=0.0, rotate_radius=0.0)",
+                  { echo: false }).catch(() => {});
+              }
+            } },
+          { kind: "num", path: "mode.rotate_angle",
+            value: mc.rotate_axis ? mc.rotate_angle : undefined,
+            disabled: !mc.rotate_axis,
+            hint: "degrees (right-hand rule; |angle| < 90)",
+            onSet: (v) => commit("rotate_angle", py(v)) },
+          { kind: "num", path: "mode.rotate_radius",
+            value: mc.rotate_axis ? mc.rotate_radius : undefined,
+            disabled: !mc.rotate_axis, unit: "len",
+            hint: "rotation axis offset from the plane centre",
+            onSet: (v) => commit("rotate_radius", py(v)) },
+        ] }] },
+    ],
+  }];
+
+  /* Base mesh：Manual（每横轴一个 d）/ Auto（auto_grid 的段表） */
+  const gridItems = [{ type: "row", label: "Grid mode", controls: [{
+      kind: "select", value: hasSpacing ? "Auto" : "Manual",
+      options: ["Manual", "Auto"],
+      confirm: hasSpacing
+        ? "Switching to Manual clears the auto-mesh segment tables. Continue?"
+        : null,
+      onPick: (v) => {
+        if (v === "Auto") {
+          if (!hasSpacing)
+            exec("genie.auto_grid(solver=" + JSON.stringify(name) + ")",
+              { echo: true }).catch(() => {});
+        } else if (hasSpacing) {
+          const clear = [t1, t2].map((a) => `${a}_spacing=None`).join(", ");
+          exec("genie.set_named(" + JSON.stringify(name) + ", " + clear + ")",
+            { echo: false }).catch(() => {});
+        }
+      } }] }];
+  if (hasSpacing) {
+    gridItems.push({ type: "row", label: "Mesh level",
+      controls: [{ kind: "text", text: "not implemented yet" }] });
+  } else {
+    gridItems.push({ type: "table", caption: "Base mesh step",
+      cols: [t1, t2].map((a) => ({ label: `d${a}`, unit: "µm" })),
+      rows: [{ cells: [t1, t2].map((a) => ({
+        kind: "num", path: `mode.domain.d${a}`, value: d[`d${a}`], unit: "len",
+        onSet: (v) => commit(`d${a}`, py(v)),
+      })) }] });
+  }
+  sections.push({ type: "section", key: "mode:mesh", title: "Base mesh",
+    open: true, items: gridItems });
+
+  if (hasSpacing) {
+    const items = [t1, t2].filter((a) => Array.isArray(d[`${a}_spacing`]))
+      .map((a) => ({ type: "row", label: `${a}_spacing`,
+        controls: [{ kind: "text",
+          text: `${d[`${a}_spacing`].length} segments · `
+            + `${_fmtSeg(d[`${a}_spacing`])}` }] }));
+    items.push({ type: "note",
+      text: "Segment tables are the nonuniform base mesh (mutually exclusive "
+        + "with d); switching to Manual clears them." });
+    sections.push({ type: "section", key: "mode:segments",
+      title: "Auto mesh · segments", open: false, items });
+  }
+
+  /* Boundary：4 条横截面边缘 → Boundary type → Bloch → PML */
+  const bItems = [];
+  let blochItem = null;
+  const blochFaces = edges.filter((f) => kindOf(f) === "bloch");
+  if (blochFaces.length) {
+    const b0 = bo[blochFaces[0]] || {};
+    const k0 = Array.isArray(b0.k) ? b0.k : [];
+    const commitBloch = (patch) => {
+      const cur = mc.boundary || {};
+      const nb = {};
+      for (const kk of Object.keys(cur)) nb[kk] = Object.assign({}, cur[kk]);
+      for (const f of blochFaces) nb[f] = Object.assign({}, nb[f] || {}, patch);
+      mc.boundary = nb;
+      commit("boundary", py(nb));
+    };
+    blochItem = {
+      type: "table", caption: "Bloch",
+      /* 2D 问题：Bloch k 只有截面内两个分量（传播轴分量恒 0，不提供） */
+      cols: [{ label: "from source" },
+             { label: `k${t1}`, unit: "rad/m" },
+             { label: `k${t2}`, unit: "rad/m" }],
+      rows: [{
+        cells: [
+          { kind: "select",
+            path: `mode.boundary.${blochFaces[0]}.from_source`,
+            value: b0.from_source === true ? "yes" : "no",
+            options: ["no", "yes"],
+            onSet: (v) => commitBloch({ from_source: v === "yes" }) },
+          ...[t1, t2].map((a) => ({
+            kind: "num", group: true,
+            path: `mode.boundary.${blochFaces[0]}.k.${IDX[a]}`,
+            value: k0[IDX[a]],
+          })),
+        ],
+        onRow: (v) => {
+          const kk = [0, 0, 0];
+          kk[IDX[t1]] = v[0];
+          kk[IDX[t2]] = v[1];
+          commitBloch({ k: kk });
+        },
+      }],
+    };
+  }
+  const hasPml = edges.some((f) => kindOf(f) === "pml");
+  const pmlRows = [["layers", "layers"], ["κ", "kappa_max"], ["order", "order"]]
+    .map(([label, key]) => ({
+      label,
+      cells: edges.map((f) => ({
+        kind: "num", path: `mode.boundary.${f}.${key}`,
+        value: kindOf(f) === "pml" ? (bo[f] || {})[key] : undefined,
+        disabled: kindOf(f) !== "pml",
+        aria: `${f} pml ${label}`,
+        hint: kindOf(f) === "pml" ? `${f} · pml ${label}` : `${f} is not PML`,
+        onSet: (v) => commitFace(f, Object.assign({}, bo[f] || {}, { [key]: v })),
+      })),
+    }));
+  bItems.push({
+    type: "table", caption: "Boundary type",
+    cols: edges.map((f) => ({ label: f.replace("_", " ") })),
+    rows: [{ cells: edges.map((f) => ({
+      kind: "select", path: `mode.boundary.${f}.kind`, value: kindOf(f),
+      options: ["", "pec", "pmc", "periodic", "pml", "bloch"],
+      unsetLabel: "—",
+      aria: `${f} boundary type`,
+      onSet: (v) => setFaceKind(f, v),
+    })) }],
+  });
+  if (blochItem) bItems.push(blochItem);
+  if (hasPml) bItems.push({ type: "table", caption: "PML", cols:
+    edges.map((f) => ({ label: f.replace("_", " ") })), rows: pmlRows });
+  sections.push({ type: "section", key: "mode:boundary", title: "Boundary",
+    open: true, items: bItems });
+
+  return { sections };
+}
+
+/* 波长：显示文本（µm）、解析、字面量。单值 = float，多值 = 升序 list。 */
+function wavelengthText(v) {
+  if (Array.isArray(v)) return v.map((x) => (x * 1e6).toPrecision(6)).join(", ");
+  if (typeof v === "number") return (v * 1e6).toPrecision(6);
+  return "";
+}
+function wavelengthList(s) {
+  const toks = String(s).split(",").map((x) => x.trim()).filter(Boolean);
+  const out = [];
+  for (const tk of toks) {
+    const m = /^([0-9.]+(?:[eE][-+]?[0-9]+)?)\s*(um|nm|m)?$/.exec(tk);
+    if (!m) return null;
+    let x = Number(m[1]);
+    if (!isFinite(x)) return null;
+    const u = m[2];
+    if (u === "nm") x *= 1e-9;
+    else if (u === "m") x = x;
+    else x *= 1e-6;                 /* 缺省单位 = µm */
+    if (x <= 0) return null;
+    out.push(x);
+  }
+  return out.length ? out : null;
+}
+function wavelengthError(s) {
+  const xs = wavelengthList(s);
+  if (!xs) return "expect µm values like 1.55 or 1.5, 1.55";
+  for (let i = 1; i < xs.length; i++) {
+    if (xs[i] <= xs[i - 1]) return "wavelengths must be ascending";
+  }
+  return null;
+}
+function wavelengthLiteral(s) {
+  const xs = wavelengthList(s);
+  if (!xs) return "None";
+  return xs.length === 1 ? py(xs[0]) : py(xs);
+}
+
+
+/* ══════════════════ FDTD ▸ mesh（2026-11-25 站长拍）═════════════════
+ * 与 fdtd/mode 同一副面板：General settings = Domain range（四列）+ Refine
+ * method（factor | absolute）+ Refinement（一行 x/y/z）+ Growth。 */
+let MESH_METHOD = null;      /* 视图偏好：factor | absolute（不落模型） */
+
+export function MESH_SCHEMA(cfg, commit, m) {
+  const useAbs = MESH_METHOD
+    ? MESH_METHOD === "absolute"
+    : ["x", "y", "z"].some((a) => m[`d${a}`] != null);
+  const method = useAbs ? "absolute" : "factor";
+  const cell = (a) => (useAbs
+    ? { kind: "num", path: `mesh.${a}.d`, value: m[`d${a}`], unit: "len",
+        hint: "绝对步长（≤ 该轴基础步长）",
+        onSet: (v) => commit(`d${a}`, py(v)),
+        onClear: () => commit(`d${a}`, "None") }
+    : { kind: "num", path: `mesh.${a}.factor`, value: m[`factor_${a}`],
+        hint: "factor ≥ 1（相对基础步长；1 = 不变）",
+        onSet: (v) => commit(`factor_${a}`, py(v)),
+        onClear: () => commit(`factor_${a}`, "None") });
+  return { sections: [{
+    type: "section", key: "mesh:general", title: "General settings", open: true,
+    items: [
+      { type: "range", caption: "Range", unit: "len",
+        order: ["center", "size", "min", "max"],
+        rows: ["x", "y", "z"].map((a) => ({
+          label: a,
+          value: Array.isArray(m[`${a}_range`]) ? m[`${a}_range`] : null,
+          onSet: (v) => commit(`${a}_range`, `(${py(v[0])}, ${py(v[1])})`),
+        })) },
+      /* 方法与渐变率放在同一张表（2026-11-25 站长拍）：都是"怎么加密"的控制量 */
+      { type: "table", caption: "Mesh control",
+        cols: [{ label: "Refine method" }, { label: "Growth rate" }],
+        rows: [{ cells: [
+          { kind: "select", value: method, options: ["factor", "absolute"],
+            rerender: true,
+            onPick: (v) => {
+              MESH_METHOD = v;
+              if (v === "absolute") {
+                /* 切到绝对步长：空轴补 50 nm（已有值的轴不动） */
+                for (const a of ["x", "y", "z"]) {
+                  if (m[`d${a}`] == null) commit(`d${a}`, py(5e-8));
+                }
+              }
+            } },
+          { kind: "num", path: "mesh.growth_rate", value: m.growth_rate,
+            hint: "过渡带渐变率（1.0 = 硬跳）",
+            onSet: (v) => commit("growth_rate", py(v)) },
+        ] }] },
+      { type: "table", caption: useAbs ? "Refine step" : "Refine factor",
+        cols: ["x", "y", "z"].map((a) => ({
+          label: a, unit: useAbs ? "µm" : "" })),
+        rows: [{ cells: ["x", "y", "z"].map(cell) }] },
+    ],
+  }] };
+}
+
+/* ══════════════════ FDTD ▸ soft source（2026-11-26 站长拍）══════════════
+ * 与 fdtd/mode/mesh 同一副面板：General settings（时域四件套 + 幅度 + 种类）
+ * → Placement（Center / Size 各一行 xyz）→ Polarization（实部/虚部 × xyz）。 */
+export function SOURCE_SCHEMA(cfg, commit, s) {
+  const vec = (key, fallback) => {
+    const v = Array.isArray(s[key]) ? s[key] : fallback;
+    return {
+      cells: ["x", "y", "z"].map((_, k) => ({
+        kind: "num", value: v[k] ?? 0, unit: "len",
+        path: `source.${key}.${k}`,
+        onSet: (val) => {
+          const a = [v[0] ?? 0, v[1] ?? 0, v[2] ?? 0];
+          a[k] = val;
+          commit(key, py(a));
+        },
+      })),
+    };
+  };
+  const pol = (Array.isArray(s.polarization) && Array.isArray(s.polarization[0]))
+    ? s.polarization : [[1, 0], [0, 0], [0, 0]];
+  return { sections: [{
+    type: "section", key: "src:general", title: "General settings", open: true,
+    items: [
+      /* 位置第一（2026-11-26 站长拍）：wire 字段仍叫 center */
+      { type: "table", caption: "Position",
+        cols: ["x", "y", "z"].map((a) => ({ label: a, unit: "µm" })),
+        rows: [vec("center", [0, 0, 0])] },
+      { type: "row", label: "Type", controls: [{
+          kind: "select", value: s.kind || "electric",
+          options: ["electric", "magnetic"], rerender: true,
+          onPick: (v) => commit("kind", py(v)) }] },
+      /* 复数直接输入（2026-11-26 站长拍）：xyz 三列，一格一个复数
+       * （`1` / `2j` / `1-0.5j`），写回线格式的 [[re,im]×3]。 */
+      { type: "table", caption: "Polarization",
+        cols: ["x", "y", "z"].map((a) => ({ label: a })),
+        rows: [{ cells: [0, 1, 2].map((k) => ({
+          kind: "str", path: `source.polarization.${k}`,
+          value: formatComplex(pol[k] ? pol[k][0] : 0, pol[k] ? pol[k][1] : 0),
+          hint: "复数：1 / 2j / 1-0.5j",
+          validate: (v) => (parseComplex(v) ? null
+            : "复数形如 1、2j、1-0.5j"),
+          onSet: (v) => {
+            const c = parseComplex(v);
+            if (!c) return;
+            const m = [[0, 0], [0, 0], [0, 0]];
+            for (let i = 0; i < 3; i++)
+              for (let j = 0; j < 2; j++)
+                m[i][j] = Number(pol[i] && pol[i][j]) || 0;
+            m[k] = [c.re, c.im];
+            commit("polarization", py(m));
+          },
+        })) }] },
+    ],
+  }, {
+    type: "section", key: "src:wave", title: "Waveform & spectrum",
+    open: true,
+    items: [
+      { type: "table", caption: "Spectrum",
+        cols: [{ label: "freq", unit: "THz" }, { label: "bw", unit: "THz" }],
+        rows: [{ cells: [
+          { kind: "num", path: "source.freq", value: s.freq, unit: "freq",
+            onSet: (v) => commit("freq", py(v)) },
+          { kind: "num", path: "source.bandwidth", value: s.bandwidth,
+            unit: "freq", onSet: (v) => commit("bandwidth", py(v)) },
+        ] }] },
+      { type: "table", caption: "Timing",
+        cols: [{ label: "delay", unit: "fs" }, { label: "phase", unit: "rad" },
+               { label: "amp" }],
+        rows: [{ cells: [
+          { kind: "num", path: "source.delay", value: s.delay ?? 0,
+            unit: "time", onSet: (v) => commit("delay", py(v)) },
+          { kind: "num", path: "source.phase", value: s.phase ?? 0,
+            onSet: (v) => commit("phase", py(v)) },
+          { kind: "num", path: "source.amplitude", value: s.amplitude ?? 1,
+            onSet: (v) => commit("amplitude", py(v)) },
+        ] }] },
+    ],
+  }] };
+}
+
+/* ══════════════════ 全局 Simulation（2026-11-26 站长拍）══════════════════
+ * 文档级（model.simulation）：source/monitor 可选继承它；提交时解析成具体值，
+ * wire 没有这个字段。 */
+export function GLOBAL_SCHEMA(cfg, commit, sim) {
+  const s = sim || {};
+  return { sections: [{
+    type: "section", key: "sim:general", title: "General settings", open: true,
+    items: [
+      { type: "table", caption: "Frequency",
+        cols: [{ label: "center", unit: "THz" }, { label: "span", unit: "THz" }],
+        rows: [{ cells: [
+          { kind: "num", path: "simulation.freq_center",
+            value: s.freq_center, unit: "freq",
+            onSet: (v) => commit("freq_center", py(v)) },
+          { kind: "num", path: "simulation.freq_span",
+            value: s.freq_span, unit: "freq",
+            onSet: (v) => commit("freq_span", py(v)) },
+        ] }] },
+      { type: "note",
+        text: "Sources / monitors 可选用这一套（继承）；提交时解析成各自的"
+          + " freq / bandwidth，内核看不到“全局”。", },
+    ],
+  }] };
+}
+
 
 export const FormPanel = {
   container: null,
@@ -161,6 +785,7 @@ export const FormPanel = {
     const panel = {
       domain: "domain", mesh: "mesh", materials: "materials",
       geometry: "geometry", source: "source", monitor: "monitor", run: "run",
+      mode: "mode", simulation: "simulation",
     }[this.current];
     if (!panel) return;
 
@@ -171,19 +796,26 @@ export const FormPanel = {
     body.className = "pane-body";
     c.appendChild(body);
     if (this.only == null) {
-      const ID = { domain: ["Domain", "domain"], mesh: ["Mesh", "mesh"],
-                   run: ["Settings", "run"] }[this.current];
-      if (ID) body.appendChild(this._paneId(ID[0], ID[1]));
+      /* domain = fdtd 求解器卡片（2026-11-24 站长拍：选中 fdtd 出这张，
+       * dx/dy/dz 就在这里——domain 是求解器包络的单件，不单独成页）；
+       * mode = mode 求解器卡片（与 fdtd 对称，2D）。2026-11-25：身份行
+       * 只留名字（图标多余，删）。 */
+      const ID = { domain: "Settings", mode: "Settings",
+                   mesh: "Mesh", run: "Settings",
+                   simulation: "Settings" }[this.current];
+      if (ID) body.appendChild(this._paneId(ID));
     }
 
     switch (this.current) {
       case "domain": this._domain(body); break;
+      case "mode": this._mode(body); break;
       case "mesh": this._mesh(body); break;
       case "materials": this._materials(body); break;
       case "geometry": this._geometry(body); break;
       case "source": this._source(body); break;
       case "monitor": this._monitor(body); break;
       case "run": this._run(body); break;
+      case "simulation": this._simulation(body); break;
     }
 
     /* 标签全文兜底（2026-10-21）：窄栏里长字段名（apodize_window /
@@ -215,50 +847,6 @@ export const FormPanel = {
       (m, sec, rest) => sec + "." + rest);
   },
 
-  _clearFieldError(i) {
-    i.classList.remove("field-err");
-    i.removeAttribute("aria-invalid");
-    i.removeAttribute("aria-describedby");
-    i.title = "";
-    const host = i.closest(".frow") || i.closest(".brow") || i.parentElement;
-    if (host && host._errEl) {
-      host._errEl.remove();
-      host._errEl = null;
-    }
-  },
-
-  markFieldErrors(errors) {
-    const inputs = this.container.querySelectorAll("input[data-path], select[data-path]");
-    inputs.forEach((i) => this._clearFieldError(i));
-    for (const e of errors || []) {
-      const p = this._normErrPath(e.path || "");
-      if (!p) continue;
-      inputs.forEach((i) => {
-        const ip = i.dataset.path;
-        if (ip === p || p.startsWith(ip + ".") || ip.startsWith(p + ".")) {
-          i.classList.add("field-err");
-          i.setAttribute("aria-invalid", "true");
-          i.title = (i.title ? i.title + "\n" : "") + e.message;
-          /* 内联错误：挂在行（frow/brow）下方，整行一条，多错合并 */
-          const host = i.closest(".frow") || i.closest(".brow") || i.parentElement;
-          if (host) {
-            if (!host._errEl) {
-              const msg = this._el("div", "field-err-msg");
-              msg.id = "fem-" + (++this._fldSeq);
-              host._errEl = msg;
-              host.parentNode.insertBefore(msg, host.nextSibling);
-            }
-            const cur = host._errEl.textContent;
-            const line = "⚠ " + e.message;
-            if (!cur.includes(line))
-              host._errEl.textContent = cur ? cur + "　" + line : line;
-            i.setAttribute("aria-describedby", host._errEl.id);
-          }
-        }
-      });
-    }
-  },
-
   /* ══════════════════ DOM 小工具 ══════════════════ */
 
   _el(tag, cls, text) {
@@ -268,14 +856,10 @@ export const FormPanel = {
     return e;
   },
 
-  /* 面板身份行（2026-10-21 用户定案）：单例面板（Domain / Mesh / Settings）
-   * 也要像对象卡那样"开头先给图标 + 名字"。与 .card-head 同刻度（44px 缩略图
-   * + 14/600 名字），不带摘要、不带 chip。 */
-  _paneId(name, iconKey) {
+  /* 面板身份行（2026-10-21 定案；2026-11-25 去图标）：单例面板开头补一行
+   * 名字（与对象卡同刻度），图标删——多余装饰，名字本身就是身份。 */
+  _paneId(name) {
     const row = this._el("div", "pane-id");
-    const ic = this._el("span", "pane-id-ic");
-    ic.appendChild(previewEl(iconKey));
-    row.appendChild(ic);
     row.appendChild(this._el("span", "pane-id-name", name));
     return row;
   },
@@ -290,21 +874,6 @@ export const FormPanel = {
     return wrap;
   },
 
-  /* 模型级校验错误横幅（2026-10-21）：没有字段路径的错误（如"几何名字重复"）
-   * 挂在面板顶部一条警示带里；传空串即清除。 */
-  showModelError(msg) {
-    const host = this.container;
-    if (!host) return;
-    let bar = host.querySelector(".model-err");
-    if (!msg) { if (bar) bar.remove(); return; }
-    if (!bar) {
-      bar = this._el("div", "model-err");
-      bar.setAttribute("role", "alert");
-      host.insertBefore(bar, host.firstChild);
-    }
-    bar.textContent = "⚠ " + msg;
-  },
-
   _fillLabel(lab, label) {
     const m = typeof label === "string"
       ? label.match(/^(.*?)\s*\(([^()]*)\)\s*$/) : null;
@@ -317,31 +886,6 @@ export const FormPanel = {
       lab.textContent = label;
     }
     return lab;
-  },
-
-  _siHint(kind, v) {
-    if (typeof v !== "number" || !isFinite(v) || v === 0) return "";
-    const a = Math.abs(v);
-    const fmt = (x) => {
-      const s = x.toPrecision(4);
-      if (s.includes("e")) return s;
-      // 只剥小数尾零（"30.00"→"30"）；无小数点的整数串不动（"2000"≠"2"）
-      return s.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
-    };
-    if (kind === "len") {
-      if (a >= 1e-3) return fmt(v * 1e3) + " mm";
-      if (a >= 1e-6) return fmt(v * 1e6) + " µm";
-      return fmt(v * 1e9) + " nm";
-    }
-    if (kind === "freq") return fmt(v / 1e12) + " THz";
-    if (kind === "time") {
-      if (a >= 1e-6) return fmt(v * 1e6) + " µs";
-      if (a >= 1e-9) return fmt(v * 1e9) + " ns";
-      if (a >= 1e-12) return fmt(v * 1e12) + " ps";
-      return fmt(v * 1e15) + " fs";
-    }
-    if (kind === "ang") return fmt(v / 1e12) + "×10¹² rad/s";
-    return "";
   },
 
   /* autofill 卫生（2026-10 DevTools advisory）：动态字段补唯一 id/name
@@ -362,36 +906,38 @@ export const FormPanel = {
     el.setAttribute("autocomplete", "off");
   },
 
+  /* 只读视图（L-35 拔线后）：值/单位换算只做展示；写腿随 M4 重接。
+   * 2026-11-25：只读件不进 Tab 序列（tabIndex=-1），打开写腿只经 _edit()。 */
   _input(path, val, kind /* num|str */, hintKind) {
-    /* 只读视图（阶段 5①）：值/单位换算只做展示；表达式槽原样显示文本 */
     const input = document.createElement("input");
     input.type = "text";
+    input.readOnly = true;
+    input.tabIndex = -1;
     if (path) input.dataset.path = path;
     this._tagField(input, path);
     input.dataset.kind = kind;
     if (kind === "num" || kind === "num3") input.inputMode = "decimal";
     const unit = FIELD_UNITS[hintKind] || null;
-    if (unit) input.dataset.unit = hintKind;
+    /* dataset.unit 只标"框内真有后缀"的单位——ang（THz(ω=2πf)）没有后缀，
+     * 标了会让 _row 把标签里的单位也剥掉，单位就丢了。 */
+    if (unit && unit.suffix) input.dataset.unit = hintKind;
     input.value = _dispValue(val, unit);
-    const hint = this._el("span", "si-hint");
-    if (unit) hint.style.display = "none";
     const f = parseFloat(input.value);
     if (unit && isFinite(f)) {
       const si = parseFloat(unit.toSI(f).toPrecision(15));
       input.title = `${f} ${unit.label} → cfg ${si} ${unit.si}`;
-    } else {
-      hint.textContent = this._siHint(hintKind, isFinite(f) ? f : null);
     }
-    input.addEventListener("change", () => this._writeBack(input));
     const wrap = document.createElement("span");
     wrap.className = "inwrap";
     wrap.appendChild(input);
-    wrap.appendChild(hint);
+    if (unit && unit.suffix)
+      wrap.appendChild(this._el("span", "unit", unit.suffix));
     return wrap;
   },
 
   _select(path, val, options, emptyDeletes) {
     const sel = document.createElement("select");
+    sel.disabled = true;                    /* L-35：写腿随 M4 重接 */
     if (path) sel.dataset.path = path;
     this._tagField(sel, path);
     sel.dataset.kind = "str";
@@ -399,7 +945,7 @@ export const FormPanel = {
     for (const o of options) {
       const opt = document.createElement("option");
       opt.value = o;
-      opt.textContent = o === "" ? "（不设置）" : o;
+      opt.textContent = o === "" ? "(none)" : o;
       sel.appendChild(opt);
     }
     if (val != null && val !== "") {
@@ -410,13 +956,13 @@ export const FormPanel = {
       }
       sel.value = val;
     }
-    sel.addEventListener("change", () => this._writeBack(sel));
     return sel;
   },
 
   /* 三态布尔选择（真/false/未设置=删除字段）——bool 走 JSON 线格式 */
   _boolSelect(path, val, label) {
     const sel = document.createElement("select");
+    sel.disabled = true;                    /* L-35：写腿随 M4 重接 */
     if (path) sel.dataset.path = path;
     this._tagField(sel, path);
     sel.dataset.kind = "bool";
@@ -429,112 +975,35 @@ export const FormPanel = {
       sel.appendChild(o);
     }
     sel.value = val === true ? "true" : val === false ? "false" : "";
-    sel.addEventListener("change", () => this._writeBack(sel));
     return sel;
   },
 
-  /* 参数区段头(08-31bz: COMSOL group header——色带 + 可折叠)
-   * 2026-09-02 审查修复：键盘可达（role=button + Enter/Space + aria-expanded） */
-  _sec(title, collapsed, count) {
-    const head = this._el("div", "sec-head", title);
-    const body = this._el("div", "sec-body");
-    /* 折叠带可选计数 badge：让默认收起的分节"一眼可扫"（复用材料极点数法） */
-    if (count != null) head.appendChild(this._el("span", "sec-badge", String(count)));
-    head.setAttribute("role", "button");
-    head.tabIndex = 0;
-    head.setAttribute("aria-expanded", collapsed ? "false" : "true");
-    if (collapsed) { head.classList.add("collapsed"); body.style.display = "none"; }
-    const toggle = () => {
-      head.classList.toggle("collapsed");
-      const open = !head.classList.contains("collapsed");
-      body.style.display = open ? "" : "none";
-      head.setAttribute("aria-expanded", open ? "true" : "false");
-    };
-    head.addEventListener("click", toggle);
-    head.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
-    });
-    return { head, body };
-  },
-
-  /* 状态化折叠组（材料卡 ε/μ/极点分组；复用 .sec-head/.sec-body 视觉，
-   * open 状态按 key 持久——rerender/加 pole 后不自动收起，2026-09） */
-  _msec(key, title, collapsedDefault) {
-    const stored = (this._msecOpen && key in this._msecOpen)
-      ? this._msecOpen[key] : collapsedDefault;
-    const open = !stored;
-    const head = this._el("div", "sec-head", title);
-    const body = this._el("div", "sec-body");
-    if (!open) { head.classList.add("collapsed"); body.style.display = "none"; }
-    head.setAttribute("role", "button");
-    head.tabIndex = 0;
-    head.setAttribute("aria-expanded", open ? "true" : "false");
-    const toggle = () => {
-      head.classList.toggle("collapsed");
-      const now = !head.classList.contains("collapsed");
-      body.style.display = now ? "" : "none";
-      head.setAttribute("aria-expanded", now ? "true" : "false");
-      this._msecOpen[key] = !now;
-    };
-    head.addEventListener("click", toggle);
-    head.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); }
-    });
-    return { head, body };
-  },
-
-  /* 材料场形态胶囊（a16 线格式：iso=标量基值 | diag=对角命名键；
-   * 张量态已随 P2-5 从线格式删除） */
-  _matPills(path, base, mode) {
-    const pills = this._el("span", "mode-pills");
-    for (const [m, t] of [["iso", "各向同性"], ["diag", "对角"]]) {
-      const b = this._el("button", "mode-pill" + (mode === m ? " on" : ""), t);
-      b.type = "button";
-      b.addEventListener("click", () => this._matMode(path, base, m));
-      pills.appendChild(b);
-    }
-    return pills;
-  },
-
+  /* 材料场编辑器（L-35 拔线后 = 只读；写腿随 M4）。2026-11-25 收编：
+   * 形态与值行都走 _row（表单行唯一资产），不再手搓 .frow。 */
   _matEditor(path, mt, base, name) {
     const frag = document.createDocumentFragment();
     const AX = ["xx", "yy", "zz"];
     const mode = AX.some((a) => mt[base + "_" + a] !== undefined)
       ? "diag" : "iso";
-    const pillRow = this._el("div", "frow mfield-pills");
-    pillRow.appendChild(this._matPills(path, base, mode));
-    frag.appendChild(pillRow);
-    const row = this._el("div", "frow mfield-row");
-    const lb = this._el("label", "flabel");
-    lb.textContent = name;
-    row.appendChild(lb);
+    frag.appendChild(this._row("Shape", this._el("span", "tag",
+      mode === "diag" ? "diagonal" : "isotropic")));
     if (mode === "iso") {
-      const inpWrap = this._input(path + "." + base, mt[base] ?? 1, "num");
-      const inp = inpWrap.querySelector("input");
-      if (inp) {
-        if (!inp.getAttribute("aria-label")) inp.setAttribute("aria-label", name);
-        if (!inp.id) inp.id = "fld-" + (++this._fldSeq);
-        lb.htmlFor = inp.id;
-      }
-      row.appendChild(inpWrap);
+      frag.appendChild(this._row(name,
+        this._input(path + "." + base, mt[base] ?? 1, "num")));
     } else {
       const bv = mt[base] ?? 1;
-      AX.forEach((a, idx) => {
+      const wraps = AX.map((a) => {
         const key = base + "_" + a;
         const inpWrap = this._input(path + "." + key, mt[key], "num");
         const inp = inpWrap.querySelector("input");
-        if (inp) {
-          inp.placeholder = String(bv);   /* 空槽 = 回落基值 */
-          if (!inp.id) inp.id = "fld-" + (++this._fldSeq);
-          inp.setAttribute("aria-label", name + " " + a);
-          inp.dataset.emptyDeletes = "1"; /* 清空 = 删命名键 */
-          if (idx === 0) lb.htmlFor = inp.id;
-          inp.title = "空 = 基值 " + bv;
-        }
-        row.appendChild(inpWrap);
+        inp.placeholder = String(bv);   /* 空槽 = 回落基值 */
+        inp.dataset.emptyDeletes = "1"; /* 清空 = 删命名键 */
+        inp.title = "empty = base value " + bv;
+        inp.setAttribute("aria-label", name + " " + a);
+        return inpWrap;
       });
+      frag.appendChild(this._row(name, ...wraps));
     }
-    frag.appendChild(row);
     return frag;
   },
 
@@ -542,117 +1011,6 @@ export const FormPanel = {
   _fldSeq: 0,
   _msecOpen: {},      // 折叠组 open 状态（key 持久，rerender 不复位）
   _poleOpen: {},      // 单 pole 折叠状态（两级折叠）
-
-  _row(label, ...rest) {
-    const controls = rest.filter((c) => c && c.nodeType);
-    const tip = rest.find((c) => typeof c === "string");
-    const row = this._el("div", "frow");
-    const lab = this._fillLabel(this._el("label", "flabel"), label);
-    /* label 兜底（P1-9）：.flabel 110px 定宽 + ellipsis 截断后悬停必显全文。
-     * 只改 attribute（title）赋值，零 innerHTML：有 tip（语义提示）时
-     * 拼接展示 label 全称，无 tip 时 title 直接取 label。 */
-    if (label) lab.title = tip && tip !== label ? tip + " · " + label : label;
-    row.appendChild(lab);
-    for (const c of controls) row.appendChild(c);
-    /* 可访问名称：label for → 第一个控件；其余控件 aria-label（向量槽）。
-     * 控件可能是裸 select/button，也可能包在 .inwrap span 里 */
-    const focusables = [];
-    for (const c of controls) {
-      if (["SELECT", "BUTTON", "INPUT", "TEXTAREA"].includes(c.tagName))
-        focusables.push(c);
-      else if (c.querySelectorAll)
-        focusables.push(...c.querySelectorAll("input, select, textarea"));
-    }
-    focusables.forEach((ctl, idx) => {
-      if (!ctl.id) ctl.id = "fld-" + (++this._fldSeq);
-      if (idx === 0) lab.htmlFor = ctl.id;
-      else if (!ctl.getAttribute("aria-label"))
-        ctl.setAttribute("aria-label", label + " " + (idx + 1));
-    });
-    return row;
-  },
-
-  _vec(label, path, arr, n, hintKind) {
-    const parts = [];
-    for (let i = 0; i < n; i++) {
-      parts.push(this._input(path + "." + i, arr ? arr[i] : 0, "num", hintKind));
-    }
-    return this._row(label, ...parts);
-  },
-
-  /* 范围编辑器(2026-09 站长裁决)：一行一轴，显式 min/max 两槽。
-   * data-path 保持 .0/.1——cfg 仍是 [lo, hi] 数组（校验/线格式不受扰） */
-  _rangeRow(label, path, arr, hintKind) {
-    const row = this._el("div", "frow");
-    const lb = this._el("label", "flabel");
-    this._fillLabel(lb, label);
-    row.appendChild(lb);
-    const mk = (slot, tag) => {
-      const g = this._el("span", "rng");
-      const t = this._el("span", "rng-tag");
-      t.textContent = tag;
-      g.appendChild(t);
-      const inpWrap = this._input(path + "." + slot,
-        Array.isArray(arr) ? arr[slot] : undefined, "num", hintKind);
-      const inp = inpWrap.querySelector("input");
-      if (inp) {
-        if (!inp.id) inp.id = "fld-" + (++this._fldSeq);
-        inp.setAttribute("aria-label", label + " " + tag);
-        if (slot === 0) lb.htmlFor = inp.id;   // 组标签关联 min 槽
-      }
-      g.appendChild(inpWrap);
-      return g;
-    };
-    row.appendChild(mk(0, "min"));
-    row.appendChild(mk(1, "max"));
-    return row;
-  },
-
-  _matMode(path, base, to) {
-    const mt = getPath(this.cfg, path);
-    if (!mt) return;
-    const keys = ["xx", "yy", "zz"].map((a) => base + "_" + a);
-    const cur = keys.some((k) => mt[k] !== undefined) ? "diag" : "iso";
-    if (cur === to) return;
-    if (to === "iso") {
-      const bv = mt[keys[0]] ?? mt[base] ?? 1;
-      for (const k of keys) submitField(path + "." + k, null);
-      submitField(path + "." + base, bv);
-    }
-    this._rerender();
-  },
-
-  /* 字段提交（2026-11-23 纯投影）：**不写本地模型**，发一条 set 意图；
-   * 界面更新由下一次快照重画（服务端是唯一真相）。 */
-  _writeBack(input) {
-    if (!input.dataset.path) return;
-    const raw = input.value.trim();
-    const path = input.dataset.path;
-    /* 三态布尔：— 删除 / true|false 写 JSON 布尔 */
-    if (input.dataset.kind === "bool") {
-      submitField(path, raw === "" ? null : (raw === "true"));
-      return;
-    }
-    /* 「空 = 不设置」的可选枚举（如 from_face）选回空时删除字段，
-     * 而不是写出 ""（schema 是 Optional[Literal]，空串必报错） */
-    if (raw === "" && input.dataset.emptyDeletes) {
-      submitField(path, null);
-      return;
-    }
-    submitField(path, writeBackValue(raw, input.dataset.kind,
-                                     input.dataset.unit || null));
-  },
-
-  _card(headChildren, bodyEl) {
-    const card = this._el("div", "card");
-    const head = this._el("div", "card-head");
-    for (const c of headChildren) head.appendChild(c);
-    card.appendChild(head);
-    const body = this._el("div", "card-body");
-    body.appendChild(bodyEl);
-    card.appendChild(body);
-    return card;
-  },
 
   /* 卡头身份名（2026 统一语言）：四个对象族（geometry/source/monitor/materials）
    * 共用同一可编辑 name 输入，写回 cfg.<list>.<i>.name；复用 `_input` 的
@@ -662,9 +1020,9 @@ export const FormPanel = {
     /* 身份名只读：name 是身份不是字段（改名 = 断引用，见上）；要换名就
      * 重建对象（或脚本里删+建）。 */
     const span = this._el("span", "card-name card-name-ro",
-                          value || placeholder || "（未命名）");
-    span.title = "名称即身份 —— 改名请重建对象（或脚本里删+建）";
-    span.setAttribute("aria-label", ariaLabel || (value || "name") + " 名称");
+                          value || placeholder || "(unnamed)");
+    span.title = "Rename in the tree (click to select, then click the name)";
+    span.setAttribute("aria-label", ariaLabel || (value || "name") + " name");
     return span;
   },
 
@@ -677,239 +1035,118 @@ export const FormPanel = {
   },
 
   _delBtn(listPath, index, label) {
-    const b = this._el("button", "mini danger", label || "删除");
-    b.addEventListener("click", (e) => {
-      if (typeof uiConfirm === "function" && !uiConfirm("确定删除此项？（不可恢复）", e)) return;
-      const parts = String(listPath).split(".");
-      const head = parts[0];
-      const list = (this.cfg && this.cfg[head]) || [];
-      const item = list[Number(parts[1])];
-      if (!item) return;
-      if (parts.length === 2) {
-        /* 顶层对象：一条删除意图（等快照重画，不本地 splice） */
-        if (item.name) sendIntent(removeIntent(head, item.name));
-        return;
-      }
-      /* 子列表（极点/网格…）：整表替换意图 */
-      const field = parts.slice(2).join(".");
-      const next = (Array.isArray(item[field]) ? item[field] : []).slice();
-      next.splice(index, 1);
-      submitField(listPath, next);
-    });
-    return b;
+    /* L-35：删除腿已拔（随 M4 重接）——渲染为空，调用点原位保留签名。 */
+    return null;
   },
 
   _matNames() {
     return (this.cfg.materials || []).map((m) => m.name).filter(Boolean);
   },
 
-  /* ══════════════════ 各节（渲染进传入的 body 容器） ══════════════════ */
+  /* fdtd 域卡：内容 = DOMAIN_SCHEMA（模块级数据），这里只剩接线。 */
+  _simulation(body) {
+    /* 全局仿真设置卡：地址 "simulation"（文档 model.simulation） */
+    const commit = (field, literal) => {
+      exec("genie.set_named('simulation', " + field + "=" + literal + ")",
+        { echo: false }).catch(() => {});
+    };
+    const sim = (this.cfg && this.cfg.simulation) || {};
+    this.renderPage(GLOBAL_SCHEMA(this.cfg || {}, commit, sim), body);
+  },
 
   _domain(body) {
-    const d = this.cfg.domain || {};
-    /* 段 1: 范围 */
-    const s1 = this._sec("范围");
-    body.appendChild(s1.head); body.appendChild(s1.body);
-    s1.body.appendChild(this._rangeRow("x_range (µm)", "domain.x_range", d.x_range, "len"));
-    s1.body.appendChild(this._rangeRow("y_range (µm)", "domain.y_range", d.y_range, "len"));
-    s1.body.appendChild(this._rangeRow("z_range (µm)", "domain.z_range", d.z_range, "len"));
-    /* 段 2: 求解（时间/CFL）L4 渐进披露：高级参数默认折叠 */
-    const s2 = this._sec("求解 · 时间/CFL", true);
-    body.appendChild(s2.head); body.appendChild(s2.body);
-    s2.body.appendChild(this._row("total_time (fs)",
-      this._input("domain.total_time", d.total_time, "num", "time"),
-      "决定频域积分窗：谱分辨率 ≈ 1/total_time；跑的步数超出它则超出部分零贡献——设够（陷阱#7）"));
-    s2.body.appendChild(this._row("cfl", this._input("domain.cfl", d.cfl ?? 0.9, "num")));
+    const commit = (field, literal) => {
+      exec("genie.set_named('fdtd', " + field + "=" + literal + ")",
+        { echo: false }).catch(() => {});
+    };
+    this.renderPage(DOMAIN_SCHEMA(this.cfg || {}, commit), body);
+  },
 
-    const bt = this._el("div", "btable");
-    d.boundary = d.boundary || {};
-    for (const f of ["x_min", "x_max", "y_min", "y_max", "z_min", "z_max"]) {
-      const b = d.boundary[f] || {};
-      const line = this._el("div", "brow");
-      line.appendChild(this._el("span", "bface", f));
-      const kindSel = this._select("domain.boundary." + f + ".kind", b.kind || "pec",
-        ["pec", "pmc", "periodic", "pml", "bloch"]);
-      /* P2-5 a11y：bface 是 span 非 label——kind 下拉补可访问名 */
-      kindSel.setAttribute("aria-label", f + " 边界类型");
-      kindSel.setAttribute("title", f + " 边界类型（pec/pmc/periodic/pml/bloch）");
-      // kind 切换 → 重渲染该节（清理切走 kind 的专属残留参数）
-      kindSel.addEventListener("change", () => {
-        const face = d.boundary[f] || {};
-        const nk = face.kind || kindSel.value;
-        if (nk !== "pml") { delete face.layers; delete face.kappa_max; delete face.order; }
-        if (nk !== "bloch") { delete face.k; delete face.from_source; delete face.n_background; }
-        this._rerender();
-      });
-      line.appendChild(kindSel);
-      bt.appendChild(line);
-      const params = this._el("div", "bparams");
-      if ((b.kind || "pec") === "pml") {
-        const w = (lbl, key, val) => {
-          const inp = this._input("domain.boundary." + f + "." + key, val, "num");
-          inp.querySelector("input").setAttribute("aria-label", f + " pml " + lbl);
-          return this._row(lbl, inp);
-        };
-        params.appendChild(w("layers", "layers", b.layers ?? 12));
-        params.appendChild(w("κ (kappa_max)", "kappa_max", b.kappa_max ?? 1));
-        params.appendChild(w("order", "order", b.order ?? 3));
-      } else if (b.kind === "bloch") {
-        params.appendChild(this._vec("k 波矢 (rad/m)", "domain.boundary." + f + ".k", b.k, 3));
-        params.appendChild(this._row("跟随主源 (from_src)",
-          this._boolSelect("domain.boundary." + f + ".from_source",
-            b.from_source === true, "跟随主源 (from_src)")));
-        const nb = this._input("domain.boundary." + f + ".n_background",
-          b.n_background, "num");
-        nb.querySelector("input").setAttribute("aria-label", f + " bloch n_background");
-        params.appendChild(this._row("n_bg (n_background)", nb));
-      }
-      if (params.childNodes.length) bt.appendChild(params);
-    }
-    /* 段 3: 边界（六面边界类型）L4 渐进披露：默认折叠——6 面默认 pec 即可，高级再展开 */
-    const s3 = this._sec("边界 · 六面", true);
-    body.appendChild(s3.head); body.appendChild(s3.body);
-    s3.body.appendChild(bt);
-    s3.body.appendChild(this._el("div", "note",
-      "pml: layers/κ/order；bloch: k 波矢(rad/m) 或 from_src（从主源取 k）+ n_bg。"));
+  /* 输入框 → SI 数（裸数按字段单位换算；带后缀 0.5um 后缀优先）；
+   * 解析不了返回 null——调用方据此不发命令（半截输入不惊动 worker）。 */
+  /* 表格单元格输入（基元，住面板；kit 的 _ctl 通过 this 调）：
+   * 显示按 unitKind 换友好单位，读回给调用方 SI。默认只读。 */
+  _mtxInput(value, unitKind) {
+    const inp = document.createElement("input");
+    inp.type = "text";
+    inp.inputMode = "decimal";
+    inp.readOnly = true;
+    inp.tabIndex = -1;                 /* 只读格不进 Tab；可编辑由 _edit() 打开 */
+    inp.className = "mtx-in";
+    inp.value = _dispValue(value, FIELD_UNITS[unitKind] || null);
+    inp.dataset.unitKind = unitKind || "";
+    return inp;
+  },
+  /* 单位表入口：kit 不认识 FIELD_UNITS（不在它那边），经这里取。 */
+  _fieldUnit(kind) { return FIELD_UNITS[kind] || null; },
+  /* 值显示入口（同理）：SI → 友好单位字符串。 */
+  _dispVal(kind, v) { return _dispValue(v, FIELD_UNITS[kind] || null); },
+
+  _numFromInput(inp, unit) {
+    const t = String(inp && inp.value != null ? inp.value : "").trim();
+    if (!t) return null;
+    const suf = parseSuffixed(t);
+    if (!isNaN(suf)) return suf;
+    const f = parseFloat(t);
+    if (!isFinite(f)) return null;
+    return unit ? unit.toSI(f) : f;
+  },
+
+  /* mode 卡片（2026-11-24 站长拍：与 fdtd 卡片对称，2D）：
+   * 波导截面（轴/位置/两横轴窗口/背景 n）/ 基础格距（两横轴 d*，传播轴
+   * 禁止网格）/ 边界·四缘（横截面四真轴边）/ 求解（λ、n_modes、n_ref）。
+   * 数据源 = 快照 solvers[].config 里 mode 槽自己的包络——GUI 压平键只
+   * 装 fdtd，此卡片不读压平键。mode 无 source/monitor（本征问题）。 */
+  _mode(body) {
+    const sv = ((this.cfg && this.cfg.solvers) || [])
+      .find((s) => s && s.kind === "mode") || {};
+    const name = sv.name || "mode";
+    const commit = (field, literal) => {
+      exec("genie.set_named(" + JSON.stringify(name) + ", " + field + "="
+        + literal + ")", { echo: false }).catch(() => {});
+    };
+    this.renderPage(MODE_SCHEMA(this.cfg || {}, commit, name), body);
   },
 
   _mesh(body) {
-    /* Q30：基础格距住 domain（dx/dy/dz，dy/dz 留空 = 继承 dx）；
-     * mesh = 带名加密区对象列表（box 区间 + 每轴 factor 或绝对间距二选一）。 */
-    const sM = this._sec("基础格距 · domain");
-    body.appendChild(sM.head); body.appendChild(sM.body);
-    // 网格预览工具（app.js 把常驻 DOM 挂进 mount，监听不丢）
-    const mount = this._el("div");
-    mount.id = "mesh-mount";
-    sM.body.appendChild(mount);
-
-    const d = this.cfg.domain || {};
-    sM.body.appendChild(this._row("dx (µm)", this._input("domain.dx", d.dx, "num", "len")));
-    sM.body.appendChild(this._row("dy (µm)", this._input("domain.dy", d.dy, "num", "len")));
-    sM.body.appendChild(this._row("dz (µm)", this._input("domain.dz", d.dz, "num", "len")));
-
-    /* Q31 自动网格：auto 一键 → domain 段表（非均匀基准，几何+材料
-     * n(ω) 折影）；段表显示三轴摘要（改表走脚本 set_named——表是
-     * 普通数据）；清表回均匀 dx。 */
-    const spacing = (a) => d[`${a}_spacing`];
-    const hasTable = ["x", "y", "z"].some(spacing);
-    if (hasTable) {
-      const sT = this._sec("自动网格 · 段表（Q31）");
-      body.appendChild(sT.head); body.appendChild(sT.body);
-      const fmt = (t) => t.map((s) => `${(s.d * 1e9).toPrecision(3)}nm`).join(" | ");
-      for (const a of ["x", "y", "z"]) {
-        const t = spacing(a);
-        if (t) sT.body.appendChild(this._row(`${a}_spacing`,
-          this._el("span", "note", `${t.length} 段 · ${fmt(t)}`)));
-      }
-      sT.body.appendChild(this._el("div", "note",
-        "段表 = 非均匀基准（与 dx 互斥）；清除 = 删三张表回均匀 dx。"));
-      const clear = this._el("button", "mini danger", "清除段表");
-      clear.addEventListener("click", () => {
-        delete d.x_spacing; delete d.y_spacing; delete d.z_spacing;
-        this._rerender();
-      });
-      sT.body.appendChild(clear);
-    }
-    const auto = this._el("button", "mini", "⚡ 自动网格（按几何/材料）");
-    auto.addEventListener("click", async () => {
-      try {
-        await autoGrid();
-        this._rerender();
-      } catch (e) { apiNotice("自动网格：" + (e && e.message ? e.message : e), "err"); }
-    });
-    sM.body.appendChild(auto);
-
-    const list = this.cfg.mesh || [];
-    list.forEach((m, i) => {
-      const inner = document.createDocumentFragment();
-      inner.appendChild(this._rangeRow("x_range (µm)", `mesh.${i}.x_range`, m.x_range, "len"));
-      inner.appendChild(this._rangeRow("y_range (µm)", `mesh.${i}.y_range`, m.y_range, "len"));
-      inner.appendChild(this._rangeRow("z_range (µm)", `mesh.${i}.z_range`, m.z_range, "len"));
-      /* 每轴二选一：factor（>=1，缺省 1 = 该轴基础间距）或绝对间距
-       * （<= 基础间距；同轴两个都给有意义值 = 422）。 */
-      inner.appendChild(this._row("factor_x",
-        this._input(`mesh.${i}.factor_x`, m.factor_x ?? 1, "num")));
-      inner.appendChild(this._row("factor_y",
-        this._input(`mesh.${i}.factor_y`, m.factor_y ?? 1, "num")));
-      inner.appendChild(this._row("factor_z",
-        this._input(`mesh.${i}.factor_z`, m.factor_z ?? 1, "num")));
-      inner.appendChild(this._row("dx 绝对 (µm)",
-        undefined, "留空 = 用 factor_x；给了则覆盖该轴（须 <= 基础间距）",
-        this._input(`mesh.${i}.dx`, m.dx, "num", "len")));
-      inner.appendChild(this._row("dy 绝对 (µm)",
-        this._input(`mesh.${i}.dy`, m.dy, "num", "len")));
-      inner.appendChild(this._row("dz 绝对 (µm)",
-        this._input(`mesh.${i}.dz`, m.dz, "num", "len")));
-      inner.appendChild(this._row("growth_rate",
-        this._input(`mesh.${i}.growth_rate`, m.growth_rate ?? 1.2, "num")));
+    /* mesh 卡片 = MESH_SCHEMA + kit（2026-11-25）：每项一张卡，卡内是标准节。
+     * 地址 = <当前 fdtd 名>.<mesh 名>（改名走树）。 */
+    const sv = ((this.cfg && this.cfg.solvers) || [])
+      .find((x) => (x.kind || "fdtd") === "fdtd");
+    const solver = (sv && sv.name) || "fdtd";
+    for (const [m, i] of this._items(this.cfg.mesh || [])) {
+      const addr = solver + "." + m.name;
+      const commit = (field, literal) => {
+        exec("genie.set_named(" + JSON.stringify(addr) + ", " + field + "="
+          + literal + ")", { echo: false }).catch(() => {});
+      };
+      const wrap = this._el("div", "pane-body");
+      this.renderPage(MESH_SCHEMA(this.cfg || {}, commit, m), wrap);
       body.appendChild(this._card(
-        [this._headName(`mesh.${i}.name`, m.name, "mesh name",
-            (m.name || `mesh ${i + 1}`) + " 名称"),
-         this._el("span", "tag", "mesh"),
-         this._delBtn("mesh", i)],
-        inner));
-    });
-    const add = this._el("button", "mini", "+ mesh 区");
-    add.addEventListener("click", () => {
-      /* 加网格 = 一条命令（worker 建默认细化盒）；字段后续在卡里改 */
-      const name = "m" + (list.length + 1);
-      exec("genie.add_mesh(" + JSON.stringify(name) + ")", { fresh: false, echo: false })
-        .catch((e) => apiNotice("加网格失败：" + (e && e.message ? e.message : e), "err"));
-    });
-    body.appendChild(add);
+        [this._el("span", "pane-id-name", "Settings")], wrap));
+    }
   },
 
-  /* 材料「显示色」行（2026-10-21）：wire 字段 color 的 GUI 入口。
-   * 只影响 3D 视图材质色；未设置时显示"自动"取到的调色板色并可一键回收
-   * 到自动配色（删字段 → 前端散列）。颜色改动走 onFormMutate 同一收口：
-   * 3D 重绘 + 树刷新 + 校验 + 模型推送。 */
+  /* 材料「显示色」行（L-35 拔线后 = 只读展示当前色）。 */
   _colorRow(mt, path) {
-    const row = this._el("div", "frow color-row");
-    row.appendChild(this._el("label", "flabel", "显示色"));
     const field = this._el("span", "color-field");
     const autoHex = "#" + (typeof matColor === "function" ? matColor(mt.name) : 0x8E9BB4)
       .toString(16).padStart(6, "0");
     const norm = (v) => (typeof v === "string" && /^#?[0-9a-fA-F]{6}$/.test(v.trim())
       ? "#" + v.trim().replace(/^#/, "") : null);
-    const isAuto = !norm(mt.color);
     const cur = norm(mt.color) || autoHex;
-    const inp = document.createElement("input");
-    inp.type = "color";
-    inp.className = "color-inp";
-    inp.value = cur.toLowerCase();
-    inp.setAttribute("aria-label", "材料显示色");
-    inp.title = "3D 视图里这个材料的颜色";
-    const hex = this._el("span", "color-hex", cur.toUpperCase());
-    const autoBtn = this._el("button", "mini color-auto" + (isAuto ? " on" : ""), "自动");
-    autoBtn.type = "button";
-    autoBtn.title = "回到按材料名自动配色";
-    inp.addEventListener("input", () => {
-      hex.textContent = inp.value.toUpperCase();
-      autoBtn.classList.remove("on");
-    });
-    inp.addEventListener("change", () => {
-      hex.textContent = inp.value.toUpperCase();
-      autoBtn.classList.remove("on");
-      submitField(path + ".color", inp.value.toUpperCase());
-    });
-    autoBtn.addEventListener("click", () => {
-      inp.value = autoHex.toLowerCase();
-      hex.textContent = autoHex.toUpperCase();
-      autoBtn.classList.add("on");
-      submitField(path + ".color", null);      /* 删字段 = 回自动配色 */
-    });
-    field.appendChild(inp);
-    field.appendChild(hex);
-    field.appendChild(autoBtn);
-    row.appendChild(field);
-    return row;
+    const swatch = this._el("span", "color-hex", cur.toUpperCase());
+    swatch.style.background = cur.toLowerCase();
+    swatch.title = "Color of this material in the 3D view (editing returns with M4)";
+    field.appendChild(swatch);
+    return this._row("Display color", field);
   },
 
   _materials(body) {
     const list = this.cfg.materials || [];
     if (!list.length) {
-      body.appendChild(this._paneEmpty("materials", "还没有材料",
-        "从工具条 MATERIALS 添加，或在脚本里 genie.materials.add_const()"));
+      body.appendChild(this._paneEmpty("materials", "No materials yet",
+        "Add them in the script (rewiring pending)"));
       return;
     }
     this._items(list).forEach(([mt, i]) => {
@@ -920,25 +1157,28 @@ export const FormPanel = {
       headChildren.push(this._preview(
         "mat_" + mt.type));  /* 分型缩略图（R6；from_library 面已退役 R38） */
       headChildren.push(this._headName(`materials.${i}.name`, mt.name, "material name",
-        (mt.name || "材料 " + (i + 1)) + " 名称"));
+        (mt.name || "material " + (i + 1)) + " name"));
       const chip = this._el("span", "tag type", mt.type || "material");
-      chip.title = "材料类型（由工具栏按钮 / 代码决定）";
+      chip.title = "Material type (decided by the toolbar button / script)";
       headChildren.push(chip);
       headChildren.push(this._delBtn("materials", i));
       /* 显示色（2026-10-21）：材料节点上的 color 字段——只影响 3D 视图的
        * 材质色，与脚本 `.color('#RRGGBB')` 同一字段（不是 GUI 私有态）。 */
       inner.appendChild(this._colorRow(mt, `materials.${i}`));
       if (mt.type === "const") {
-        const bE = this._msec("mat" + i + ":eps", "ε · 介电常数", false);
+        const bE = this._msec("mat" + i + ":eps", "ε · permittivity", false);
         inner.appendChild(bE.head); inner.appendChild(bE.body);
         bE.body.appendChild(this._matEditor(`materials.${i}`, mt, "eps", "ε"));
 
-        const bM = this._msec("mat" + i + ":mu", "μ · 磁导率", true);
+        const bM = this._msec("mat" + i + ":mu", "μ · permeability", true);
         inner.appendChild(bM.head); inner.appendChild(bM.body);
         bM.body.appendChild(this._matEditor(`materials.${i}`, mt, "mu", "μ"));
       } else if (mt.type === "lorentz") {
-        const poles = Array.isArray(poles) ? poles : [];
-        const muPoles = Array.isArray(muPoles) ? muPoles : [];
+        /* 存量 bug 修正（2026-11-25）：原 `Array.isArray(poles)` 自引用
+         * （TDZ ReferenceError），lorentz 卡一直渲染不出来——真源是
+         * cfg 材料节点自己的 poles / mu_poles。 */
+        const poles = Array.isArray(mt.poles) ? mt.poles : [];
+        const muPoles = Array.isArray(mt.mu_poles) ? mt.mu_poles : [];
 
         const sc = (v) => (typeof v === "number" && isFinite(v) ? v : null);
 
@@ -949,50 +1189,10 @@ export const FormPanel = {
           const shape = isAx ? "axis" : "iso";
           const row = document.createDocumentFragment();
 
-          {
-            const sr = this._el("div", "frow");
-            sr.appendChild(this._el("label", "flabel", "形态"));
-            const pills = this._el("span", "mode-pills");
-            for (const [m, t] of [["iso", "各向同性"], ["axis", "轴向"]]) {
-              const bb = this._el("button", "mode-pill" + (shape === m ? " on" : ""), t);
-              bb.type = "button";
-              bb.addEventListener("click", () => {
-                const cur = mt[listKey][j];
-                const pick = sc(cur.omega_0) ?? sc(cur.omega_p) ?? 1e15;
-                const g = sc(cur.gamma) ?? 1e13;
-                const d = sc(cur.delta_eps) ?? 1;
-                const next = m === "axis"
-                  ? (cur.kind === "drude"
-                      ? { kind: cur.kind, omega_p: pick, gamma: g,
-                          axis: "z" }
-                      : { kind: cur.kind, omega_0: pick, gamma: g,
-                          delta_eps: d, axis: "z" })
-                  : (cur.kind === "drude"
-                      ? { kind: cur.kind, omega_p: pick, gamma: g }
-                      : { kind: cur.kind, omega_0: pick, gamma: g,
-                          delta_eps: d });
-                const arr = (listKey === "poles" ? poles : muPoles).slice();
-                arr[j] = next;
-                submitField(`materials.${i}.${listKey}`, arr);
-              });
-              pills.appendChild(bb);
-            }
-            sr.appendChild(pills);
-            row.appendChild(sr);
-          }
+          row.appendChild(this._row("Shape", this._el("span", "tag",
+            shape === "axis" ? "axial" : "isotropic")));
 
           const kindSel = this._select(P + ".kind", pl.kind, ["lorentz", "drude"]);
-          kindSel.addEventListener("change", () => {
-            const keep = isAx ? { axis: pl.axis } : {};
-            const arr = (listKey === "poles" ? poles : muPoles).slice();
-            arr[j] = kindSel.value === "drude"
-              ? Object.assign({ kind: "drude", omega_p: 1e16,
-                                gamma: pl.gamma ?? 1e13 }, keep)
-              : Object.assign({ kind: "lorentz", omega_0: 1e15,
-                                gamma: pl.gamma ?? 1e13,
-                                delta_eps: pl.delta_eps ?? 1 }, keep);
-            submitField(`materials.${i}.${listKey}`, arr);
-          });
           row.appendChild(this._row("kind", kindSel));
 
           const pk = "num";
@@ -1009,12 +1209,14 @@ export const FormPanel = {
             this._input(P + ".gamma", pl.gamma, pk, "ang")));
 
           if (shape === "axis") {
-            row.appendChild(this._row("轴",
+            row.appendChild(this._row("axis",
               this._select(P + ".axis", pl.axis, ["x", "y", "z"])));
             row.appendChild(this._el("div", "note",
-              "轴向 pole：挂在单个坐标轴（对角各向异性），每轴可各自一组 pole。" +
-              "各向同性 = 不选轴（自动展开到三根轴）。斜向/复数耦合已移除——" +
-              "它们在宽带时域会泵能（相位共轭 / 半格错位）。"));
+              "Axial pole: pinned to one coordinate axis (diagonal anisotropy); each "
+              + "axis may have its own pole set. Isotropic = no axis "
+              + "(expands to all three axes). Off-diagonal / complex "
+              + "coupling was removed — it pumps energy in broadband "
+              + "time domain (phase conjugation / half-cell mismatch)."));
           }
           const item = this._el("div", "poleitem");
           const ihead = this._el("div", "pi-head");
@@ -1024,7 +1226,6 @@ export const FormPanel = {
           ihead.appendChild(this._el("span", "tag",
             (listKey === "mu_poles" ? "μ" : "ε") + " pole " + (j + 1)));
           ihead.appendChild(this._el("span", "tag tagdim", pl.kind + " · " + shape));
-          ihead.appendChild(this._delBtn(`materials.${i}.${listKey}`, j));
           const ibody = this._el("div", "pi-body");
           ibody.appendChild(row);
           item.appendChild(ihead); item.appendChild(ibody);
@@ -1041,25 +1242,15 @@ export const FormPanel = {
           return item;
         };
 
-        const addPoleBtn = (listKey) => {
-          const b = this._el("button", "mini",
-            "+ " + (listKey === "poles" ? "ε pole" : "μ pole"));
-          b.addEventListener("click", () => {
-            const arr = (listKey === "poles" ? poles : muPoles).slice();
-            arr.push({ kind: "lorentz", omega_0: 1e15,
-                       gamma: 1e13, delta_eps: 1 });
-            submitField(`materials.${i}.${listKey}`, arr);
-          });
-          return b;
-        };
+        /* ＋pole 按钮已删（L-35，随 M4 重接） */
 
         /* G20：色散材料卡导出（逃生口，非库正典——库存 nk 数据，
          * pole 是按波段现算的暂态产物；文件名带波段/极点数可当溯源）。 */
         if (mt.type === "lorentz" && mt.name) {
           const dl = document.createElement("button");
           dl.className = "mini";
-          dl.textContent = "导出 .material.json";
-          dl.title = "下载本材料节点（裸 wire JSON，可直接粘回 materials）";
+          dl.textContent = "Export .material.json";
+          dl.title = "Download this material node (raw wire JSON, paste it back into materials)";
           dl.addEventListener("click", () => {
             const blob = new Blob([JSON.stringify(mt, null, 2)],
                                   { type: "application/json" });
@@ -1073,7 +1264,7 @@ export const FormPanel = {
         }
 
         /* 两级折叠·一级：ε 整块（ε_inf + ε 极点）常开；μ 整块默认收起 */
-        const bE = this._msec("mat" + i + ":eps", "ε · 介电常数（含色散）", false);
+        const bE = this._msec("mat" + i + ":eps", "ε · permittivity (dispersive)", false);
         if (poles.length) bE.head.appendChild(this._el("span", "sec-badge", String(poles.length)));
         inner.appendChild(bE.head); inner.appendChild(bE.body);
         bE.body.appendChild(this._matEditor(`materials.${i}`, mt, "eps_inf", "ε∞"));
@@ -1081,10 +1272,9 @@ export const FormPanel = {
         poles.forEach((pl, j) => peList.appendChild(poleItem("poles", pl, j)));
         bE.body.appendChild(peList);
         if (!poles.length) bE.body.appendChild(this._el("div", "note",
-          "暂无 ε 极点 —— 独立参数的多个 pole 请自行叠加（各向同性 / 轴向）"));
-        bE.body.appendChild(addPoleBtn("poles"));
+          "No ε poles yet — stack independent poles as needed (isotropic / axial)"));
 
-        const bM = this._msec("mat" + i + ":mu", "μ · 磁导率（含色散）", true);
+        const bM = this._msec("mat" + i + ":mu", "μ · permeability (dispersive)", true);
         if (muPoles.length) bM.head.appendChild(this._el("span", "sec-badge", String(muPoles.length)));
         inner.appendChild(bM.head); inner.appendChild(bM.body);
         bM.body.appendChild(this._matEditor(`materials.${i}`, mt, "mu_inf", "μ∞"));
@@ -1092,8 +1282,7 @@ export const FormPanel = {
         muPoles.forEach((pl, j) => pmList.appendChild(poleItem("mu_poles", pl, j)));
         bM.body.appendChild(pmList);
         if (!muPoles.length) bM.body.appendChild(this._el("div", "note",
-          "暂无 μ 极点 —— 需要时添加（μ 默认折叠，多数材料无需设置）"));
-        bM.body.appendChild(addPoleBtn("mu_poles"));
+          "No μ poles yet — add when needed (μ is collapsed by default; most materials need none)"));
       }
       body.appendChild(this._card(headChildren, inner));
     });
@@ -1102,8 +1291,8 @@ export const FormPanel = {
   _geometry(body) {
     const list = this.cfg.geometry || [];
     if (!list.length) {
-      body.appendChild(this._paneEmpty("structure", "还没有几何体",
-        "从工具条 STRUCTURES 选一个形状添加，或在脚本里 genie.geometry.add_box()"));
+      body.appendChild(this._paneEmpty("structure", "No geometry yet",
+        "Add them in the script (rewiring pending)"));
       return;
     }
     this._items(list).forEach(([g, i]) => {
@@ -1117,7 +1306,7 @@ export const FormPanel = {
       const matNames = this._matNames();
       const curMat = g.material || "";
       const defOpt = document.createElement("option");
-      defOpt.value = ""; defOpt.textContent = "（选择材料）";
+      defOpt.value = ""; defOpt.textContent = "(choose material)";
       matSel.appendChild(defOpt);
       for (const mn of matNames) {
         const o = document.createElement("option");
@@ -1127,16 +1316,14 @@ export const FormPanel = {
       }
       if (curMat && !matNames.includes(curMat)) {
         const o = document.createElement("option");
-        o.value = curMat; o.textContent = curMat + " (未定义)";
+        o.value = curMat; o.textContent = curMat + " (undefined)";
         o.selected = true;
         matSel.appendChild(o);
       }
-      matSel.addEventListener("change", () => {
-        submitField(`geometry.${i}.material`, matSel.value || null);
-      });
+      matSel.disabled = true;               /* L-35：写腿随 M4 重接 */
       /* 材料节（物理因果 RoundE）：几何身份=材料（名在卡头）；空间量入
        * 「位置与尺寸」，优先级（mesh 覆盖序）独立成节，与其余对象族同构。 */
-      const sGeo1 = this._sec("材料", false);
+      const sGeo1 = this._sec("Material", false);
       inner.appendChild(sGeo1.head); inner.appendChild(sGeo1.body);
       sGeo1.body.appendChild(this._row("material", matSel));
 
@@ -1150,42 +1337,25 @@ export const FormPanel = {
         : g.type === "ellipse_z" ? 4
         : g.type === "ring_z" ? 4
         : 1;
-      const sGeo2 = this._sec("位置与尺寸", true, posCount);
+      const sGeo2 = this._sec("Position & size", true, posCount);
       inner.appendChild(sGeo2.head); inner.appendChild(sGeo2.body);
       if (g.type === "box") {
         sGeo2.body.appendChild(this._rangeRow("x_range (µm)", `geometry.${i}.x_range`, g.x_range, "len"));
         sGeo2.body.appendChild(this._rangeRow("y_range (µm)", `geometry.${i}.y_range`, g.y_range, "len"));
         sGeo2.body.appendChild(this._rangeRow("z_range (µm)", `geometry.${i}.z_range`, g.z_range, "len"));
       } else if (g.type === "polygon_z" || g.type === "polygon_swept") {
-        /* 顶点编辑器：逐行 "x, y"（µm）；哨兵行写 "nan, nan" 或空行 */
+        /* 顶点编辑器（L-35 拔线后只读展示）；写腿随 M4 重接 */
         const ta = document.createElement("textarea");
         ta.className = "verts-editor";
         ta.id = `f-geometry-${i}-vertices`;
         ta.name = ta.id;
         ta.setAttribute("autocomplete", "off");
         ta.spellcheck = false;
+        ta.readOnly = true;
         ta.rows = Math.min(Math.max((g.vertices || []).length + 1, 4), 12);
         ta.value = (g.vertices || [])
           .map(p => (p[0] !== p[0] && p[1] !== p[1]) ? "nan, nan"
             : `${fmtUserNum(p[0] * 1e6)}, ${fmtUserNum(p[1] * 1e6)}`).join("\n");
-        ta.addEventListener("input", () => {
-          const verts = [];
-          for (const ln of ta.value.split("\n")) {
-            const t = ln.trim();
-            if (!t) continue;                       // 空行忽略
-            if (/^nan\s*,\s*nan$/i.test(t)) {       // 哨兵 → [null, null]（线格式）
-              verts.push([null, null]);
-              continue;
-            }
-            const parts = t.split(/[,\s]+/).filter(Boolean);
-            const x = parseFloat(parts[0]), y = parseFloat(parts[1]);
-            if (!isFinite(x) || !isFinite(y)) continue;  // 未完成行不打扰
-            verts.push([x * 1e-6, y * 1e-6]);            // µm → m
-          }
-          if (verts.length >= 3) {
-            submitField(`geometry.${i}.vertices`, verts);
-          }
-        });
         sGeo2.body.appendChild(this._row("vertices (µm)", ta));
         sGeo2.body.appendChild(this._rangeRow("z_range (µm)", `geometry.${i}.z_range`, g.z_range, "len"));
         if (g.type === "polygon_swept") {
@@ -1223,7 +1393,7 @@ export const FormPanel = {
         }
       }
       /* 优先级 · 网格（物理因果 RoundE）：mesh 覆盖序属求解参数，非空间量 */
-      const sGeo3 = this._sec("优先级 · 网格", true, 1);
+      const sGeo3 = this._sec("Priority · mesh", true, 1);
       inner.appendChild(sGeo3.head); inner.appendChild(sGeo3.body);
       sGeo3.body.appendChild(this._row("priority",
         this._input(`geometry.${i}.priority`, g.priority ?? 0, "num")));
@@ -1236,7 +1406,7 @@ export const FormPanel = {
       /* 渲染风缩略图（previews.js）：卡头左侧 44×44 预览（R1；R2 走 _preview 统一） */
       gHead.push(this._preview(g.type));
       gHead.push(this._headName(`geometry.${i}.name`, g.name,
-        `${GEO_TYPE_LABEL[g.type] || g.type} #${i + 1}`, (g.name || `${GEO_TYPE_LABEL[g.type] || g.type} #${i + 1}`) + " 名称"));
+        `${GEO_TYPE_LABEL[g.type] || g.type} #${i + 1}`, (g.name || `${GEO_TYPE_LABEL[g.type] || g.type} #${i + 1}`) + " name"));
       if (g.material) gHead.push(this._el("span", "tag", g.material));
       gHead.push(this._delBtn("geometry", i));
       body.appendChild(this._card(gHead, inner));
@@ -1244,174 +1414,56 @@ export const FormPanel = {
   },
 
   _source(body) {
+    /* source 卡 = SOURCE_SCHEMA + kit（2026-11-26）：地址 = <当前 fdtd 名>.<源名>。
+     * 目前重建了 soft_source；其它类型等各自的 schema（先给明说，不留旧手搓）。 */
+    const sv = ((this.cfg && this.cfg.solvers) || [])
+      .find((x) => (x.kind || "fdtd") === "fdtd");
+    const solver = (sv && sv.name) || "fdtd";
     const list = this.cfg.source || [];
     if (!list.length) {
-      body.appendChild(this._paneEmpty("soft_source", "还没有源",
-        "到 FDTD 页的 SOURCES 添加，或在脚本里 genie.fdtd.sources.add_plane_wave()"));
+      body.appendChild(this._paneEmpty("soft_source", "No sources yet",
+        "Add from the FDTD ribbon: Sources ▸ Soft source"));
       return;
     }
-    const FIELDS = {
-      soft_source: ["name", "freq", "bandwidth", "center", "size", "polarization"],
-      plane_wave: ["name", "freq", "bandwidth", "direction", "theta", "phi", "psi", "from_face"],
-      gaussian_beam: ["name", "freq", "bandwidth", "direction", "theta", "phi", "psi",
-                      "from_face", "radius"],
-    };
-    this._items(list).forEach(([s, i]) => {
-      const inner = document.createDocumentFragment();
-      /* 命名单一位置 = 卡头（可编辑名输入，见 _headName） */
-      /* 波形与频谱节（物理因果 RoundE）：源的光谱/时序/幅度——freq/带宽/delay/
-       * phase/amplitude 收进首节；传播方向与注入位置各自成节，源面板物理因果化。 */
-      const sSrc1 = this._sec("波形与频谱", false);
-      inner.appendChild(sSrc1.head); inner.appendChild(sSrc1.body);
-      sSrc1.body.appendChild(this._row("freq (THz)",
-        this._input(`source.${i}.freq`, s.freq, "num", "freq")));
-      sSrc1.body.appendChild(this._row("bandwidth (THz)",
-        this._input(`source.${i}.bandwidth`, s.bandwidth, "num", "freq")));
-      /* 公共时序/幅度（两入口都有） */
-      sSrc1.body.appendChild(this._row("delay (fs)",
-        this._input(`source.${i}.delay`, s.delay ?? 0, "num", "time")));
-      sSrc1.body.appendChild(this._row("phase (rad)",
-        this._input(`source.${i}.phase`, s.phase ?? 0, "num")));
-      sSrc1.body.appendChild(this._row("amplitude",
-        this._input(`source.${i}.amplitude`, s.amplitude ?? 1, "num")));
-      if (FIELDS[s.type] && FIELDS[s.type].includes("center")) {
-        /* 复偏振：实部/虚部各一组，直接合并写回 [[re,im]×3]（线格式） */
-        const pol = (s.polarization && Array.isArray(s.polarization[0]))
-          ? s.polarization.map(p => [p[0] || 0, p[1] || 0])
-          : [[1, 0], [0, 0], [0, 0]];
-        const polRow = (label, which, tip) => {
-          const row = this._el("div", "frow");
-          const ld = this._el("label", "flabel", label);
-          if (tip) ld.title = tip;
-          row.appendChild(ld);
-          const wrap = this._el("div", "inwrap");
-          for (let k = 0; k < 3; k++) {
-            const inp = document.createElement("input");
-            inp.type = "text";
-            inp.inputMode = "decimal";
-            inp.value = String(pol[k][which]);
-            inp.id = `f-source-polarization-${which}-${k}`;
-            inp.name = inp.id;
-            inp.setAttribute("autocomplete", "off");
-            inp.setAttribute("aria-label", label + " " + ["x", "y", "z"][k]);
-            inp.addEventListener("input", () => {
-              const v = parseFloat(inp.value);
-              pol[k][which] = isFinite(v) ? v : 0;
-              submitField(`source.${i}.polarization`,
-                          pol.map(p => [p[0], p[1]]));
-            });
-            wrap.appendChild(inp);
-          }
-          row.appendChild(wrap);
-          return row;
-        };
-        /* 传播/偏振：点源以复偏振定取向（real/imag）+ kind（电/磁偶极子） */
-        const sSrcProp = this._sec("传播/偏振", true, 3);
-        inner.appendChild(sSrcProp.head); inner.appendChild(sSrcProp.body);
-        const POL_TIP = "默认偏振 = Ex（[1,0,0]）；平面波/高斯束默认才是 Ey。"
-          + "监视器 field 默认 Ey——两者不对齐会读到零场（陷阱#1：场分量要对齐）";
-        sSrcProp.body.appendChild(polRow("polar re", 0, POL_TIP));
-        sSrcProp.body.appendChild(polRow("polar im", 1, POL_TIP));
-        sSrcProp.body.appendChild(this._el("div", "note",
-          "默认偏振 = Ex（[1,0,0]）——与平面波/高斯束的默认 Ey 不同；"
-          + "监视器 field 默认 Ey，须与主偏振轴对齐，否则读到零场（陷阱#1）。"));
-        sSrcProp.body.appendChild(this._row("kind",
-          this._select(`source.${i}.kind`, s.kind || "electric", ["electric", "magnetic"])));
-        /* 位置与注入面 */
-        const sSrc2 = this._sec("位置与注入面", true, 2);
-        inner.appendChild(sSrc2.head); inner.appendChild(sSrc2.body);
-        sSrc2.body.appendChild(this._vec("center (µm)", `source.${i}.center`, s.center, 3, "len"));
-        sSrc2.body.appendChild(this._vec("size (µm)", `source.${i}.size`, s.size, 3, "len"));
-      } else {
-        const dirSel = this._select(`source.${i}.direction`, s.direction || "+", ["+", "-"]);
-        /* 语义可读（P 系列 a11y）：下拉只显示 "+"/"-"，无 UI 不给含义 →
-         * 显式可访问名 + 悬停提示（_select 无 title/aria-label 透传，
-         * 在返回元素上 setAttribute，零 innerHTML） */
-        dirSel.setAttribute("aria-label", "传播方向（+ = 默认正向，− = 反向）");
-        dirSel.setAttribute("title", "传播方向：+ 默认正方向，- 反方向");
-        const paSel = this._select(`source.${i}.propagation_axis`, s.propagation_axis || "",
-          ["", "x", "y", "z"], true);
-        paSel.setAttribute("aria-label", "传播轴（x/y/z；留空=删除该字段）");
-        paSel.setAttribute("title",
-          "传播轴：显式定轴（x/y/z）；留空=删除该字段，改由 size 恰一非正槽推断");
-        /* 传播/偏振：方向角（theta/phi/psi）+ 显式传播轴 */
-        const sSrcProp = this._sec("传播/偏振", true, 3);
-        inner.appendChild(sSrcProp.head); inner.appendChild(sSrcProp.body);
-        sSrcProp.body.appendChild(this._row("direction", dirSel));
-        sSrcProp.body.appendChild(this._row("theta/phi/psi (°)",
-          this._input(`source.${i}.theta`, s.theta ?? 0, "num"),
-          "默认 (0,0,0) = 沿 +z 传播、电场沿 Ey（不是 Ex！陷阱#1）；theta 极角 [0,180]，phi/psi 方位 [0,360)",
-          this._input(`source.${i}.phi`, s.phi ?? 0, "num"),
-          this._input(`source.${i}.psi`, s.psi ?? 0, "num")));
-        sSrcProp.body.appendChild(this._row("propagation_axis", paSel));
-        /* 位置与注入面 */
-        const sSrc2 = this._sec("位置与注入面", true,
-          s.type === "gaussian_beam" ? 4 : 3);
-        inner.appendChild(sSrc2.head); inner.appendChild(sSrc2.body);
-        sSrc2.body.appendChild(this._vec("center (µm)", `source.${i}.center`, s.center, 3, "len"));
-        sSrc2.body.appendChild(this._vec("size (µm)", `source.${i}.size`, s.size, 3, "len"));
-        if (s.type === "gaussian_beam") {
-          sSrc2.body.appendChild(this._row("radius (µm)",
-            this._input(`source.${i}.radius`, s.radius, "num", "len")));
-        }
-        // from_face 仅平面波/高斯束有此字段（soft_source 选了会被服务端静默忽略）
-        const ff = this._select(`source.${i}.from_face`, s.from_face || "",
-          ["", "x_min", "x_max", "y_min", "y_max", "z_min", "z_max"], true);
-        ff.setAttribute("aria-label", "注入面（贴面注入；留空=删除该字段）");
-        ff.setAttribute("title",
-          "注入面：一键贴面注入并钉轴/方向；留空=删除该字段，改用手动域内注入");
-        sSrc2.body.appendChild(this._row("from_face", ff,
-          "⚠ 贴面注入的定量透过率目前退化（T≈0.14 而非 ~1）——定量 T 请用 direction+size+center 手动配注入面于域内（陷阱#5）"));
+    for (const [src, i] of this._items(list)) {
+      if (src.type !== "soft_source") {
+        body.appendChild(this._card(
+          [this._el("span", "pane-id-name", "Settings")],
+          this._el("div", "note",
+            `${src.type}: card not rebuilt yet (source migration in progress)`)));
+        continue;
       }
+      const addr = solver + "." + src.name;
+      const commit = (field, literal) => {
+        exec("genie.set_named(" + JSON.stringify(addr) + ", " + field + "="
+          + literal + ")", { echo: false }).catch(() => {});
+      };
+      const wrap = this._el("div", "pane-body");
+      this.renderPage(SOURCE_SCHEMA(this.cfg || {}, commit, src), wrap);
       body.appendChild(this._card(
-        [this._preview(s.type),                     /* 渲染风缩略图（R2） */
-         this._headName(`source.${i}.name`, s.name, "source name",
-           (s.name || `源 ${i + 1}`) + " 名称"),
-         this._el("span", "tag type", s.type),
-         this._delBtn("source", i)],
-        inner));
-    });
-    const addRow = this._el("div", "frow");
-    const typeSel = this._select(null, "soft_source",
-      ["soft_source", "plane_wave", "gaussian_beam"]);
-    const add = this._el("button", "mini", "+ 源");
-    add.addEventListener("click", () => {
-      const t = typeSel.value;
-      list.push(t === "soft_source"
-        ? { type: "soft_source", freq: 300e12, bandwidth: 60e12, name: "s" + (list.length + 1),
-            center: [0, 0, -0.3e-6], polarization: [1, 0, 0] }
-        : t === "plane_wave"
-          ? { type: "plane_wave", freq: 300e12, bandwidth: 60e12,
-              name: "pw" + (list.length + 1), from_face: "z_min" }
-          : { type: "gaussian_beam", freq: 300e12, bandwidth: 60e12,
-              name: "gb" + (list.length + 1), from_face: "z_min", radius: 1e-6 });
-      this._rerender();
-    });
-    typeSel.setAttribute("aria-label", "新源类型");
-    addRow.appendChild(this._el("label", "flabel", "新类型"));
-    addRow.appendChild(typeSel);
-    addRow.appendChild(add);
-    if (this.only == null) body.appendChild(addRow);
+        [this._el("span", "pane-id-name", "Settings")], wrap));
+    }
   },
 
   _monitor(body) {
     const list = this.cfg.monitor || [];
     if (!list.length) {
-      body.appendChild(this._paneEmpty("mon_time", "还没有监视器",
-        "到 FDTD 页的 MONITORS 添加，或在脚本里 genie.fdtd.monitors.add_freq()"));
+      body.appendChild(this._paneEmpty("mon_time", "No monitors yet",
+        "Add them in the script (rewiring pending)"));
       return;
     }
     this._items(list).forEach(([m, i]) => {
       const inner = document.createDocumentFragment();
       /* 位置与尺寸（物理因果 RoundE：先定观测面/域，再定观测什么、怎么采样） */
-      const sMon2 = this._sec("位置与尺寸", true, 2);
+      const sMon2 = this._sec("Position & size", true, 2);
       inner.appendChild(sMon2.head); inner.appendChild(sMon2.body);
       sMon2.body.appendChild(this._vec("center (µm)", `monitor.${i}.center`, m.center, 3, "len"));
       sMon2.body.appendChild(this._vec("size (µm)", `monitor.${i}.size`, m.size, 3, "len"));
       sMon2.body.appendChild(this._el("div", "note",
-        "size 槽：0=单格 · 留空=保持 null（该轴全域）· 三槽全全域直接删 size 走默认。"));
+        "size slots: 0 = single cell · empty = stay null (whole axis) · "
+        + "all three whole-domain = drop size and use the default."));
       /* 观测节（RoundE 统一）：场分量/频率采样/窗函数收进观测节，与物理因果一致 */
-      const sMon1 = this._sec("观测", false);
+      const sMon1 = this._sec("Observe", false);
       inner.appendChild(sMon1.head); inner.appendChild(sMon1.body);
       const fieldOpts = m.type === "index" ? ["eps", "mu", "both"]
         : ["Ex", "Ey", "Ez", "Hx", "Hy", "Hz", "all"];
@@ -1449,32 +1501,12 @@ export const FormPanel = {
       body.appendChild(this._card(
         [this._preview("mon_" + m.type),            /* 渲染风缩略图（R2）：time/freq/index → mon_* 键 */
          this._headName(`monitor.${i}.name`, m.name, "monitor name",
-           (m.name || `监视器 ${i + 1}`) + " 名称"),
+           (m.name || `monitor ${i + 1}`) + " name"),
          this._el("span", "tag type", m.type),
          this._delBtn("monitor", i)],
         inner));
     });
-    const addRow = this._el("div", "frow");
-    const typeSel = this._select(null, "time", ["time", "freq", "index"]);
-    const add = this._el("button", "mini", "+ 监视器");
-    add.addEventListener("click", () => {
-      const t = typeSel.value;
-      // 平面波默认偏振 Ey —— 新监视器 field 默认 Ey 更友好（已知坑位）
-      list.push(t === "time"
-        ? { type: "time", name: "pt" + (list.length + 1), center: [0, 0, 0],
-            size: [0, 0, 0], field: "Ey" }
-        : t === "freq"
-          ? { type: "freq", name: "sp" + (list.length + 1), center: [0, 0, 0],
-              size: [0, 0, 0], field: "Ey", freq: { center: 300e12, bw: 120e12, n: 200 } }
-          : { type: "index", name: "ix" + (list.length + 1), center: [0, 0, 0],
-              size: [null, null, null], field: "eps" });
-      this._rerender();
-    });
-    typeSel.setAttribute("aria-label", "新监视器类型");
-    addRow.appendChild(this._el("label", "flabel", "新类型"));
-    addRow.appendChild(typeSel);
-    addRow.appendChild(add);
-    if (this.only == null) body.appendChild(addRow);
+    /* ＋监视器 假添加行已删（L-35）：同「+ 源」，只写本地不生效。 */
   },
 
 
@@ -1482,7 +1514,7 @@ export const FormPanel = {
     // G18 单旋钮：时长唯一在 domain.total_time（domain 节编辑）——run 节
     // 只剩超时；卡数由系统定（G78），步数是 build 后派生量。
     const r = this.cfg.run || {};
-    body.appendChild(this._row("超时 (s)",
+    body.appendChild(this._row("timeout (s)",
       this._input("run.timeout_s", r.timeout_s ?? 3600, "num")));
     // 提交面板挂载点（app.js 常驻 DOM 移进来; 2026-08-31au 方案A：
     // 执行动作归 run 节，与生成代码的 genie.run(...) 同构）
@@ -1496,3 +1528,6 @@ export const FormPanel = {
     }
   },
 };
+
+/* 页面层（行/表/节/渲染器）住 views/kit.js：这里是卡片与数据投影。 */
+Object.assign(FormPanel, KIT);

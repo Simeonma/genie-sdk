@@ -29,25 +29,6 @@
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body || {}) });
 
-  /* 事件桥的挂起请求（同一时刻一个；搬自 app.js 时漏带的声明） */
-  let _pending = null;
-
-  function _awaitEvent(kind, match, timeoutMs) {    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        if (_pending && _pending.timer === timer) _pending = null;
-        reject(new Error("result event timeout (worker busy?)"));
-      }, timeoutMs || 15000);
-      _pending = { kind, match, resolve, reject, timer };
-    });
-  }  function _settle(kind, data) {
-    const p = _pending;
-    if (!p || p.kind !== kind) return;
-    if (p.match && !p.match(data)) return;
-    clearTimeout(p.timer);
-    _pending = null;
-    p.resolve(data);
-  }
-
   async function exec(code, opts) {
     opts = opts || {};
     return post("/exec", {
@@ -57,9 +38,4 @@
     });
   }
 
-export { exec, get, post, _awaitEvent as awaitEvent, _settle as settle,
-         abandonWait };
-
-function abandonWait() {
-  if (_pending) { clearTimeout(_pending.timer); _pending = null; }
-}
+  export { exec, get, post };

@@ -1,181 +1,148 @@
 import { $ } from "./util.js";
 import { exec } from "../core/bus.js";
-import { openLibraryDialog } from "../faces/material.js";
-import { addIntents, sendIntents } from "./edit.js";
-import { selectObj } from "./inspector.js";
-import { GEO_TYPE_LABEL, previewEl } from "../views/previews.js";
+import { previewEl } from "../views/previews.js";
+import { cfg } from "./state.js";
+import { fdtdSeed, modeSeed, softSourceSeed, simulationSeed,
+         fieldsArg } from "./defaults.js";
 import { exitResult, resultMode } from "./result.js";
-import { cfg, toast } from "./state.js";
-import { runModel } from "./term.js";
-/* modules/toolbar.js — 工具条（加对象组 → 默认对象入 cfg；Run 按钮两态）
- * G5 拆分（2026-10-14）：自 app.js 机械切出，零行为变化；
- * 经典 script 按序加载，跨模块引用为运行期全局查找。 */
-/* ══ 工具条（阶段 7 后接线：点击 → 默认对象入活动 cfg → 全视图联动） ══ */
-export let _autoN = 0;
-
-export function _matNames() {
-  return ((cfg && cfg.materials) || []).map((m) => m && m.name).filter(Boolean);
-}
-
-/* 加对象 = 一条动作 → 身份 + 字段意图直发（2026-11-23 纯投影终态：
- * 不写本地模型、不靠 diff 反推；界面等快照回来重画）。
- * 结构/源/监视器需要材料——没有就明说，不悄悄补一个（服务端会拒）。 */
-export function addObject(kind, type) {
-  const key = kind === "mat" ? "materials" : kind === "geo" ? "geometry"
-    : kind === "src" ? "source" : "monitor";
-  const list = (cfg && cfg[key]) || [];
-  let mat = null;
-  if (kind !== "mat") {
-    const mats = _matNames();
-    if (!mats.length) {
-      toast("先添加一个材料（Materials → const）", "warn");
-      return;
-    }
-    mat = mats[0];
-  }
-  const n = ++_autoN;
-  let item = null;
-  if (kind === "mat") {
-    item = type === "lorentz"
-      ? { type: "lorentz", eps_inf: 1.5, mu_inf: 1.0, poles: [], mu_poles: [], name: `auto_lorentz_${n}` }
-      : { type: "const", eps: 2.1, mu: 1.0, name: `auto_const_${n}` };
-  } else if (kind === "geo") {
-    const base = { priority: 0, material: mat };
-    const H = 2e-7;
-    const G = {
-      box:           () => ({ ...base, type: "box",           x_range: [-1e-7, 1e-7], y_range: [-1e-7, 1e-7], z_range: [-1e-7, 1e-7] }),
-      sphere:        () => ({ ...base, type: "sphere",        center: [0, 0, 0], radius: 1e-7 }),
-      cylinder:      () => ({ ...base, type: "cylinder",      center: [0, 0, 0], radius: 1e-7, height: H }),
-      ngon_z:        () => ({ ...base, type: "ngon_z",        center: [0, 0, 0], n_sides: 6, circumradius: 1.2e-7, height: H }),
-      ellipse_z:     () => ({ ...base, type: "ellipse_z",     center: [0, 0, 0], rx: 1.2e-7, ry: 6e-8, height: H }),
-      ring_z:        () => ({ ...base, type: "ring_z",        center: [0, 0, 0], inner_radius: 5e-8, outer_radius: 1.1e-7, height: H }),
-      polygon_z:     () => ({ ...base, type: "polygon_z",     vertices: [[0, 0], [8e-8, 0], [4e-8, 7e-8]], z_range: [-1e-7, 1e-7] }),
-      polygon_swept: () => ({ ...base, type: "polygon_swept", vertices: [[0, 0], [8e-8, 0], [4e-8, 7e-8]], z_range: [-1e-7, 1e-7] }),
-    };
-    item = (G[type] || G.box)();
-  } else if (kind === "src") {
-    const F = 3e14, BW = 6e13;
-    const S = {
-      soft_source:   () => ({ type: "soft_source", delay: 0, phase: 0, name: `auto_dipole_${n}`, center: [0, 0, -2e-7], size: [0, 0, 0], polarization: [[1, 0], [0, 0], [0, 0]], amplitude: 1, kind: "electric", freq: F, bandwidth: BW }),
-      plane_wave:    () => ({ type: "plane_wave", delay: 0, phase: 0, name: `auto_pw_${n}`, direction: "+", amplitude: 1, center: null, theta: 0, phi: 0, psi: 0, size: null, propagation_axis: null, from_face: null, freq: F, bandwidth: BW }),
-      gaussian_beam: () => ({ type: "gaussian_beam", delay: 0, phase: 0, name: `auto_gb_${n}`, center: [0, 0, -2e-7], size: [4e-7, 4e-7, 0], amplitude: 1, direction: "+", radius: 2e-7, freq: F, bandwidth: BW }),
-    };
-    item = (S[type] || S.soft_source)();
-  } else if (kind === "mon") {
-    const M = {
-      time:  () => ({ type: "time", center: [0, 0, 2e-7], size: [0, 0, 0], down_sample: null, name: `auto_time_${n}`, field: "Ex" }),
-      freq:  () => ({ type: "freq", center: [0, 0, 2e-7], size: [2e-7, 2e-7, 2e-7], down_sample: null, apodize: null, name: `auto_freq_${n}`, field: "all", freq: { center: 3e14, bw: 1e14, n: 21 } }),
-      index: () => ({ type: "index", center: [0, 0, 0], size: [null, null, null], down_sample: null, name: `auto_index_${n}`, field: "eps" }),
-    };
-    item = (M[type] || M.time)();
-  }
-  if (!item) return;
-  if (!item.name) {
-    const base = "auto_" + type + "_";
-    const taken = new Set(list.map((x) => x && x.name).filter(Boolean));
-    let k = n;
-    while (taken.has(base + k)) k += 1;
-    item.name = base + k;
-  }
-  sendIntents(addIntents(kind, item.name, type, item));
-  const name = item.name;
-  /* 快照回来后才在树里选中（索引由服务端决定） */
-  setTimeout(() => {
-    const arr = (cfg && cfg[key]) || [];
-    const idx = arr.findIndex((x) => x && x.name === name);
-    if (idx >= 0) selectObj(key, idx);
-  }, 700);
-}
-
-export async function toolbarRun() {
-  const c = getCfg();
-  if (!c) { toast("还没有可运行的仿真——先运行脚本，或在表单里搭好配置", "warn"); return; }
-  await runModel();
-}
+import { runBuild, runMode, runModel } from "./term.js";
+/* modules/toolbar.js — 工具条（M1 重接：按钮 → exec → 公开动词）
+ *
+ * 本批接回（Q44 白名单：add_solver / run_fdtd / build_fdtd / run_mode）：
+ * - DESIGN ▸ Solver：fdtd / mode 声明按钮（genie.add_solver，省 name）
+ * - FDTD ▸ Simulation：Run（run_fdtd）+ Build（build_fdtd 预演）
+ * - MODE ▸ Simulation：Run（run_mode 缺省实例）
+ * 加对象组（材料/几何/源/监视器/分析）仍随 M3-M7 逐模块重接。
+ * 页签显隐由 term.js syncSolverTabs 按 cfg.solvers 投影。 */
+"use strict";
 
 export function buildToolbar() {
-  const mkShape = (type) => {
-    const b = document.createElement("button");
-    b.className = "tb-btn tb-shape";
-    const glabel = GEO_TYPE_LABEL[type] || type;
-    b.title = "添加 " + glabel + "（默认参数入活动 cfg）";
-    b.setAttribute("aria-label", "添加 " + glabel);
-    b.appendChild(previewEl(type));
-    b.addEventListener("click", () => addObject("geo", type));
-    return b;
-  };
-  const geoBtns = $("tb-geo-btns");
-  if (geoBtns)
-    ["box", "sphere", "cylinder", "ngon_z", "ellipse_z", "ring_z",
-     "polygon_z", "polygon_swept"].forEach((t) => geoBtns.appendChild(mkShape(t)));
-  const mkLabeled = (kind, type, iconKey, label) => {
-    const b = document.createElement("button");
-    b.className = "tb-btn tb-add";
-    b.title = "添加 " + label + "（默认参数入活动 cfg）";
-    b.appendChild(previewEl(iconKey));
-    b.appendChild(document.createTextNode(label));
-    b.addEventListener("click", () => addObject(kind, type));
-    return b;
-  };
-  const matBtns = $("tb-mat-btns");
-  if (matBtns) {
-    for (const [t, label] of [["const", "const"], ["lorentz", "lorentz"]])
-      matBtns.appendChild(mkLabeled("mat", t, "mat_" + t, label));
-    /* G20：library = 拟合对话框（pole 入 cfg）。不能复用 mkLabeled——
-     * 它挂的 addObject 会塞进线格式明确拒收的 from_library 死节点。 */
-    const libBtn = document.createElement("button");
-    libBtn.className = "tb-btn tb-add";
-    libBtn.title = "库材料：genie.add_material(name=名, type='library', library=名)";
-    libBtn.appendChild(previewEl("mat_library"));
-    libBtn.appendChild(document.createTextNode("library"));
-    libBtn.addEventListener("click", () => openLibraryDialog());
-    matBtns.appendChild(libBtn);
-  }
+  /* DESIGN ▸ Solver：声明按钮（站长拍 2026-11-24：没有缺省求解器）。 */
   const solverBtns = $("tb-solver-btns");
   if (solverBtns) {
     for (const t of ["fdtd", "mode"]) {
       const b = document.createElement("button");
       b.className = "tb-btn tb-add";
       b.type = "button";
-      b.title = "添加一个 " + t + " 求解器（genie.add_solver(type='"
-        + t + "')）";
+      b.title = "声明一个 " + t + " 求解器（genie.add_solver(type='" + t + "')）";
+      b.appendChild(previewEl("solver_" + t));
       b.appendChild(document.createTextNode(t));
       b.addEventListener("click", () => {
-        exec("genie.add_solver(type='" + t + "')",
-                      { echo: true }).catch(() => {});
+        /* 声明 + 播种同一条 exec：实例名由 add_solver 返回，mode 自动命名也指得对
+         * （默认值归 GUI，2026-11-26 站长拍）。 */
+        const seed = t === "fdtd" ? fdtdSeed() : modeSeed("z");
+        exec("s = genie.add_solver(type='" + t + "')\n"
+          + "genie.set_named(s, " + fieldsArg(seed) + ")",
+          { echo: true }).catch(() => {});
+        if (!(cfg && cfg.simulation && cfg.simulation.freq_center)) {
+          exec("genie.set_named('simulation', "
+            + fieldsArg(simulationSeed()) + ")", { echo: false }).catch(() => {});
+        }
       });
       solverBtns.appendChild(b);
     }
   }
-  const anaBtns = $("tb-ana-btns");
-  if (anaBtns) {
-    /* 2026-11-22：后处理配方（Q11）——一句命令；实例名由 SDK 起
-     * （add_analysis 省 name = analysis/analysis_2/…）。 */
+
+  /* FDTD ▸ Mesh：带名加密区（genie.<fdtd>.add_mesh(name)）；名字自动编号，
+   * 因为 add_mesh 必须带名字（不像 add_solver 能省略）。 */
+  const meshBtns = $("tb-mesh-btns");
+  if (meshBtns) {
     const b = document.createElement("button");
     b.className = "tb-btn tb-add";
     b.type = "button";
-    b.title = "添加后处理配方（genie.add_analysis()）";
-    b.appendChild(document.createTextNode("analysis"));
+    b.title = "加一个带名加密区（genie.<fdtd>.add_mesh(name)）：box 区间 + 每轴 factor 或绝对步长";
+    b.appendChild(previewEl("mesh"));
+    b.appendChild(document.createTextNode("Refinement"));
     b.addEventListener("click", () => {
-      exec("genie.add_analysis()", { echo: true }).catch(() => {});
+      const sv = ((cfg && cfg.solvers) || []).find((x) => x.kind === "fdtd");
+      const solver = (sv && sv.name) || "fdtd";
+      const taken = new Set(((cfg && cfg.mesh) || []).map((m) => m.name));
+      let name = "mesh", i = 1;
+      while (taken.has(name)) { i += 1; name = "mesh_" + i; }
+      exec("genie." + solver + ".add_mesh(" + JSON.stringify(name) + ")",
+        { echo: true }).catch(() => {});
+      /* 默认值归 GUI（2026-11-25 站长拍）：建完立刻写一套可用的加密区——
+       * 范围 = 域范围、factor = 1、growth_rate = 1.2。 */
+      const dom = (cfg && cfg.domain) || {};
+      const dflt = (a) => {
+        const r = dom[`${a}_range`];
+        return Array.isArray(r) ? `(${r[0]}, ${r[1]})` : "(-1e-6, 1e-6)";
+      };
+      exec("genie.set_named(" + JSON.stringify(solver + "." + name)
+        + ", x_range=" + dflt("x") + ", y_range=" + dflt("y")
+        + ", z_range=" + dflt("z")
+        + ", factor_x=1, factor_y=1, factor_z=1, growth_rate=1.2)",
+        { echo: false }).catch(() => {});
     });
-    anaBtns.appendChild(b);
-  }
-  const srcBtns = $("tb-src-btns");  if (srcBtns) {
-    srcBtns.appendChild(mkLabeled("src", "soft_source", "soft_source", "dipole"));
-    srcBtns.appendChild(mkLabeled("src", "plane_wave", "plane_wave", "plane wave"));
-    srcBtns.appendChild(mkLabeled("src", "gaussian_beam", "gaussian_beam", "gaussian"));
-  }
-  const monBtns = $("tb-mon-btns");
-  if (monBtns) {
-    monBtns.appendChild(mkLabeled("mon", "time", "mon_time", "time"));
-    monBtns.appendChild(mkLabeled("mon", "freq", "mon_freq", "freq"));
-    monBtns.appendChild(mkLabeled("mon", "index", "mon_index", "index"));
+    meshBtns.appendChild(b);
   }
 
-  /* VIEW 页的 3D 显示开关镜像（2026-10-17 四页签）：真身仍是 3D 浮条上的
-   * #btn-*，这里只做第二入口——点击转发给真身，aria-pressed 由
-   * syncViewMirror() 在切页/点击后同步。 */
+  /* FDTD ▸ Sources：soft source（偶极子式点/小体源）。名字自动编号；
+   * 声明 + 默认值同一条 exec（默认值归 GUI，2026-11-26）。 */
+  const srcBtns = $("tb-src-btns");
+  if (srcBtns) {
+    const b = document.createElement("button");
+    b.className = "tb-btn tb-add";
+    b.type = "button";
+    b.title = "加一个软源（genie.<fdtd>.add_source(name, 'soft_source')）";
+    b.appendChild(previewEl("soft_source"));
+    b.appendChild(document.createTextNode("Soft source"));
+    b.addEventListener("click", () => {
+      const sv = ((cfg && cfg.solvers) || []).find((x) => x.kind === "fdtd");
+      const solver = (sv && sv.name) || "fdtd";
+      const taken = new Set(((cfg && cfg.source) || []).map((x) => x.name));
+      let name = "source", i = 1;
+      while (taken.has(name)) { i += 1; name = "source_" + i; }
+      exec("s = genie." + solver + ".add_source(" + JSON.stringify(name)
+        + ", 'soft_source')\n"
+        + "genie.set_named(s, " + fieldsArg(softSourceSeed()) + ")",
+        { echo: true }).catch(() => {});
+    });
+    srcBtns.appendChild(b);
+  }
+
+  /* FDTD ▸ Simulation：Run（主 CTA，两态）+ Build（预演，伴生钮）。 */
+  const fdtdRun = $("tb-fdtd-run-btns");
+  if (fdtdRun) {
+    const run = document.createElement("button");
+    run.className = "run-btn";
+    run.id = "submit";
+    run.appendChild(previewEl("play"));
+    const span = document.createElement("span");
+    span.id = "submit-label";
+    span.textContent = "Run";
+    run.appendChild(span);
+    run.addEventListener("click", () => {
+      if (resultMode) exitResult();   /* 结果态 = Switch to setting */
+      else runModel();                /* 编辑态 = 提交当前 fdtd 模型 */
+    });
+    fdtdRun.appendChild(run);
+
+    const build = document.createElement("button");
+    build.className = "tb-btn tb-add";
+    build.type = "button";
+    build.title = "本地预演（genie.build_fdtd()）：网格/步数检查，不提交云端";
+    build.appendChild(previewEl("build"));
+    build.appendChild(document.createTextNode("Build"));
+    build.addEventListener("click", () => runBuild());
+    fdtdRun.appendChild(build);
+    runBtnRefresh();
+  }
+
+  /* MODE ▸ Simulation：Run（genie.run_mode()，缺省实例名 mode）。 */
+  const modeRun = $("tb-mode-run-btns");
+  if (modeRun) {
+    const b = document.createElement("button");
+    b.className = "run-btn";
+    b.type = "button";
+    b.title = "运行 mode 求解（genie.run_mode()；多实例走脚本给名）";
+    b.appendChild(previewEl("play"));
+    b.appendChild(document.createTextNode("Run"));
+    b.addEventListener("click", () => runMode());
+    modeRun.appendChild(b);
+  }
+
+  /* VIEW 页的 3D 显示开关镜像：真身仍是 3D 浮条上的 #btn-*。 */
   const viewBtns = $("tb-view-btns");
   if (viewBtns) {
     for (const [src, icon, label] of [
@@ -199,29 +166,23 @@ export function buildToolbar() {
         const orig = $(src);
         if (!orig) return;
         orig.click();
-        setTimeout(syncViewMirror, 0);   /* 真身先翻转 aria-pressed，再回填镜像 */
+        setTimeout(syncViewMirror, 0);
       });
       viewBtns.appendChild(b);
     }
     syncViewMirror();
   }
-  const runMount = $("run-mount");
-  if (runMount && !runMount.firstChild) {
-    const b = document.createElement("button");
-    b.className = "run-btn";
-    b.id = "submit";
-    b.appendChild(previewEl("run"));   /* 灰蓝 3D 双 play（Lumerical 形制，无蓝底） */
-    const span = document.createElement("span");
-    span.id = "submit-label";
-    span.textContent = "Run";
-    b.appendChild(span);
-    b.addEventListener("click", () => {
-      if (resultMode) exitResult();   /* 结果态 = Switch to setting */
-      else toolbarRun();                        /* 编辑态 = Run 真提交 */
-    });
-    runMount.appendChild(b);
-    runBtnRefresh();
-  }
+  pruneEmptyGroups();
+}
+
+/* 空组不占位（2026-11-25）：组的存在由按钮决定——没有按钮就不画组名与
+ * 发丝线。M3-M7 把按钮接进 #tb-*-btns 后重跑本函数，组自动出现；不要用
+ * display 硬隐藏（组间发丝线靠 :not(.is-empty) 相邻选择器）。 */
+export function pruneEmptyGroups() {
+  document.querySelectorAll("#workspace-bar .tb-box").forEach((b) => {
+    const btns = b.querySelector(".tb-box-btns");
+    b.classList.toggle("is-empty", !btns || !btns.children.length);
+  });
 }
 
 /* VIEW 镜像状态同步：真身的 aria-pressed 是唯一真源，镜像只读它。 */
@@ -241,7 +202,5 @@ export function runBtnRefresh() {
   const b = $("submit");
   if (b) b.title = resultMode
     ? "返回编辑模式（不提交）——解锁表单继续调整"
-    : "运行当前配置的仿真（域/网格/结构/源/监视器/步数——即表单所见；进度滚在下方 terminal）";
+    : "提交当前 fdtd 模型（genie.run_fdtd()；进度滚在终端）";
 }
-
-/* 校验条（v1 val-bar 复用为 preview 状态条） */

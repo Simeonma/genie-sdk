@@ -1,11 +1,13 @@
-import { Dock } from "./dock.js";
-import { FormPanel } from "../views/form.js";
 import { renderInspector } from "./inspector.js";
-import { cfg, toast } from "./state.js";
+import { cancel } from "./app.js";
+import { toast } from "./state.js";
 import { runBtnRefresh } from "./toolbar.js";
-/* modules/result.js — 结果模式 + 结果标签卡（Plot 多卡 + 折线图 + 结果卡）
- * G5 拆分（2026-10-14）：自 app.js 机械切出，零行为变化；
- * 经典 script 按序加载，跨模块引用为运行期全局查找。 */
+import { sweepPaneEvent } from "./sweep.js";
+/* modules/result.js — 结果模式 + 进度 chip（L-35 拔线后 = 纯投影）
+ *
+ * Plot 多卡/折线/热图机器已删（站长拍 2026-11-23，随 L-43/M8 重接——
+ * 取数腿 resultMeta/resultSeries 属拼码，且 ring 侧本就丢弃 plot 事件）。
+ * 存活面：结果态进出与只读锁、lastJobId、进度/取消 chip、扫参进度。 */
 export let resultMode = false;
 
 /* 结果态锁：输入件 disabled 防键盘 + 工具栏加对象按钮 disabled；
@@ -17,18 +19,13 @@ export function __lockConfigInputs() {
   const c = document.getElementById("config-content");
   if (c) {
     /* 扫参面（参数页底部的入口 + 扫参页本身）是**只读模型上的新动作**：
-     * 扫描不写当前 cfg，所以结果态的读锁不该锁它——锁了就等于"跑过一次
-     * 之后扫参入口永远点不动"（2026-10-30 真机抓出：result-mode 下按钮
-     * disabled + pointer-events:none，站长看着像"扫参还没做"）。 */
+     * 扫描不写当前 cfg，所以结果态的读锁不该锁它。 */
     c.querySelectorAll("input, select, textarea").forEach(el => {
       if (el.closest(".sweep-page")) return;
       el.disabled = true;
     });
-    /* 面板内改 cfg 的按钮（+refine/删除/模式 pill…）同锁——cfg 只读；
-     * 折叠头是 div(role=button) 不受影响照常可点；新建 Plot 与扫参入口
-     * 例外 */
     c.querySelectorAll("button").forEach(b => {
-      if (b.closest(".plot-cta") || b.closest(".sweep-page")) return;
+      if (b.closest(".sweep-page")) return;
       b.disabled = true;
     });
   }
@@ -57,13 +54,13 @@ export function enterResult(silent = false) {
   if (resultMode) return;   /* 已在结果态：刷新 chip 即可，勿重弹 */
   document.body.classList.add("result-mode");
   resultMode = true;
-  renderInspector();        /* CTA 仅结果态（2026-10-14）——重渲染现身 */
+  renderInspector();
   __startResultLock();
   runBtnRefresh();          /* 模式状态由按钮文案(Switch to setting⇄Run)
-                               + 工具栏灰锁表达——徽标退役(2026-10-10 站长裁决) */
+                               + 工具栏灰锁表达 */
   refreshResultChip();
   if (!silent)
-    toast("已切结果模式——树选监视器 → 检查器「新建 Plot」；Switch to setting 回编辑", "ok");
+    toast("已切结果模式——Switch to setting 回编辑", "ok");
 }
 
 export function exitResult() {
@@ -71,372 +68,35 @@ export function exitResult() {
   resultMode = false;
   __stopResultLock();
   runBtnRefresh();
-  toast("已回编辑模式——点 Run 开始新仿真（Plot 标签常驻可看）", "ok");
+  toast("已回编辑模式——脚本编辑器可开新仿真", "ok");
 }
 
 export let resultStatus = null;
-export let lastJobId = "";
+export let lastJobId = "";    /* 最近完成的作业（job-done 事件维护）*/
 export function setResultStatus(v) { resultStatus = v; }
 export function setLastJobId(v) { lastJobId = v; }
-export let plots = [];      /* [{id, name, mon, field}] */
-lastJobId = "";    /* 最近完成的作业（job-done 事件维护）*/
-export let plotSeq = 0;
-export let activeTab = null;
-
-export function plotDefaultField(mon) {
-  const st = resultStatus;
-  const m = st && st.ok && (st.monitors || []).find(x => x.name === mon);
-  return (m && m.fields && m.fields[0]) || "Ex";
-}
-
-export async function pickDefaultField(mon, job) {
-  /* G148 产品走查修正（R24c）：字母序首字段可能是正交偏振的**零场**
-   * （实测：y 偏振源下 Ex 全零，缺省 Plot 成 0..1 平线——站长截图质询）。
-   * 缺省场 = 各场峰值最大者（每场一条 32 点探测曲线，本地零成本）；
-   * 探测失败回退字母序首。 */
-  try {
-    const st = resultStatus;
-    const m = st && st.ok && (st.monitors || []).find(x => x.name === mon);
-    const fields = (m && m.fields) || [];
-    if (fields.length <= 1) return fields[0] || "Ex";
-    let best = null, bestPeak = -1;
-    for (const fld of fields) {
-      /* v2 连线：genie.visualize(...) 的 series 事件带 peak（全量数组，不降采样） */
-      const d = await resultSeries({ mon, field: fld }).catch(() => null);
-      const pk = d && d.ok ? Number(d.peak || 0) : -1;
-      if (pk > bestPeak) { bestPeak = pk; best = fld; }
-    }
-    return best || fields[0];
-  } catch { return plotDefaultField(mon); }
-}
-
-export function addMonitorPlotCta(i) {
-  const m = ((cfg && cfg.monitor) || [])[i];
-  if (!m || !m.name) return;
-  const c = document.getElementById("config-content");
-  if (!c) return;
-  const bar = document.createElement("div");
-  bar.className = "plot-cta";
-  const b = document.createElement("button");
-  b.className = "mini plot-cta-btn";
-  b.textContent = "📈 新建 Plot";
-  b.title = "为该监视器建一张结果图（Visualize 模块页签）";
-  b.addEventListener("click", () => addPlot(m.name));
-  const hint = document.createElement("span");
-  hint.className = "plot-cta-hint";
-  hint.textContent = "…";
-  bar.appendChild(b); bar.appendChild(hint);
-  c.appendChild(bar);
-  const ready = (st) => {
-    const hit = st && st.ok && (st.monitors || []).some(x => x.name === m.name);
-    hint.textContent = hit ? "✓ 数据就绪（最近一次 Run）"
-      : "⚠ 不在最近一次结果里——重新 Run 后可画";
-  };
-  const st = resultStatus;
-  if (st && st.ok) { ready(st); return; }
-  if (!lastJobId) { hint.textContent = ""; return; }   /* 从未 Run：不发空查询 */
-  resultMeta()
-    .then(s2 => { resultStatus = s2; if (s2.ok) refreshResultChip(); ready(s2); })
-    .catch(() => { hint.textContent = ""; });
-}
-
-export async function addPlot(mon, field, jobId) {
-  /* v2：结果只有"当下那份"——job 参数只用于提示，取数始终是当前结果。 */
-  const job = jobId || lastJobId;
-  let st = resultStatus;
-  if (!st || !st.ok || (job && st.job_id !== job)) {
-    if (!job) { toast("暂无结果数据——先 Run 一次", "warn"); return; }
-    st = await resultMeta().catch(() => null);
-    resultStatus = st;
-    if (st && st.ok) refreshResultChip();
-  }
-  if (!st || !st.ok) { toast("暂无结果数据——先 Run 一次", "warn"); return; }
-  if (!(st.monitors || []).some(m => m.name === mon)) {
-    toast("「" + mon + "」不在作业 " + job + " 的结果里——Plot 画的是那次 Run 的数据", "warn");
-    return;
-  }
-  const spec = { id: "plot" + (++plotSeq),
-                 name: "Plot " + plotSeq,
-                 mon, field: field || await pickDefaultField(mon, job),
-                 jobId: job,
-                 mode: "1d", xAxis: null, yAxis: null, slices: {} };
-  plots.push(spec);
-  renderTabbar();
-  if (typeof Dock !== "undefined") Dock.activatePanel("visualize-panel");   /* 顶起模块 */
-  activateTab(spec.id);
-  toast(spec.name + "：" + spec.mon + " · |" + spec.field + "|", "ok");
-}
-
-export function closePlot(id) {
-  plots = plots.filter(p => p.id !== id);
-  const next = plots[0];
-  if (next) { activateTab(next.id); return; }
-  /* 全关 = 空态（引导页），页签条清空 */
-  activeTab = null;
-  const pv = document.getElementById("plot-view");
-  if (pv) pv.classList.add("hidden");
-  const empty = document.getElementById("viz-empty");
-  if (empty) empty.classList.remove("hidden");
-  renderTabbar();
-}
-
-export function renderTabbar() {
-  const bar = document.getElementById("view-tabs");
-  if (!bar) return;
-  bar.innerHTML = "";
-  const mk = (id, label, closable) => {
-    const t = document.createElement("div");
-    t.className = "view-tab" + (activeTab === id ? " active" : "");
-    t.setAttribute("role", "tab");
-    t.setAttribute("aria-selected", activeTab === id ? "true" : "false");
-    const sp = document.createElement("span");
-    sp.textContent = label;
-    t.appendChild(sp);
-    if (closable) {
-      const x = document.createElement("span");
-      x.className = "tab-close"; x.textContent = "×";
-      x.title = "关闭 " + label;
-      x.addEventListener("click", (e) => { e.stopPropagation(); closePlot(id); });
-      t.appendChild(x);
-    }
-    t.addEventListener("click", () => activateTab(id));
-    bar.appendChild(t);
-    if (activeTab === id)
-      t.scrollIntoView({ block: "nearest", inline: "nearest" });
-  };
-  for (const p of plots) mk(p.id, p.name, true);
-  /* 无 Plot = 页签条隐藏（chip 仍挂在 tabbar 右端），空态引导页现身 */
-  bar.classList.toggle("single", bar.children.length === 0);
-  const empty = document.getElementById("viz-empty");
-  if (empty) empty.classList.toggle("hidden", plots.length > 0);
-}
-
-export function activateTab(id) {
-  const spec = plots.find(p => p.id === id);
-  const pv = document.getElementById("plot-view");
-  if (!spec || !pv) return;
-  activeTab = id;
-  pv.classList.remove("hidden");
-  const empty = document.getElementById("viz-empty");
-  if (empty) empty.classList.add("hidden");
-  renderPlotInto(pv, spec);
-  renderTabbar();
-}
-
-export function renderPlotInto(view, spec) {
-  /* G148 轴分配表单（R24c 走查后重做，站长定）：列出全部变量轴，
-   * 用户给每条轴指派角色（x 轴 / y 轴 / 切片）——选一条 x = 1D，
-   * x+y = 2D，其余轴是切片：勾"手动"出滑块，缺省"峰"= 服务端
-   * 联合峰值切片。未动任何控件时请求不带 axes/slices（峰值列折叠，
-   * 行为零漂移）。场分量随时可换（缺省只是初始值）。 */
-  if (!spec) { view.textContent = ""; return; }
-  view.innerHTML = "";
-  view.style.display = "flex";
-  view.style.flexDirection = "column";
-  const st = resultStatus;
-  const mon = st && st.ok && (st.monitors || []).find(m => m.name === spec.mon);
-  const fields = (mon && mon.fields) || [spec.field];
-  const L = (mon && mon.axes_len) || {};
-  const AXES = (Object.keys(L).length ? Object.keys(L)
-    : (mon && mon.axes) || []).slice().sort((a, b) => {
-    const w = k => (k === "cell" ? 9
-      : (k === "freqs" || k === "time") ? 0
-      : (["x", "y", "z"].indexOf(k) + 1));
-    return w(a) - w(b);
-  });
-
-  if (!spec.role) {
-    spec.role = {};
-    const specAx = AXES.find(a => a === "freqs" || a === "time") || AXES[0] || null;
-    for (const a of AXES) spec.role[a] = (a === specAx) ? "x" : "slice";
-    spec.slices = {};
-    spec.touched = false;
-  }
-
-  const head = document.createElement("div");
-  head.className = "plot-head";
-  view.appendChild(head);
-  const form = document.createElement("div");
-  form.className = "plot-form";
-  view.appendChild(form);
-  const cv = document.createElement("canvas");
-  cv.className = "plot-canvas";
-  view.appendChild(cv);
-
-  const updHead = (txt) => {
-    head.textContent = spec.name + " — " + spec.mon + " · |" + spec.field
-      + "| · 作业 " + (spec.jobId || "?") + txt;
-  };
-
-  const _sel = (opts, val, onch) => {
-    const s = document.createElement("select");
-    s.className = "plot-sel";
-    for (const o of opts) {
-      const op = document.createElement("option");
-      op.value = o.v; op.textContent = o.t;
-      s.appendChild(op);
-    }
-    s.value = val;
-    s.addEventListener("change", () => onch(s.value));
-    return s;
-  };
-  const _lab = (txt, cls) => {
-    const l = document.createElement("span");
-    l.className = cls || "plot-ctl-lab"; l.textContent = txt;
-    return l;
-  };
-
-  /* 角色不变式：恰一条 x；y 至多一条且需有 x。冲突 = 旧角色降切片。
-   * 晋升候选排除刚改动的轴——否则"把唯一 x 降为切片"会被自指晋升
-   * 弹回，交互等于没发生（R24c e2e 抓出）。 */
-  const applyRole = (a, role) => {
-    const r = spec.role;
-    for (const k in r)
-      if (r[k] === role && k !== a && (role === "x" || role === "y"))
-        r[k] = "slice";
-    r[a] = role;
-    if (!Object.keys(r).some(k => r[k] === "x")) {
-      const cand = AXES.find(k => k !== a && r[k] !== "y" && (L[k] || 1) >= 1);
-      if (cand) r[cand] = "x";
-    }
-    for (const k in r)
-      if (r[k] !== "slice" && spec.slices[k] != null)
-        delete spec.slices[k];
-  };
-
-  const rebuild = () => {
-    form.innerHTML = "";
-    /* 场行 */
-    const frow = document.createElement("div");
-    frow.className = "axis-row";
-    frow.appendChild(_lab("场分量", "ax-name"));
-    frow.appendChild(_sel(fields.map(f => ({ v: f, t: f })),
-      spec.field, (v) => { spec.field = v; spec.touched = true; load(); }));
-    form.appendChild(frow);
-    /* 轴分配行 */
-    const cap = _lab("轴分配（选 1 条 = 曲线，2 条 = 切面，其余切片）",
-                     "form-cap");
-    form.appendChild(cap);
-    for (const a of AXES) {
-      const n = L[a] || 1;
-      const row = document.createElement("div");
-      row.className = "axis-row";
-      row.dataset.axis = a;
-      const nm = document.createElement("span");
-      nm.className = "ax-name"; nm.textContent = a;
-      row.appendChild(nm);
-      const ln = document.createElement("span");
-      ln.className = "ax-len"; ln.textContent = "×" + n;
-      row.appendChild(ln);
-      row.appendChild(_sel(
-        [{ v: "slice", t: "切片" }, { v: "x", t: "x 轴" }, { v: "y", t: "y 轴" }],
-        spec.role[a] || "slice", (v) => {
-          applyRole(a, v); spec.touched = true; rebuild(); load();
-        }));
-      if ((spec.role[a] || "slice") === "slice" && n >= 2) {
-        const manual = spec.slices[a] != null;
-        const cb = document.createElement("input");
-        cb.type = "checkbox"; cb.checked = manual;
-        cb.title = "勾选 = 手动定切片位置；不勾 = 峰值切片（服务端联合取峰）";
-        cb.addEventListener("change", () => {
-          if (cb.checked) spec.slices[a] = 0;
-          else delete spec.slices[a];
-          rebuild(); load();
-        });
-        const cl = _lab("手动", "ax-manual");
-        cl.insertBefore(cb, cl.firstChild);
-        row.appendChild(cl);
-        if (manual) {
-          const rg = document.createElement("input");
-          rg.type = "range"; rg.min = "0"; rg.max = String(n - 1);
-          rg.value = String(spec.slices[a]);
-          rg.className = "ax-slider";
-          const idx = _lab(a + "=" + spec.slices[a], "ax-idx");
-          rg.addEventListener("input", () => {
-            spec.slices[a] = parseInt(rg.value, 10);
-            idx.textContent = a + "=" + rg.value;
-          });
-          rg.addEventListener("change", () => { spec.touched = true; load(); });
-          row.appendChild(rg);
-          row.appendChild(idx);
-        }
-      }
-      form.appendChild(row);
-    }
-  };
-
-  const load = () => {
-    const ax = AXES.filter(a => spec.role[a] === "x")
-      .concat(AXES.filter(a => spec.role[a] === "y"));
-    const sl = {};
-    Object.entries(spec.slices)
-      .filter(([, v]) => v != null)
-      .forEach(([k, v]) => { sl[k] = Number(v); });
-    const params = { mon: spec.mon, field: spec.field };
-    /* 未 touched = 峰值列折叠缺省（零漂移）；动过 = 显式 axes/slices */
-    if (spec.touched && ax.length) params.axes = ax;
-    if (spec.touched && Object.keys(sl).length) params.slices = sl;
-    const slTxt = Object.entries(sl).map(([k, v]) => k + "=" + v).join(",");
-    const roleTxt = ax.length ? " · " + ax.join("×")
-      + (slTxt ? " · 切片 " + slTxt : "")
-      : "（峰值列）";
-    updHead(roleTxt);
-    cv.textContent = "";
-    /* v2 连线：genie.visualize(...) → 环上的 series 事件（全量数组） */
-    resultSeries(params)
-      .then(d => {
-        if (!d || !d.ok) { toast((d && d.detail) || "无数据", "warn"); return; }
-        if (d.dim === 2) _plotHeat(cv, d.x, d.y, d.z,
-                                   d.x_label, d.y_label, "|" + spec.field + "|");
-        else {
-          _plotLine(cv, d.x, d.y, d.x_label, "|" + spec.field + "|");
-          /* 全零明示（走查修正）：0..1 兜底轴是空数据假象，不当正字 */
-          if ((d.y || []).length && d.y.every(v => v === 0))
-            updHead(roleTxt + " · 该分量全零——多半是源偏振正交，换场分量");
-        }
-      })
-      .catch(e => { cv.textContent = "加载失败: " + (e && e.message ? e.message : e); });
-  };
-
-  rebuild();
-  load();
-}
 
 export function refreshResultChip() {
+  /* L-35：结果摘要（步数/dt/网格）来自已拔的 resultMeta——重接（M8）
+   * 前只显示作业号；进度段（下方 jobPhase/jobProgress）照常覆盖 chip。 */
   const chip = document.getElementById("result-chip");
   if (!chip) return;
   if (!lastJobId) { chip.classList.add("hidden"); chip.innerHTML = ""; return; }
-  resultMeta()
-    .then(st => {
-      resultStatus = st;
-      if (!chip) return;
-      if (!st || !st.ok) { chip.classList.add("hidden"); chip.innerHTML = ""; return; }
-      if (st.job_id) lastJobId = lastJobId || st.job_id;
-      chip.classList.remove("hidden");
-      chip.innerHTML = "";
-      const sp = document.createElement("span");
-      sp.textContent = "作业 " + (st.job_id || "?") + " · "
-        + (st.executed_steps || "?") + " 步 · dt="
-        + (st.dt != null ? Number(st.dt).toExponential(2) : "?") + " s · 网格 "
-        + (st.grid_shape || []).join("×");
-      sp.title = sp.textContent;
-      chip.appendChild(sp);
-    })
-    .catch(() => {});
+  chip.classList.remove("hidden");
+  chip.innerHTML = "";
+  const sp = document.createElement("span");
+  sp.textContent = "作业 " + lastJobId;
+  sp.title = sp.textContent;
+  chip.appendChild(sp);
 }
 
-/* 首屏：渲染页签条（空态引导）+ 拉一次结果摘要 */
-renderTabbar();
-refreshResultChip();
-
-/* ── 仿真流水进度（2026-10 架构收敛：阶段 = worker state 事件的事实）──
+/* ── 仿真流水进度（阶段 = worker state 事件的事实）──
  * 提交（上传 payload）→ 排队（云端繁忙）→ 计算（步进%）→ 取回（下载）。
  * 阶段由 worker state 事件 / output 快照驱动（term.js 转喂本入口）；
- * 计算段的百分比/ETA 仍由 job-progress 样本外推（下方 __jobProgress）。
- * 非计算段 = 不定宽滑动条（不知道总量，只让用户知道「活着、在哪步」）。 */
+ * 计算段的百分比/ETA 仍由 job-progress 样本外推（下方 __jobProgress）。 */
 /* ── 取消按钮（G4b 2026-10-21）：queue/run 态可取消作业 ──
- * 链路：浏览器 → 宿主 POST /api/jobs/{id}/cancel（登录闸 + key 回退）
- * → 网关 → 内核 runner.cancel（queued 落 killed / running killpg）。 */
+ * 链路：浏览器 → 宿主 POST /cancel（session 拦截 → /gw 直拨，整批一颗；
+ * 逐作业取消不公开）。 */
 export function _cancelJobButton(jobId) {
   const b = document.createElement("button");
   b.className = "jobprog-cancel";
@@ -448,8 +108,6 @@ export function _cancelJobButton(jobId) {
   b.onclick = () => {
     b.disabled = true;
     b.textContent = "取消请求已发送…";
-    /* v2 连线层：取消 = 与 genie.cancel 同一扇门（session 拦截 → /gw 直拨，
-     * 整批一颗；逐作业取消不公开）。 */
     cancel()
       .then(() => { b.textContent = "等待作业终态…"; })
       .catch(() => { b.disabled = false; b.textContent = "✕ 取消(重试)"; });
@@ -460,20 +118,14 @@ export function _cancelJobButton(jobId) {
 
 export const jobPhase = (function () {
   let phase = "idle", job = "";
-  let timer = null, probed = "";
   const LABEL = { submit: "提交作业中…", queue: "云端排队中",
                   run: "计算中", download: "取回结果中…" };
-  const stopProbe = () => {
-    if (timer) { clearInterval(timer); timer = null; }
-    probed = "";
-  };
-  function probe(jobId, txt) { return; }
   return function (d) {
     const chip = document.getElementById("result-chip");
     if (!chip) return;
     if (d && d.phase) phase = d.phase;
     if (d && d.job_id) job = d.job_id;
-    if (!(phase in LABEL)) { stopProbe(); return; }  /* idle/exec：chip 交还摘要 */
+    if (!(phase in LABEL)) return;   /* idle/exec：chip 交还摘要 */
     chip.classList.remove("hidden");
     chip.innerHTML = "";
     const wrap = document.createElement("span");
@@ -488,8 +140,6 @@ export const jobPhase = (function () {
     txt.textContent = LABEL[phase];
     wrap.appendChild(bar);
     wrap.appendChild(txt);
-    if (phase === "queue" && job) probe(job, txt);
-    else stopProbe();
     if (phase === "queue" || phase === "run")
       wrap.appendChild(_cancelJobButton(job));
     chip.appendChild(wrap);
@@ -507,9 +157,8 @@ export const jobProgress = (function () {
     samples.push({ t: now, step: step });
     if (samples.length > 40) samples.shift();
     const pct = Math.min(100, Math.round(step / nTot * 100));
-    /* P1-21 叙述帧（genie-digest/1；optics docs/DIGEST.md）：ETA 优先吃
-     * 内核权威值，样本外推只作旧帧回退；能量比仅在离开注入期（<1）后
-     * 显示——衰减读数 = 「仿真在收敛」。 */
+    /* P1-21 叙述帧（genie-digest/1）：ETA 优先吃内核权威值，样本外推
+     * 只作旧帧回退；能量比仅在离开注入期（<1）后显示。 */
     const dg = d.digest || null;
     const comp = (dg && dg.compute) || {};
     const dEta = Number(comp.eta_s);
@@ -558,13 +207,8 @@ export const jobProgress = (function () {
 
 /* ── 扫描进度（G168/R34，站长裁"汇总为王，点级降噪"）──
  * 数据链：SweepHandle 点/扫描终态 → worker sweep-progress 事件 →
- * term.js 转喂本入口。显示 = 「扫描 X/N · 失败 F」（F=0 不显示）+
- * 定宽进度条（总量已知，与单作业的样本外推不同）；逐点进度条/弹窗
- * 裁决不做（诊断入口 = 终端每点一行终态 + 扫描终态汇总行的失败点名，
- * 低频信息走低频通道）。终态事件交还 chip 给结果摘要。 */
+ * term.js 转喂本入口；扫参页（sweep.js）也吃一份。 */
 export const sweepProgress = function (d) {
-  /* G182 P6：扫参页也吃这一份（含"根本没跑起来"的 error 事件——它在
-   * 下面的 sweep_id 守卫之前，页面靠它把 Run 态收回来）。 */
   sweepPaneEvent(d);
   const chip = document.getElementById("result-chip");
   if (!chip || !d || !d.sweep_id) return;
@@ -595,213 +239,3 @@ export const sweepProgress = function (d) {
   wrap.appendChild(txt);
   chip.appendChild(wrap);
 };
-
-export function _fmtTick(v) {
-  const a = Math.abs(v);
-  if (a !== 0 && (a >= 1e4 || a < 1e-2)) return v.toExponential(1);
-  return String(Math.round(v * 1000) / 1000);
-}
-export function _drawTip(g, mx, my, text, W, H) {
-  g.font = "11px sans-serif";
-  const w = g.measureText(text).width + 14, h = 22;
-  let tx = mx + 12;
-  if (tx + w > W - 8) tx = mx - w - 12;
-  const ty = Math.max(6, Math.min(H - h - 6, my - h - 10));
-  g.fillStyle = "rgba(255,255,255,0.96)";
-  g.strokeStyle = "#d0d7de"; g.lineWidth = 1;
-  g.beginPath();
-  if (g.roundRect) g.roundRect(tx, ty, w, h, 6); else g.rect(tx, ty, w, h);
-  g.fill(); g.stroke();
-  g.fillStyle = "#1f2328"; g.textAlign = "left";
-  g.fillText(text, tx + 7, ty + 15);
-}
-export function _plotLine(canvas, xs, ys, xLabel, yLabel) {
-  const dpr = window.devicePixelRatio || 1;
-  const W = canvas.clientWidth || 320, H = canvas.clientHeight || 170;
-  canvas.width = W * dpr; canvas.height = H * dpr;
-  const g = canvas.getContext("2d");
-  const pad = { l: 56, r: 14, t: 14, b: 30 };
-  const x0 = pad.l, x1 = W - pad.r, y0 = pad.t, y1 = H - pad.b;
-  let yMax = 0;
-  for (const v of ys) if (v > yMax) yMax = v;
-  if (yMax <= 0) yMax = 1;
-  const xMin = xs.length ? xs[0] : 0, xMax = xs.length ? xs[xs.length - 1] : 1;
-  const X = i => x0 + (xs.length > 1 ? (xs[i] - xMin) / (xMax - xMin || 1) : 0.5) * (x1 - x0);
-  const Y = v => y1 - (v / yMax) * (y1 - y0);
-  const redraw = (hover) => {
-
-    g.setTransform(dpr, 0, 0, dpr, 0, 0);   /* 重置坐标系（幂等防叠加） */
-    g.clearRect(0, 0, W, H);
-    g.fillStyle = "#ffffff"; g.fillRect(0, 0, W, H);
-    /* 虚线网格（先网格后数据） */
-    g.strokeStyle = "#eceff3"; g.lineWidth = 1; g.setLineDash([3, 3]);
-    g.textAlign = "center"; g.font = "10px sans-serif"; g.fillStyle = "#6e7781";
-    for (let t = 0; t <= 4; t++) {
-      const xv = xMin + (xMax - xMin) * t / 4;
-      g.fillText(_fmtTick(xv), x0 + (x1 - x0) * t / 4, y1 + 14);
-      g.beginPath();
-      g.moveTo(x0 + (x1 - x0) * t / 4, y0); g.lineTo(x0 + (x1 - x0) * t / 4, y1); g.stroke();
-    }
-    g.textAlign = "right";
-    for (let t = 0; t <= 3; t++) {
-      const yv = yMax * t / 3;
-      g.fillText(_fmtTick(yv), x0 - 6, Y(yv) + 3);
-      if (t > 0) {
-        g.beginPath();
-        g.moveTo(x0, Y(yv)); g.lineTo(x1, Y(yv)); g.stroke();
-      }
-    }
-    g.setLineDash([]);
-    /* 曲线下淡色面积 + 主线 */
-    g.beginPath();
-    for (let i = 0; i < ys.length; i++)
-      i ? g.lineTo(X(i), Y(ys[i])) : g.moveTo(X(i), Y(ys[i]));
-    const fillPath = new Path2D();
-    for (let i = 0; i < ys.length; i++)
-      i ? fillPath.lineTo(X(i), Y(ys[i])) : fillPath.moveTo(X(i), Y(ys[i]));
-    fillPath.lineTo(X(ys.length - 1), y1); fillPath.lineTo(X(0), y1);
-    fillPath.closePath();
-    g.fillStyle = "rgba(31,111,235,0.09)"; g.fill(fillPath);
-    g.strokeStyle = "#1f6feb"; g.lineWidth = 1.8; g.stroke();
-    /* 边框（盖在网格上，实线细框） */
-    g.strokeStyle = "#d0d7de"; g.lineWidth = 1;
-    g.strokeRect(x0, y0, x1 - x0, y1 - y0);
-    /* 轴名（右下 x / 左上 y，小字灰） */
-    g.font = "10px sans-serif"; g.fillStyle = "#8b949e";
-    g.textAlign = "right"; g.fillText(xLabel, x1 - 4, y1 - 6);
-    g.textAlign = "left";
-    g.fillText(yLabel, x0 + 6, y0 + 12);
-    if (hover != null) {
-      g.strokeStyle = "#a5b4fc"; g.lineWidth = 1;
-      g.beginPath();
-      g.moveTo(X(hover), y0); g.lineTo(X(hover), y1); g.stroke();
-      g.fillStyle = "#1f6feb";
-      g.beginPath(); g.arc(X(hover), Y(ys[hover]), 3, 0, Math.PI * 2); g.fill();
-      g.strokeStyle = "#ffffff"; g.lineWidth = 1.2; g.stroke();
-      _drawTip(g, X(hover), Y(ys[hover]),
-        `${xLabel}=${_fmtTick(xs[hover])}   ${yLabel}=${_fmtTick(ys[hover])}`,
-        W, H);
-    }
-  };
-  redraw(null);
-  canvas.onmousemove = (ev) => {
-    const r = canvas.getBoundingClientRect();
-    const mx = ev.clientX - r.left;
-    if (mx < x0 || mx > x1) { redraw(null); return; }   /* 出界=回干净图 */
-    redraw(Math.max(0, Math.min(ys.length - 1,
-      Math.round((mx - x0) / (x1 - x0) * (ys.length - 1)))));
-  };
-  canvas.onmouseleave = () => redraw(null);
-}
-
-/* ── 2D 热图（G148 批 3）：z 行 = y 轴、列 = x 轴；渐变色标 + 悬停读数卡 ──
- * 色阶 = 5 停靠渐变（深蓝→青→绿→黄→深红）；数据已由服务端 max-pool
- * 降采样（峰值结构保留）。绘制幂等闭包与 _plotLine 同款：redraw(hover)
- * 全量重绘。G148 美学整备（R24c）：离屏 ImageData + 平滑缩放（双线性
- * 手感，替代马赛克块）+ 渐变圆角色标 + 十字准星 + 读数卡。 */
-export const _HEAT_STOPS = [[0, 0, 0.35], [0, 0.55, 0.85], [0.1, 0.8, 0.5],
-                     [0.95, 0.85, 0.2], [0.75, 0.05, 0.05]];
-export function _heatColor(t) {
-  t = Math.max(0, Math.min(1, t)) * (_HEAT_STOPS.length - 1);
-  const i = Math.min(_HEAT_STOPS.length - 2, Math.floor(t)), f = t - i;
-  const a = _HEAT_STOPS[i], b = _HEAT_STOPS[i + 1];
-  return [0, 1, 2].map(k => Math.round((a[k] + (b[k] - a[k]) * f) * 255));
-}
-export function _plotHeat(canvas, xs, ys, z, xLabel, yLabel, vLabel) {
-  const dpr = window.devicePixelRatio || 1;
-  const W = canvas.clientWidth || 480, H = canvas.clientHeight || 300;
-  canvas.width = W * dpr; canvas.height = H * dpr;
-  const g = canvas.getContext("2d");
-  const pad = { l: 56, r: 72, t: 14, b: 30 };
-  const x0 = pad.l, x1 = W - pad.r, y0 = pad.t, y1 = H - pad.b;
-  const ny = z.length, nx = z.length ? z[0].length : 0;
-  let vMin = Infinity, vMax = -Infinity;
-  for (const row of z) for (const v of row) {
-    if (v == null || !isFinite(v)) continue;
-    if (v < vMin) vMin = v;
-    if (v > vMax) vMax = v;
-  }
-  if (!isFinite(vMin)) { vMin = 0; vMax = 1; }
-  if (vMax <= vMin) vMax = vMin + 1;
-  /* 离屏 nx×ny 位图（NaN = 透明）→ 平滑缩放到绘图区 */
-  const off = document.createElement("canvas");
-  off.width = Math.max(1, nx); off.height = Math.max(1, ny);
-  const og = off.getContext("2d");
-  const img = og.createImageData(off.width, off.height);
-  for (let j = 0; j < ny; j++) {
-    for (let i = 0; i < nx; i++) {
-      const v = z[j][i];
-      const o = (j * nx + i) * 4;
-      if (v != null && isFinite(v)) {
-        const [r, gg, b] = _heatColor((v - vMin) / (vMax - vMin));
-        img.data[o] = r; img.data[o + 1] = gg;
-        img.data[o + 2] = b; img.data[o + 3] = 255;
-      }
-    }
-  }
-  og.putImageData(img, 0, 0);
-  const X = i => x0 + (nx > 1 ? i / (nx - 1) : 0.5) * (x1 - x0);
-  const Y = j => y1 - (ny > 1 ? j / (ny - 1) : 0.5) * (y1 - y0);
-  const redraw = (hover) => {
-    g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    g.clearRect(0, 0, W, H);
-    g.fillStyle = "#ffffff"; g.fillRect(0, 0, W, H);
-    g.imageSmoothingEnabled = true;
-    g.imageSmoothingQuality = "high";
-    g.drawImage(off, x0, y0, x1 - x0, y1 - y0);
-    g.strokeStyle = "#d0d7de"; g.lineWidth = 1;
-    g.strokeRect(x0, y0, x1 - x0, y1 - y0);
-    /* 轴刻度 */
-    g.font = "10px sans-serif"; g.fillStyle = "#6e7781"; g.textAlign = "center";
-    for (let t = 0; t <= 4; t++) {
-      const i = Math.round(t * (nx - 1) / 4);
-      g.fillText(_fmtTick(xs[i] ?? 0), x0 + (x1 - x0) * t / 4, y1 + 14);
-    }
-    g.textAlign = "left";
-    for (let t = 0; t <= 3; t++) {
-      const j = Math.round((1 - t / 3) * (ny - 1));
-      g.fillText(_fmtTick(ys[j] ?? 0), 4, Y(j) + 3);
-    }
-    /* 渐变色标（同色阶正插值）+ 圆角框 */
-    const grad = g.createLinearGradient(0, y1, 0, y0);
-    _HEAT_STOPS.forEach((c, i) =>
-      grad.addColorStop(i / (_HEAT_STOPS.length - 1),
-        "rgb(" + c.map(v => Math.round(v * 255)).join(",") + ")"));
-    const cbH = y1 - y0;
-    g.fillStyle = grad; g.fillRect(x1 + 12, y0, 12, cbH);
-    g.strokeStyle = "#d0d7de"; g.strokeRect(x1 + 12, y0, 12, cbH);
-    g.fillStyle = "#6e7781"; g.font = "10px sans-serif";
-    g.fillText(_fmtTick(vMax), x1 + 28, y0 + 8);
-    g.fillText(_fmtTick(vMin), x1 + 28, y1);
-    g.fillStyle = "#8b949e"; g.textAlign = "left";
-    g.fillText(vLabel + "（" + xLabel + " × " + yLabel + "）", x0, y0 - 3);
-    if (hover) {
-      const { i, j } = hover;
-      /* 十字准星 */
-      g.strokeStyle = "rgba(255,255,255,0.85)"; g.lineWidth = 1;
-      g.setLineDash([3, 3]);
-      g.beginPath();
-      g.moveTo(X(i), y0); g.lineTo(X(i), y1);
-      g.moveTo(x0, Y(j)); g.lineTo(x1, Y(j));
-      g.stroke(); g.setLineDash([]);
-      g.strokeStyle = "#ffffff"; g.lineWidth = 1.5;
-      g.beginPath(); g.arc(X(i), Y(j), 3.5, 0, Math.PI * 2); g.stroke();
-      g.strokeStyle = "#1f2328"; g.lineWidth = 0.8; g.stroke();
-      _drawTip(g, X(i), Y(j),
-        `${xLabel}=${_fmtTick(xs[i])}  ${yLabel}=${_fmtTick(ys[j])}`
-        + `  ${vLabel}=${_fmtTick(z[j][i])}`, W, H);
-    }
-  };
-  redraw(null);
-  canvas.onmousemove = (ev) => {
-    const r = canvas.getBoundingClientRect();
-    const mx = ev.clientX - r.left, my = ev.clientY - r.top;
-    if (mx < x0 || mx > x1 || my < y0 || my > y1) { redraw(null); return; }
-    const i = Math.max(0, Math.min(nx - 1,
-      Math.round((mx - x0) / (x1 - x0) * (nx - 1))));
-    const j = Math.max(0, Math.min(ny - 1,
-      Math.round((y1 - my) / (y1 - y0) * (ny - 1))));
-    redraw({ i, j });
-  };
-  canvas.onmouseleave = () => redraw(null);
-}

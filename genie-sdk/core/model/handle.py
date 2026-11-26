@@ -20,10 +20,11 @@ envelope shapes:
   ``meshes`` / ``boundary`` + top-level ``wavelength`` / ``n_modes``
   (Q18+Q30 — no fake symmetry: an eigenproblem takes no excitations,
   hence no sources/monitors);
-- solvers are declared explicitly (``add_solver``); the default solver
-  ``"fdtd"`` auto-vivifies on access (it is the wire default --
-  ``solver=None`` -- and the GUI edits it before any script line could
-  declare it);
+- solvers are declared explicitly (``add_solver``) — no default; **one
+  fdtd envelope per document** (2026-11-24 站长拍): the wire carries the
+  kind only, so a second fdtd instance would be a name the rest of the
+  system cannot even express (run verbs / GUI address it as "fdtd"),
+  while mode instances are each a real eigen-question;
 - ``to_config(solver)`` assembles one wire-shaped SimConfig per run:
   shared structure copied in + that solver's envelope + the ``solver``
   field (omitted for the fdtd default -- legacy payloads stay
@@ -44,10 +45,14 @@ ModeDomainDraft = DRAFT_OF[_wire.ModeDomainSpec]
 ModeMeshDraft = DRAFT_OF[_wire.ModeMeshSpec]
 ModeConfigDraft = DRAFT_OF[_wire.ModeConfigSpec]
 
-#: the solver whose runs omit the wire ``solver`` field (the wire default;
-#: legacy payloads byte-identical) and whose envelope auto-vivifies.
+#: the solver kind whose runs omit the wire ``solver`` field (the wire
+#: default; legacy payloads byte-identical). Exactly one envelope of this
+#: kind may exist per document.
 DEFAULT_SOLVER = "fdtd"
 
+#: 新声明 fdtd 即得一块默认仿真区（2026-11-25 站长拍）：GUI 首屏 / 脚本
+#: 同源——加 fdtd 立刻有框可看。默认值只是 draft 起点（可改可清；清空后
+#: validate 面照旧 422）。
 _SOLVER_RE = re.compile(_SOLVER_NAME)
 
 _GEO: dict = {
@@ -274,11 +279,12 @@ class Solver:
     the model (Q15); structure (materials / geometry / parameters) lives
     on the Model and is shared by every solver."""
 
-    __slots__ = ("name", "kind", "domain", "meshes", "sources", "monitors",
-                 "_mesh", "_source", "_monitor")
+    __slots__ = ("id", "name", "kind", "domain", "meshes", "sources",
+                 "monitors", "_mesh", "_source", "_monitor")
 
     def __init__(self, owner: "Model", name: str) -> None:
         object.__setattr__(self, "name", name)
+        object.__setattr__(self, "id", None)
         object.__setattr__(self, "kind", "fdtd")
         object.__setattr__(self, "domain", DomainDraft())
         self._mesh: list = []
@@ -316,7 +322,7 @@ class ModeEnvelope:
     守卫（横截面两轴必填、波长必填）在 validate_for_ui，draft 阶段留
     未填态。"""
 
-    __slots__ = ("name", "kind", "_cfg", "meshes")
+    __slots__ = ("id", "name", "kind", "_cfg", "meshes")
 
     #: 包络字段（= ModeConfigSpec 顶层〔mesh 除外——它是集合〕；读写都
     #: 路由进 config draft）。n_ref（Q20）：搜索折射率，缺省 None =
@@ -328,6 +334,7 @@ class ModeEnvelope:
         # owner 形参与 Solver 同构（包络不回指模型——结构在 Model 上
         # 共享；owner 只进 meshes 集合视图，换 id 分配器）。
         object.__setattr__(self, "name", name)
+        object.__setattr__(self, "id", None)
         object.__setattr__(self, "kind", "mode")
         cfg = ModeConfigDraft()
         cfg.domain = ModeDomainDraft()      # 急建单件：genie.mode.domain.axis 直达
@@ -374,8 +381,8 @@ class Model:
     - Field values enter only via ``=``; commands take only an address;
     - structure: ``materials`` / ``geometry`` / ``attributes`` collections +
       ``parameters`` key-value pairs, shared by every solver;
-    - solvers: ``add_solver(name)`` declares; the fdtd default
-      auto-vivifies on access (``envelope``);
+    - solvers: ``add_solver(name)`` declares — no default, no
+      auto-vivify (one fdtd envelope per document);
     - promotion ``to_config(solver)`` must go through
       ``validate_for_ui`` (the single validation surface);
     - **no run / submit / networking / persistence** (the action surface
@@ -385,6 +392,9 @@ class Model:
     def __init__(self) -> None:
         self._alloc = _Allocator()
         self.parameters: dict = {}
+        #: 全局仿真设置（文档级，2026-11-26）：freq_center / freq_span。
+        #: source/monitor 可选用全局（继承在提交时解析，wire 无此字段）。
+        self.simulation: dict = {}
         self._geometry: list = []
         self._materials: list = []
         self._attributes: list = []
@@ -398,10 +408,14 @@ class Model:
 
     def add_solver(self, name, kind=None) -> Solver:
         kind = kind or name
-        """Declare a solver (its envelope starts empty). The name follows
-        the wire ``_SOLVER_NAME`` pattern (same ruler as the protocol --
-        no second regex here). Duplicate declaration is an error (it
-        would silently discard the existing envelope)."""
+        """Declare a solver. **声明只建空包络**（2026-11-26 站长拍：默认值归 GUI）——
+        fdtd 的 ±1 µm / 时间 / CFL / 边界，mode 的轴 / λ / 模式数，都由面板按钮在
+        声明后一条 set_named 写下。
+        The name follows the wire ``_SOLVER_NAME`` pattern (same ruler as
+        the protocol -- no second regex here). Duplicate declaration is an
+        error (it would silently discard the existing envelope). **One
+        fdtd envelope per document** (2026-11-24 站长拍) — a second
+        fdtd-kind declaration is rejected the same loud way."""
         if not isinstance(name, str) or not _SOLVER_RE.fullmatch(name):
             raise ValueError(
                 f"bad solver name {name!r} — expected a lower-case "
@@ -415,22 +429,67 @@ class Model:
         if kind not in ("fdtd", "mode"):
             raise ValueError(
                 f"solver kind must be fdtd|mode, got {kind!r}")
+        if kind == DEFAULT_SOLVER and any(
+                getattr(s, "kind", None) == DEFAULT_SOLVER
+                for s in self._solvers.values()):
+            raise ValueError(
+                "one document holds one fdtd envelope — the fdtd solver "
+                "is already declared (edit genie.fdtd; another mode "
+                "solver via genie.add_solver(type='mode'))")
         cls = ModeEnvelope if kind == "mode" else Solver
         s = cls(self, name)
+        object.__setattr__(s, "id", self._alloc.issue())
         self._solvers[name] = s
         return s
 
+    def rename_solver(self, old: str, new: str) -> None:
+        """Rename a declared solver (2026-11-25 站长拍：mode 实例可改名）。
+
+        Name is the document identity: the tree, cards and scripts address the
+        solver by it. **References are not rewritten** — a monitor pointing at
+        the old name dangles exactly like a deleted solver (serialize emits the
+        raw ref, ``validate_for_ui`` 422s at run with the name in the error)."""
+        if old not in self._solvers:
+            raise LookupError(
+                f"solver {old!r} is not declared — cannot rename it")
+        if new == old:
+            return
+        if not isinstance(new, str) or not _SOLVER_RE.fullmatch(new):
+            raise ValueError(
+                f"bad solver name {new!r} — expected a lower-case identifier "
+                f"like 'fdtd' / 'mode' (same pattern as the wire format)")
+        if new in self._solvers:
+            raise ValueError(
+                f"solver {new!r} is already declared — names are identities")
+        items = [(new if k == old else k, v) for k, v in self._solvers.items()]
+        self._solvers.clear()
+        for k, v in items:
+            if k == new:
+                if hasattr(v, "name"):
+                    object.__setattr__(v, "name", new)
+            self._solvers[k] = v
+
+    def remove_solver(self, name: str) -> None:
+        """Undeclare a solver (2026-11-24 站长拍：声明制对称——能声明
+        就能反悔). The whole envelope goes with it: domain / sources /
+        monitors / meshes live inside the envelope, so the cascade **is**
+        the pop. Shared model structure (materials / geometry /
+        parameters / attributes) survives — it belongs to the model, not
+        the solver (Q15/Q17).
+
+        Deleting a mode solver referenced by some monitor's
+        ``mode_expansion`` is **allowed** (C，站长拍)：the reference
+        dangles, serialization emits it raw, and ``validate_for_ui``
+        422s at run — exactly how a dangling material reference behaves.
+        No deletion-time guard."""
+        self._solvers.pop(name, None)
+
     def envelope(self, name) -> Solver:
-        """The declared solver's envelope. The fdtd **default**
-        auto-vivifies (it is the wire ``solver=None`` default; the GUI
-        edits it before any script line could declare it); every other
-        name must be declared first — a one-line error pointing at
-        ``add_solver`` (this also catches typos: ``genie.fdtc`` fails
-        here instead of silently building an empty run)."""
-        if name == DEFAULT_SOLVER and name not in self._solvers:
-            s = _ENVELOPE_OF.get(name, Solver)(self, name)
-            self._solvers[name] = s
-            return s
+        """The declared solver's envelope. **No default** (2026-11-24
+        站长拍)：fdtd declares like any other solver — an undeclared name
+        is a one-line error pointing at ``add_solver`` (this also catches
+        typos: ``genie.fdtc`` fails here instead of silently building an
+        empty run)."""
         try:
             return self._solvers[name]
         except KeyError:
@@ -447,21 +506,36 @@ class Model:
         return tuple(self._solvers)
 
     def solver_list(self) -> list:
-        """The declared solvers as ``[{"name", "kind"}]`` (the GUI tree's
-        one fact source — solvers are model declarations, not wire payload,
-        so they ride the cfg snapshot and never the submit payload)."""
-        return [{"name": n, "kind": getattr(s, "kind", DEFAULT_SOLVER)}
+        """The declared solvers as ``[{"name", "kind", "config"}]`` (the
+        GUI's one fact source — solvers are model declarations, not wire
+        payload: the list rides the cfg snapshot and never the submit
+        payload). ``config`` = that solver's own envelope, so every
+        solver card renders from its slot instead of guessing which
+        envelope the flattened view happened to carry."""
+        return [{"id": s.id, "name": n,
+                 "kind": getattr(s, "kind", DEFAULT_SOLVER),
+                 "config": self._envelope_conf(s)}
                 for n, s in self._solvers.items()]
 
     # -- promotion ------------------------------------------------------
 
     def _wire_monitor(self, mon) -> dict:
-        """Resolve an SDK ``mode_solver`` reference in-place for the wire.
+        """Resolve an SDK ``mode_solver`` reference for the wire.
 
         ``mon.mode_expansion`` may be a dict ``{"mode_solver": "probe",
         "freq": ...}``; the payload must carry the *profile*, never the
-        local name (the remote job has no document). The reference stays on
-        the draft; only the serialize is resolved.
+        local name (the remote job has no document). The reference stays
+        on the draft (``_mode_expansion_ref``) and is **re-resolved on
+        every serialize** — the link is live: editing the mode solver
+        propagates to its referencing monitors.
+
+        Dangling or wrong-kind (the referenced solver was deleted / since
+        re-declared as another kind): emit the **raw** reference dict —
+        never crash the snapshot. ``validate_for_ui`` 422s at run with
+        the name in the error — the same position and shape as a
+        dangling material reference (2026-11-24 站长拍 C). Deterministic:
+        the raw dict wins over any previously-resolved profile frozen on
+        the draft, so behavior never depends on snapshot history.
         """
         me = getattr(mon, "mode_expansion", None)
         ref = getattr(mon, "_mode_expansion_ref", None)
@@ -470,12 +544,23 @@ class Model:
                 return to_wire(mon)
             ref = me
         ref = dict(ref)
-        name = ref.pop("mode_solver")
-        env = self.envelope(name)
+        sid = ref.pop("mode_solver_id", None)
+        name = ref.pop("mode_solver", None)
+        env = None
+        if sid is not None:
+            env = next((s for s in self._solvers.values()
+                        if getattr(s, "id", None) == sid), None)
+        if env is None and name is not None:
+            env = self._solvers.get(name)
         if not isinstance(env, ModeEnvelope):
-            raise ValueError(
-                f"mode_expansion.mode_solver={name!r} is kind "
-                f"{getattr(env, 'kind', 'fdtd')!r}, not 'mode'")
+            out = to_wire(mon)
+            fallback = dict(ref)
+            if name is not None:
+                fallback["mode_solver"] = name
+            elif sid is not None:
+                fallback["mode_solver_id"] = sid
+            out["mode_expansion"] = fallback
+            return out
         from genie_protocol import ModeExpansionSpec
         profile = {
             "n_modes": int(getattr(env, "n_modes", 1) or 1),
@@ -500,17 +585,26 @@ class Model:
 
     def to_config(self, solver: str | None = None) -> dict:
         """Promotion: draft → a dict in the **Q17 nested** SimConfig shape
-        (Nones stripped) for one run of ``solver`` (default = the fdtd
-        default, whose payload omits the wire ``solver`` field): structure
-        under ``model``, that solver's envelope under ``config`` (shape
-        follows the solver — fdtd: domain/mesh/source/monitor; mode: Q18
-        v2 sections). **No ``run`` section** (Q38): resources are action
+        (Nones stripped) for one run of ``solver``: structure under
+        ``model``, that solver's envelope under ``config`` (shape follows
+        the solver — fdtd: domain/mesh/source/monitor; mode: Q18 v2
+        sections). **No ``run`` section** (Q38): resources are action
         parameters assembled into the payload at submit, never document
         state. The caller must then go through
         ``genie_protocol.resolve.validate_for_ui`` (the single
-        validation surface)."""
-        name = solver if solver is not None else DEFAULT_SOLVER
-        s = self.envelope(name)
+        validation surface).
+
+        **No default solver** (2026-11-24 站长拍)：``solver=None`` means
+        "snapshot the model as-is" — zero declared solvers → a model-only
+        dict (the empty-workspace boot snapshot; never a valid submit),
+        otherwise the **first declared** solver (submission verbs pass
+        their solver explicitly, so this only feeds snapshots/bands)."""
+        if solver is not None:
+            s = self.envelope(solver)
+        elif not self._solvers:
+            return {"model": self._document_model()}
+        else:
+            s = self._solvers[next(iter(self._solvers))]
         conf = self._envelope_conf(s)
         cfg = {
             "model": self._document_model(),
@@ -524,21 +618,22 @@ class Model:
     def to_document(self) -> dict:
         """The **authoring document** (the ``simconfig.json`` member of a
         ``.gensim``): shared structure + **every declared solver envelope,
-        by name** — nothing is silently dropped on save. Solvers never
-        declared (the fdtd default auto-vivifies only on access) are
-        absent. This is SDK-private shape: the wire payload is always
+        by name** — nothing is silently dropped on save. Undeclared
+        solvers do not exist (no default, no auto-vivify). This is SDK-private shape: the wire payload is always
         :meth:`to_config` (one solver), and resources are NOT document
         state (Q38 — run is assembled at submit from action args)."""
         mdl = self._document_model()
         solvers = []
         for name, s in self._solvers.items():
-            solvers.append({"name": name,
+            solvers.append({"id": s.id, "name": name,
                             "kind": getattr(s, "kind", DEFAULT_SOLVER),
                             "config": self._envelope_conf(s)})
         return {"model": mdl, "solvers": solvers}
 
     def _document_model(self) -> dict:
         mdl = {
+            # 全局仿真设置（非空才写，旧档不受扰）
+            **({"simulation": dict(self.simulation)} if self.simulation else {}),
             "materials": [to_wire(i) for i in self._materials],
             "geometry": [to_wire(i) for i in self._geometry],
             # Empty attributes are OMITTED: the wire key is additive and
@@ -597,6 +692,11 @@ class Model:
         all_src: list = []
         all_mon: list = []
         for slot in slots:
+            if "id" not in slot:
+                raise ValueError(
+                    f"solver slot {slot.get('name')!r} has no id 鈥?documents "
+                    f"saved before the 2026-11-25 identity cut are not openable; "
+                    f"rebuild the model")
             name = slot.get("name")
             kind = slot.get("kind") or DEFAULT_SOLVER
             conf = slot.get("config") or {}
@@ -608,6 +708,7 @@ class Model:
                     f"it through, but this SDK cannot edit that envelope "
                     f"shape")
             s = m.add_solver(name, kind)
+            object.__setattr__(s, "id", int(slot["id"]))
             if kind == DEFAULT_SOLVER:
                 s.domain = DomainDraft.model_validate(conf.get("domain") or {})
                 for raw in conf.get("mesh") or []:
@@ -635,6 +736,7 @@ class Model:
                 s.meshes._items = mesh_items
                 all_meshes += mesh_items
         m.parameters = dict(model.get("parameters") or {})
+        m.simulation = dict(model.get("simulation") or {})
         for kinds, items, src, key in (
                 (_GEO, m._geometry, model, "geometry"),
                 (_MAT, m._materials, model, "materials"),
@@ -646,6 +748,8 @@ class Model:
                 items.append(kinds[kind].model_validate(raw))
         highest = max(
             [next_id or 0]
+            + [getattr(sv, "id", None) for sv in m._solvers.values()
+               if getattr(sv, "id", None) is not None]
             + [it.id for it in (m._geometry + m._materials + m._attributes
                                 + all_src + all_mon + all_meshes)
                if it.id is not None])

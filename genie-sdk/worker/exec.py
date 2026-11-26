@@ -68,10 +68,20 @@ class ExecContext:
     def gui_snapshot(self) -> dict:
         """The cfg event's model snapshot: the wire payload **plus** the
         model-level declarations the GUI tree must show — ``solvers:
-        [{name, kind}]`` and ``analysis: [{name, script, call}]`` (Q11
-        recipes; the inspector edits the source text in place). GUI-only
-        keys; the submit payload never carries them."""
-        snap = self.model.to_config()
+        [{name, kind, config}]`` and ``analysis: [{name, script, call}]``
+        (Q11 recipes; the inspector edits the source text in place).
+        GUI-only keys; the submit payload never carries them.
+
+        The flattened payload keys (domain/mesh/source/monitor) follow
+        the **fdtd** envelope whenever one is declared — GUI v1 is
+        fdtd-bound, and declaration order is a document fact, not a GUI
+        fact (a mode declared first must not hijack the form/3D view).
+        Other solvers render from their own ``config`` slot."""
+        snap = self.model.to_config(
+            "fdtd" if "fdtd" in self.model.solvers else None)
+        _sim = dict(getattr(self.model, "simulation", {}) or {})
+        if _sim:
+            snap["simulation"] = _sim          # 非空才带，空模型保持旧形
         snap["solvers"] = self.model.solver_list()
         snap["analysis"] = [
             {"name": n,

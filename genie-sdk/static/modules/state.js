@@ -62,17 +62,6 @@ export function setTreeSel(v) { treeSel = v; }
 export function setInspectorSel(v) { inspectorSel = v; }
 export function setScene(v) { scene = v; }
 
-/* 文档未保存标记（2026-11-22 File 面）：任何模型改动置 true，保存/打开/新建
- * 置 false；变化广播给 FILE 面（单一写入口 + 单一订阅者）。 */
-export let docDirty = false;
-export function setDocDirty(v) {
-  const next = !!v;
-  if (next === docDirty) return;
-  docDirty = next;
-  window.dispatchEvent(new CustomEvent("genie-doc-dirty", { detail: next }));
-}
-
-
 export function toast(msg, kind = "info") {
   let host = document.getElementById("v2-toasts");
   if (!host) {
@@ -102,6 +91,3 @@ export function toast(msg, kind = "info") {
 
 /* 模型快照的只读副本（GUI 各面读它，不持可编辑副本） */
 export function getCfg() { return structuredClone(cfg); }
-
-/* 扫参运行态（app.runSweep 写、boot 的进度回调读） */
-export const sweepRun = { name: "", total: 0 };

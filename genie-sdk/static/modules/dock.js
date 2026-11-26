@@ -1,45 +1,34 @@
 import { cfg, scene } from "./state.js";
-import { loadWorkspaceFiles } from "./workspace.js";
 "use strict";
 
 export const Dock = (function () {
-  const STORAGE_KEY = "genie.dock.layout.v1";
+  const STORAGE_KEY = "genie.dock.layout.v6";  /* v6（2026-11-25）：左半按内容定宽
+                                               * （≥700px），余下给 3D */
   const SAVED_KEY = "genie.dock.saved.v1";   /* 用户命名布局：{name: tree} */
   /* 结构｜属性工作面（2026-10 站长裁决）：tree/config 结构上合为
    * #struct-panel 一个原件（内部 42:58 + 拖拽分割），dock 只认它。 */
-  const PANEL_IDS = ["struct-panel", "scene-panel", "visualize-panel", "files-view", "term-dock", "json-panel"];
+  const PANEL_IDS = ["struct-panel", "scene-panel", "json-panel"];
   const TITLE = { "struct-panel": "Objects",
-                  "scene-panel": "3D Scene", "visualize-panel": "Visualize",
-                  "files-view": "Files", "term-dock": "Terminal", "json-panel": "Script" };
+                  "scene-panel": "3D Scene", "json-panel": "Script" };
 
   const DESKTOP_MIN = { "struct-panel": 310, "scene-panel": 200,
-                        "visualize-panel": 160, "term-dock": 80, "json-panel": 200 };
+                        "json-panel": 200 };
   const MIN = DESKTOP_MIN;
+  /* 默认布局 = 两列（2026-11-25 站长拍）：左半 = Objects（树+属性）与
+   * Script 合叶堆叠，右半 = 3D Scene；Terminal 通栏贴底。
+   * 依据：属性栏要装六面边界表，3D 只要一半就够看。 */
+  const OBJECTS_SHARE = 0.55;   /* 宽屏按比例 */
+  const OBJECTS_MIN = 700;      /* 窄屏按内容：700 让属性栏装得下六面边界表 */
 
-  /* 默认布局按视口比例分配。 */
   function defaultTree() {
-    const w = window.innerWidth, h = window.innerHeight;
-    {
-      const left = Math.max(DESKTOP_MIN["struct-panel"] + 8, Math.round(w * 0.34));
-      const right = Math.max(DESKTOP_MIN["json-panel"], Math.round(w * 0.28));
-      return norm({ dir: "col", sizes: [null, Math.min(150, Math.round(h * 0.17))],
-        children: [
-          { dir: "row", sizes: [left, null, right], children: [
-            "struct-panel",
-            { stack: ["scene-panel", "visualize-panel", "files-view"], active: 0 },
-            "json-panel"] },
-          "term-dock",
-        ] });
-    }
-    return norm({ dir: "row", sizes: [left, null, right],
-      children: ["struct-panel", {
-        dir: "col", sizes: [null, Math.min(230, Math.round(h * 0.25))],
-        children: [
-          { dir: "row", sizes: [null, right],
-            children: [["scene-panel", "visualize-panel", "files-view"], "json-panel"] },
-          "term-dock",
-        ],
-      }] });
+    const w = window.innerWidth;
+    const left = Math.min(
+      Math.max(OBJECTS_MIN, Math.round(w * OBJECTS_SHARE)),
+      Math.max(DESKTOP_MIN["struct-panel"], w - DESKTOP_MIN["scene-panel"] - 8));
+    return norm({ dir: "row", sizes: [left, null], children: [
+      { stack: ["struct-panel", "json-panel"], active: 0 },
+      "scene-panel",
+    ] });
   }
   const isLeaf = (n) => !n.dir;   /* 叶子 = {stack:[...]}；内节点有 dir */
   /* "id" ↔ {stack:[id], active:0} 归一化（含 localStorage 旧格式） */
@@ -59,16 +48,23 @@ export const Dock = (function () {
   /* load-py/download-py 归脚本面板头（语义针对 script，站长裁决不随
    * 迁）；term-dl/import-cfg/export-cfg 在 File 下拉，不进收养清单。 */
   const ACTION_IDS = ["run-py", "load-py", "download-py", "term-stop",
-                      "term-reset"];
+                      "term-reset", "term-clear", "result-chip"];
   const leafByUid = new Map();   // uid → 叶子对象（drop 落点 → 树节点）
 
   /* ── 持久化 ── */
   function load() {
     try {
       const t = JSON.parse(localStorage.getItem(STORAGE_KEY));
-      if (!t || leafSet(t).size !== PANEL_IDS.length) return null;
+      if (!treeIsCurrent(t)) return null;
       return norm(t);
     } catch { return null; }
+  }
+  /* 存档必须恰好含当前面板集合（2026-11-25：Visualize 摘除后，旧存档里的
+   * phantom 面板会被渲染成空叶——整套作废，回默认布局）。 */
+  function treeIsCurrent(t) {
+    if (!t) return false;
+    const s = leafSet(t);
+    return s.size === PANEL_IDS.length && PANEL_IDS.every((id) => s.has(id));
   }
   function save() {
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(tree)); } catch {}
@@ -145,9 +141,6 @@ export const Dock = (function () {
     return same ? mins.reduce((a, b) => a + b, 0) : Math.max(...mins);
   }
 
-  function activateSideEffect(panelId) {
-    if (panelId === "files-view" && window.loadWorkspaceFiles) loadWorkspaceFiles();
-  }
   function build(node, host) {
     if (isLeaf(node)) {
       const leaf = el("div", "dock-leaf");
@@ -160,8 +153,7 @@ export const Dock = (function () {
         if (!p) return;
         p.classList.toggle("dock-hidden", i !== node.active);
         if (i === node.active) {
-          p.classList.remove("hidden");            /* files-view 初始 hidden，点亮即揭 */
-          activateSideEffect(id);
+          p.classList.remove("hidden");
         }
         leaf.appendChild(p);
       });
@@ -184,8 +176,10 @@ export const Dock = (function () {
   const PANEL_ACTIONS = {                              /* 面板 → 动作钮（原件收养） */
     /* 动作钮右组：文件 I/O 已上收 File 菜单，面板头各留唯一动作钮 */
     /* 动作钮右组：仿真 open/save 在 File 菜单，脚本头留 Run+脚本两钮 */
-    "json-panel": ["run-py", "load-py", "download-py"],
-    "term-dock": ["term-stop", "term-reset"],   /* R31：清理重启随停止收养 */
+    /* Script 卡 = 编辑器 + 终端（2026-11-25 站长拍）：脚本动作与终端动作
+     * 合并到同一张卡的头部——进度 chip / 停止 / 清理重启 / 清屏跟着它走。 */
+    "json-panel": ["result-chip", "run-py", "load-py", "download-py",
+                   "term-stop", "term-reset", "term-clear"],
   };
   function makeHead(leafObj) {
     const head = el("div", "dock-head");
@@ -495,17 +489,18 @@ export const Dock = (function () {
     return true;
   }
 
-  /* ── #struct-split：结构｜属性内部比例拖拽（genie.struct.ratio）──
+  /* ── #struct-split：结构｜属性内部比例拖拽（genie.struct.ratio.v2）──
+   * v2（2026-11-25）：属性列默认 62%（原 58%）——树给 38% 就够认对象。
    * 与 dock 分离：这是面板内部分割，不入 dock 树、不随布局存档。 */
   (function wireStructSplit() {
     const wrap = document.getElementById("struct-panel");
     const split = document.getElementById("struct-split");
     const tp = document.getElementById("tree-panel");
     if (!wrap || !split || !tp) return;
-    const KEY = "genie.struct.ratio";
+    const KEY = "genie.struct.ratio.v3";
     const apply = (r) => { tp.style.flexBasis = (r * 100).toFixed(1) + "%"; };
     let r = parseFloat(localStorage.getItem(KEY));
-    apply(isFinite(r) && r > 0.15 && r < 0.85 ? r : 0.42);
+    apply(isFinite(r) && r > 0.15 && r < 0.85 ? r : 0.34);
     split.addEventListener("pointerdown", (e) => {
       e.preventDefault();
       split.classList.add("active");
@@ -529,14 +524,12 @@ export const Dock = (function () {
     });
   })();
 
-  /* ── 进度 chip 归位（唯一形态：tabbar）──────────────────────────── */
-  function applyMode() {
-    const chip = document.getElementById("result-chip");
-    const bar = document.getElementById("view-tabbar");
-    if (chip && bar && chip.parentElement !== bar) bar.appendChild(chip);
-  }
-  /* 窗口变窄时按比例缩固定列（消横向溢出——935px 实测缺陷的收口） */
-  let fitRaf = 0;
+  /* ── 让位（2026-11-25 C 批）──────────────────────────────────────
+   * 旧行为：固定列总宽 > 可用宽时，**全列等比 ×k 到 60px**——主工作面
+   * （树+属性）先碎。新规则：按 YIELD 顺序把"附属面板"先削到各自 MIN，
+   * struct-panel 最后动；全到 MIN 仍放不下就交给整页横向滚动兜底。 */
+  const YIELD = ["json-panel", "scene-panel"];
+  function leafIdOfChild(c) { return isLeaf(c) ? c.stack[0] : null; }
   function fitSizes() {
     if (!tree || isLeaf(tree)) return;
     const walk = (node, box) => {
@@ -547,8 +540,21 @@ export const Dock = (function () {
       const cells = [...nodeEl.children].filter((c) => c.classList.contains("dock-cell"));
       const fixed = node.sizes.reduce((a, s) => a + (s || 0), 0);
       if (avail > 0 && fixed > avail) {
-        const k = avail / fixed;
-        node.sizes = node.sizes.map((s) => s ? Math.max(60, Math.round(s * k)) : s);
+        let deficit = fixed - avail;
+        const order = node.children.map((c, i) => i)
+          .filter((i) => node.sizes[i] != null)
+          .sort((a, b) => {
+            const ra = YIELD.indexOf(leafIdOfChild(node.children[a]));
+            const rb = YIELD.indexOf(leafIdOfChild(node.children[b]));
+            return (ra < 0 ? 99 : ra) - (rb < 0 ? 99 : rb);
+          });
+        for (const i of order) {
+          if (deficit <= 0) break;
+          const floor = minExtent(node.children[i], node.dir === "row" ? "width" : "height");
+          const take = Math.min(deficit, Math.max(0, node.sizes[i] - floor));
+          node.sizes[i] -= take;
+          deficit -= take;
+        }
         cells.forEach((c, i) => {           /* 同步 DOM，深层测量不失真 */
           if (node.sizes[i] != null) applySize(c, node.dir, node.sizes[i]);
         });
@@ -557,18 +563,55 @@ export const Dock = (function () {
     };
     walk(tree, document.getElementById("main-layout"));
   }
+  let fitRaf = 0;
   window.addEventListener("resize", () => {
     clearTimeout(fitRaf);
     fitRaf = setTimeout(fitSizes, 250);
   });
 
+  /* ── #term-split：Script 卡内「编辑器 / 终端」高度比例（2026-11-25 站长拍）
+   * 比例存 genie.script.termFrac.v1（按窗高换算，不存 px）；两端保底：
+   * 终端 ≥80、编辑器 ≥120。 ── */
+  function wireTermSplit() {
+    const panel = document.getElementById("json-panel");
+    const term = document.getElementById("term-dock");
+    const split = document.getElementById("term-split");
+    if (!panel || !term || !split) return;
+    const KEY = "genie.script.termFrac.v1";
+    let frac = parseFloat(localStorage.getItem(KEY));
+    if (!isFinite(frac) || frac <= 0.1 || frac >= 0.9) frac = 0.32;
+    const apply = (f) => {
+      const total = panel.clientHeight;
+      frac = Math.min(0.8, Math.max(0.15, f));
+      if (total <= 0) return;
+      const px = Math.max(80, Math.min(total - 120, Math.round(total * frac)));
+      term.style.flex = "0 0 " + px + "px";
+    };
+    apply(frac);
+    split.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      split.classList.add("active");
+      const rect = panel.getBoundingClientRect();
+      const move = (ev) => apply((rect.bottom - ev.clientY) / rect.height);
+      const up = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", up);
+        split.classList.remove("active");
+        try { localStorage.setItem(KEY, String(frac)); } catch { /* private */ }
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", up);
+    });
+    window.addEventListener("resize", () => apply(frac));
+  }
+
   /* ── 对外 ── */
   function init() {
     const host = document.getElementById("main-layout");
     if (!host) return;
-    applyMode();
     tree = load() || defaultTree();
     render(tree, host);
+    wireTermSplit();          /* render 之后才有真实高度 */
     window.addEventListener("beforeunload", save);
   }
   function reset() {
@@ -579,17 +622,11 @@ export const Dock = (function () {
   /* 期③ 预设入口：名字 → 树；存档并重排 */
   const PRESETS = {
     default: defaultTree,
-    wide3d() {  /* 宽 3D：Script 收窄、Terminal 压低 */
-      return norm({ dir: "row", sizes: [490, null, 300],
-        children: ["struct-panel", {
-          dir: "col", sizes: [null, 140],
-          children: [{ dir: "row", sizes: [null, 300], children: [["scene-panel", "visualize-panel"], "json-panel"] }, "term-dock"] }] });
-    },
-    bigterm() { /* 大 Terminal：排障时用 */
-      return norm({ dir: "row", sizes: [490, null, 300],
-        children: ["struct-panel", {
-          dir: "col", sizes: [null, 480],
-          children: [{ dir: "row", sizes: [null, 300], children: [["scene-panel", "visualize-panel"], "json-panel"] }, "term-dock"] }] });
+    /* 宽 3D：Objects 收窄（左半 42%），3D 拿剩下的；Script 仍与 Objects 合叶。 */
+    wide3d() {
+      const w = window.innerWidth;
+      return norm({ dir: "row", sizes: [Math.round(w * 0.42), null], children: [
+        { stack: ["struct-panel", "json-panel"], active: 0 }, "scene-panel"] });
     },
   };
   function preset(name) {
@@ -620,7 +657,7 @@ export const Dock = (function () {
   function loadLayout(name) {
     if (PRESETS[name]) return preset(name);
     const saved = getSaved()[name];
-    if (!saved) return false;
+    if (!treeIsCurrent(saved)) return false;
     tree = norm(saved);
     clampSizes(tree);
     save();
