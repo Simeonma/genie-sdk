@@ -371,12 +371,17 @@ class Surface:
 
     def _set_simulation(self, t, fields):
         """全局仿真设置（2026-11-26）：只收 freq_center / freq_span（SI Hz）。"""
-        allowed = {"freq_center", "freq_span"}
+        allowed = {"band_lo", "band_hi"}
         self._only(t, fields, allowed)
         for k, v in fields.items():
             if not isinstance(v, (int, float)) or not v > 0:
                 raise ValueError(f"simulation.{k} must be a positive number, got {v!r}")
             t.obj.simulation = {**t.obj.simulation, k: float(v)}
+        band = t.obj.simulation
+        if "band_lo" in band and "band_hi" in band and not (band["band_hi"] > band["band_lo"]):
+            raise ValueError(
+                f"simulation band must satisfy band_lo < band_hi, got "
+                f"{band['band_lo']!r} / {band['band_hi']!r}")
         return "simulation"
 
     def _set_parameter(self, t, fields):

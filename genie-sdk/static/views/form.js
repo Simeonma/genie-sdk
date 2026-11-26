@@ -5,8 +5,8 @@ import { GEO_TYPE_LABEL, previewEl } from "./previews.js";
 import { matColor } from "./scene3d.js";
 import { cfg, scene } from "../modules/state.js";
 import { KIT } from "./kit.js";
-import { BOUNDARY_DEFAULTS, MODE_TRANSVERSE, modeSeed,
-         fieldsArg } from "../modules/defaults.js";
+import { BOUNDARY_DEFAULTS, MODE_TRANSVERSE, modeSeed, fieldsArg,
+         C0 } from "../modules/defaults.js";
 /* Genie FDTD service — 参数面板（Phase B2 工作台版，2026-08-30）
  *
  * 旧 Studio 排版复活：config 栏一次只渲染 nav 选中的一节（Materials/
@@ -578,7 +578,8 @@ function wavelengthLiteral(s) {
 /* ══════════════════ FDTD ▸ mesh（2026-11-25 站长拍）═════════════════
  * 与 fdtd/mode 同一副面板：General settings = Domain range（四列）+ Refine
  * method（factor | absolute）+ Refinement（一行 x/y/z）+ Growth。 */
-let MESH_METHOD = null;      /* 视图偏好：factor | absolute（不落模型） */
+let MESH_METHOD = null;
+let SIM_UNIT = "frequency";      /* 视图偏好：factor | absolute（不落模型） */
 
 export function MESH_SCHEMA(cfg, commit, m) {
   const useAbs = MESH_METHOD
@@ -714,28 +715,37 @@ export function SOURCE_SCHEMA(cfg, commit, s) {
 /* ══════════════════ 全局 Simulation（2026-11-26 站长拍）══════════════════
  * 文档级（model.simulation）：source/monitor 可选继承它；提交时解析成具体值，
  * wire 没有这个字段。 */
-export function GLOBAL_SCHEMA(cfg, commit, sim) {
+export function GLOBAL_SCHEMA(cfg, setBand, sim) {
   const s = sim || {};
+  const wl = SIM_UNIT === "wavelength";
+  const band = (s.band_lo != null && s.band_hi != null)
+    ? [s.band_lo, s.band_hi] : null;
+  const pair = band ? (wl ? [C0 / band[1], C0 / band[0]] : band) : null;
   return { sections: [{
     type: "section", key: "sim:general", title: "General settings", open: true,
     items: [
-      { type: "table", caption: "Frequency",
-        cols: [{ label: "center", unit: "THz" }, { label: "span", unit: "THz" }],
-        rows: [{ cells: [
-          { kind: "num", path: "simulation.freq_center",
-            value: s.freq_center, unit: "freq",
-            onSet: (v) => commit("freq_center", py(v)) },
-          { kind: "num", path: "simulation.freq_span",
-            value: s.freq_span, unit: "freq",
-            onSet: (v) => commit("freq_span", py(v)) },
-        ] }] },
+      { type: "row", label: "Unit", controls: [{
+          kind: "select", value: wl ? "wavelength" : "frequency",
+          options: ["frequency", "wavelength"], rerender: true,
+          onPick: (v) => { SIM_UNIT = v; } }] },
+      /* 频段：四列互算；真身 band_lo/band_hi（Hz）。波长模式按 c/λ 折回。 */
+      { type: "range", caption: "Band", unit: wl ? "len" : "freq",
+        order: ["center", "span", "min", "max"],
+        rows: [{ label: "band", value: pair,
+          onSet: (v) => {
+            let lo, hi;
+            if (wl) {
+              if (!(v[0] > 0) || !(v[1] > 0)) return;
+              lo = C0 / v[1]; hi = C0 / v[0];
+            } else { lo = v[0]; hi = v[1]; }
+            if (hi > lo) setBand(lo, hi);
+          } }] },
       { type: "note",
-        text: "Sources / monitors 可选用这一套（继承）；提交时解析成各自的"
-          + " freq / bandwidth，内核看不到“全局”。", },
+        text: "Sources / monitors 可以选择“Use global”继承这一频段；"
+          + "提交时解析成各自的 freq / bandwidth，内核看不到“全局”。", },
     ],
   }] };
 }
-
 
 export const FormPanel = {
   container: null,
@@ -1045,13 +1055,13 @@ export const FormPanel = {
 
   /* fdtd 域卡：内容 = DOMAIN_SCHEMA（模块级数据），这里只剩接线。 */
   _simulation(body) {
-    /* 全局仿真设置卡：地址 "simulation"（文档 model.simulation） */
-    const commit = (field, literal) => {
-      exec("genie.set_named('simulation', " + field + "=" + literal + ")",
-        { echo: false }).catch(() => {});
+    /* 全局频段卡：真身 band_lo/band_hi（Hz）；显示单位/写法是 GUI 的事。 */
+    const setBand = (lo, hi) => {
+      exec("genie.set_named('simulation', band_lo=" + py(lo)
+        + ", band_hi=" + py(hi) + ")", { echo: false }).catch(() => {});
     };
     const sim = (this.cfg && this.cfg.simulation) || {};
-    this.renderPage(GLOBAL_SCHEMA(this.cfg || {}, commit, sim), body);
+    this.renderPage(GLOBAL_SCHEMA(this.cfg || {}, setBand, sim), body);
   },
 
   _domain(body) {

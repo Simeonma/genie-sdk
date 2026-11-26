@@ -65,9 +65,13 @@ export function modeSeed(axis = "z") {
   };
 }
 
-/** 全局仿真设置（文档 simulation 段）：193 THz / 20 THz 带宽 */
+export const C0 = 299792458;                 /* 光速，m/s */
+
+/** 全局频段（文档 simulation 段）：真身是 band_lo / band_hi（Hz）。
+ * 默认 λ=1.55 µm 为中心、20 THz 带宽。 */
 export function simulationSeed() {
-  return { freq_center: 193e12, freq_span: 20e12 };
+  const f = C0 / 1.55e-6;                    /* ≈ 193.4 THz */
+  return { band_lo: f - 10e12, band_hi: f + 10e12 };
 }
 
 /** 声明 soft source 后要写下的那一套（193 THz ≈ 1.55 µm） */

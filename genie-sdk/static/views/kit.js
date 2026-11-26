@@ -453,6 +453,8 @@ export const KIT = {
     const ORDER = it.order;
     if (!Array.isArray(ORDER) || !ORDER.length)
       throw new Error("range item needs `order` (e.g. [\"center\",\"size\",\"min\",\"max\"])");
+    /* 第二列两种叫法：size（fdtd 域范围）或 span（频段）；同一套换算。 */
+    const WIDTH = ORDER.includes("span") ? "span" : "size";
     const cols = ORDER.map((label) => ({ label, unit: ul }));
     const rows = (it.rows || []).map((r) => {
       if (r.centerOnly) {
@@ -483,7 +485,7 @@ export const KIT = {
       const v0 = Array.isArray(r.value) ? r.value.map(Number) : [NaN, NaN];
       const val = {
         center: (v0[0] + v0[1]) / 2, size: v0[1] - v0[0],
-        min: v0[0], max: v0[1],
+        span: v0[1] - v0[0], min: v0[0], max: v0[1],
       };
       const ins = {};
       for (const name of ORDER) ins[name] = this._mtxInput(val[name], unitKind);
@@ -491,7 +493,7 @@ export const KIT = {
         ins.min.value = this._dispVal(unitKind, lo);
         ins.max.value = this._dispVal(unitKind, hi);
         ins.center.value = this._dispVal(unitKind, (lo + hi) / 2);
-        ins.size.value = this._dispVal(unitKind, hi - lo);
+        ins[WIDTH].value = this._dispVal(unitKind, hi - lo);
         for (const name of ORDER) this._clearFieldError(ins[name]);
       };
       const fire = (which) => () => {
@@ -505,9 +507,9 @@ export const KIT = {
           return;
         }
         let lo = v.min, hi = v.max;
-        if (which === "center" || which === "size") {   /* 改中心/尺寸 → 反算边界 */
-          const s = v.size;
-          if (!(s > 0)) { this._reject(ins.size, "size must be > 0"); return; }
+        if (which === "center" || which === WIDTH) {    /* 改中心/宽度 → 反算边界 */
+          const s = v[WIDTH];
+          if (!(s > 0)) { this._reject(ins[WIDTH], "span must be > 0"); return; }
           lo = v.center - s / 2; hi = v.center + s / 2;
         } else if (!(hi > lo)) {                        /* 改边界 → 必须 lo < hi */
           this._reject(ins[which], "min must be < max");
