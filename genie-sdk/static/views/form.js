@@ -106,7 +106,7 @@ function _fmtSeg(t) {
 
 /* mode 卡覆盖的字段（测试按 ModeDomainSpec / ModeConfigSpec 反射校验）。 */
 export const MODE_FIELDS = ["axis", "position", "x_range", "y_range", "z_range",
-  "n_bg", "dx", "dy", "dz", "x_spacing", "y_spacing", "z_spacing",
+  "dx", "dy", "dz", "x_spacing", "y_spacing", "z_spacing",
   "boundary", "wavelength", "n_modes", "n_ref",
   "rotate_axis", "rotate_angle", "rotate_radius"];
 
