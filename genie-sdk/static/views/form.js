@@ -736,16 +736,17 @@ export function GLOBAL_SCHEMA(cfg, setBand, sim) {
     ? [s.band_lo, s.band_hi] : null;
   const pair = band ? (wl ? [C0 / band[1], C0 / band[0]] : band) : null;
   return { sections: [{
-    type: "section", key: "sim:general", title: "General settings", open: true,
+    type: "section", key: "sim:general",
+    title: "Global frequency/wavelength settings", open: true,
     items: [
-      { type: "row", label: "Unit", controls: [{
+      { type: "row", label: "Quantity", controls: [{
           kind: "select", value: wl ? "wavelength" : "frequency",
           options: ["frequency", "wavelength"], rerender: true,
           onPick: (v) => { SIM_UNIT = v; } }] },
       /* 频段：四列互算；真身 band_lo/band_hi（Hz）。波长模式按 c/λ 折回。 */
       { type: "range", caption: "Frequency band", unit: wl ? "len" : "freq",
         order: ["center", "span", "min", "max"],
-        rows: [{ label: "band", value: pair,
+        rows: [{ value: pair,
           onSet: (v) => {
             let lo, hi;
             if (wl) {
