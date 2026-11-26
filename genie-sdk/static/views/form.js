@@ -729,7 +729,7 @@ export function GLOBAL_SCHEMA(cfg, setBand, sim) {
           options: ["frequency", "wavelength"], rerender: true,
           onPick: (v) => { SIM_UNIT = v; } }] },
       /* 频段：四列互算；真身 band_lo/band_hi（Hz）。波长模式按 c/λ 折回。 */
-      { type: "range", caption: "Band", unit: wl ? "len" : "freq",
+      { type: "range", caption: "Frequency band", unit: wl ? "len" : "freq",
         order: ["center", "span", "min", "max"],
         rows: [{ label: "band", value: pair,
           onSet: (v) => {
