@@ -655,7 +655,7 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
   const pol = (Array.isArray(s.polarization) && Array.isArray(s.polarization[0]))
     ? s.polarization : [[1, 0], [0, 0], [0, 0]];
   /* Use global（2026-11-27 站长拍）：点的时候把全局值复制进这个 source，
-   * 并把它锁住（use_ids 记在文档里）。不是提交时解析。 */
+   * 并在本次会话内锁格（不落文档）。不是提交时解析。 */
   const sim = (cfg && cfg.simulation) || {};
   const bandOk = (sim.band_lo != null && sim.band_hi != null);
   const bound = bandOk && LOCKED.has(addr);

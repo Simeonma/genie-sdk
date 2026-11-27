@@ -370,8 +370,8 @@ class Surface:
     # -- per-kind writers ------------------------------------------------
 
     def _set_simulation(self, t, fields):
-        """全局设置（文档值，GUI 私有）：频段 + delay/phase/amplitude +
-        use_ids（哪些 source 选了 Use global）。core 只存不解释。"""
+        """全局设置（文档值，GUI 私有）：频段 + delay/phase/amplitude。
+        core 只存不解释；Use global 的锁状态不落文档。"""
         allowed = {"band_lo", "band_hi", "delay", "phase", "amplitude"}
         self._only(t, fields, allowed)
         cur = dict(t.obj.simulation or {})
