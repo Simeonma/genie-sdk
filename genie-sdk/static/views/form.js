@@ -654,14 +654,18 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
   };
   const pol = (Array.isArray(s.polarization) && Array.isArray(s.polarization[0]))
     ? s.polarization : [[1, 0], [0, 0], [0, 0]];
-  /* Use global（2026-11-27 站长拍）：点的时候把全局值复制进这个 source，
-   * 并在本次会话内锁格（不落文档）。不是提交时解析。 */
-  const sim = (cfg && cfg.simulation) || {};
-  const bandOk = (sim.band_lo != null && sim.band_hi != null);
-  const bound = bandOk && LOCKED.has(addr);
-  const freqVal = s.freq, bwVal = s.bandwidth;
-  const delayVal = s.delay ?? 0, phaseVal = s.phase ?? 0;
-  const ampVal = s.amplitude ?? 1;
+  /* Use global（2026-11-27 第一性版）：勾上 = 五个字段写成对保留参数的
+   * 表达式（提升时求值）；只读状态由“字段是不是 gsrc_ 表达式”决定，
+   * 不另存任何标记。取消 = 把当时的数值写回去。 */
+  const gsp = (cfg && cfg.parameters) || {};
+  const isRef = (x) => typeof x === "string" && x.includes("gsrc_");
+  const bound = isRef(s.freq);
+  const bandOk = (gsp.gsrc_band_lo != null && gsp.gsrc_band_hi != null);
+  const freqVal = bound ? (gsp.gsrc_band_lo + gsp.gsrc_band_hi) / 2 : s.freq;
+  const bwVal = bound ? (gsp.gsrc_band_hi - gsp.gsrc_band_lo) : s.bandwidth;
+  const delayVal = isRef(s.delay) ? gsp.gsrc_delay : (s.delay ?? 0);
+  const phaseVal = isRef(s.phase) ? gsp.gsrc_phase : (s.phase ?? 0);
+  const ampVal = isRef(s.amplitude) ? gsp.gsrc_amplitude : (s.amplitude ?? 1);
   return { sections: [{
     type: "section", key: "src:general", title: "General settings", open: true,
     items: [
@@ -677,16 +681,25 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
           kind: "bool3", path: "source.use_global",
           value: bound, rerender: true,
           onSet: (on) => {
-            if (!on) { LOCKED.delete(addr); this._rerender(); return; }
-            if (!bandOk) return;
-            const f = (sim.band_lo + sim.band_hi) / 2;
-            exec("genie.set_named(" + JSON.stringify(addr) + ", freq=" + py(f)
-              + ", bandwidth=" + py(sim.band_hi - sim.band_lo)
-              + ", delay=" + py(sim.delay ?? 0)
-              + ", phase=" + py(sim.phase ?? 0)
-              + ", amplitude=" + py(sim.amplitude ?? 1) + ")",
-              { echo: false }).catch(() => {});
-            LOCKED.add(addr);
+            if (on) {
+              if (!bandOk) return;
+              exec("genie.set_named(" + JSON.stringify(addr)
+                + ", freq=" + py("(gsrc_band_lo+gsrc_band_hi)/2")
+                + ", bandwidth=" + py("gsrc_band_hi-gsrc_band_lo")
+                + ", delay=" + py("gsrc_delay")
+                + ", phase=" + py("gsrc_phase")
+                + ", amplitude=" + py("gsrc_amplitude") + ")",
+                { echo: false }).catch(() => {});
+            } else {
+              const f = ((gsp.gsrc_band_lo ?? 0) + (gsp.gsrc_band_hi ?? 0)) / 2;
+              const b = (gsp.gsrc_band_hi ?? 0) - (gsp.gsrc_band_lo ?? 0);
+              exec("genie.set_named(" + JSON.stringify(addr)
+                + ", freq=" + py(f) + ", bandwidth=" + py(b)
+                + ", delay=" + py(gsp.gsrc_delay ?? 0)
+                + ", phase=" + py(gsp.gsrc_phase ?? 0)
+                + ", amplitude=" + py(gsp.gsrc_amplitude ?? 1) + ")",
+                { echo: false }).catch(() => {});
+            }
             this._rerender();
           } }] },
       /* 复数直接输入（2026-11-26 站长拍）：xyz 三列，一格一个复数
@@ -751,18 +764,16 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
 /* ══════════════════ 全局 Simulation（2026-11-26 站长拍）══════════════════
  * 文档级（model.simulation）：source/monitor 可选继承它；提交时解析成具体值，
  * wire 没有这个字段。 */
-export function GLOBAL_SCHEMA(cfg, setBand, sim) {
-  const s = sim || {};
+export function GLOBAL_SCHEMA(cfg, setGs, gs) {
+  /* 全局 source 设置 = 保留参数（gsrc_*），GUI 隐藏；source 用表达式引用。 */
+  const g = gs || {};
   const wl = SIM_UNIT === "wavelength";
-  const band = (s.band_lo != null && s.band_hi != null)
-    ? [s.band_lo, s.band_hi] : null;
+  const band = (g.gsrc_band_lo != null && g.gsrc_band_hi != null)
+    ? [g.gsrc_band_lo, g.gsrc_band_hi] : null;
   const pair = band ? (wl ? [C0 / band[1], C0 / band[0]] : band) : null;
   return { sections: [{
-    type: "section", key: "sim:general",
-    title: "Global source setting", open: true,
+    type: "section", key: "sim:source", title: "Global source setting", open: true,
     items: [
-      /* 一张 1×5 表（2026-11-27 站长拍）：首列 = 量（frequency/wavelength），
-       * 后四列 = center/span/min/max 互算；真身 band_lo/band_hi（Hz）。 */
       { type: "range", caption: "Frequency/Wavelength", unit: wl ? "len" : "freq",
         order: ["center", "span", "min", "max"],
         lead: { kind: "select", value: wl ? "wavelength" : "frequency",
@@ -775,20 +786,18 @@ export function GLOBAL_SCHEMA(cfg, setBand, sim) {
               if (!(v[0] > 0) || !(v[1] > 0)) return;
               lo = C0 / v[1]; hi = C0 / v[0];
             } else { lo = v[0]; hi = v[1]; }
-            if (hi > lo) setBand({ band_lo: lo, band_hi: hi });
+            if (hi > lo) setGs({ band_lo: lo, band_hi: hi });
           } }] },
-      /* Temporal：全局的 delay / phase / amplitude（source 的 Use global 会用它们
-       * 一次性写进具体 source；不是提交时解析）。 */
       { type: "table", caption: "Temporal",
         cols: [{ label: "delay", unit: "fs" }, { label: "phase", unit: "rad" },
                { label: "amplitude" }],
         rows: [{ cells: [
-          { kind: "num", path: "simulation.delay", value: s.delay,
-            unit: "time", onSet: (v) => setBand({ delay: v }) },
-          { kind: "num", path: "simulation.phase", value: s.phase,
-            onSet: (v) => setBand({ phase: v }) },
-          { kind: "num", path: "simulation.amplitude", value: s.amplitude,
-            onSet: (v) => setBand({ amplitude: v }) },
+          { kind: "num", path: "gs.delay", value: g.gsrc_delay, unit: "time",
+            onSet: (v) => setGs({ delay: v }) },
+          { kind: "num", path: "gs.phase", value: g.gsrc_phase,
+            onSet: (v) => setGs({ phase: v }) },
+          { kind: "num", path: "gs.amplitude", value: g.gsrc_amplitude,
+            onSet: (v) => setGs({ amplitude: v }) },
         ] }] },
     ],
   }] };
@@ -1102,16 +1111,23 @@ export const FormPanel = {
 
   /* fdtd 域卡：内容 = DOMAIN_SCHEMA（模块级数据），这里只剩接线。 */
   _simulation(body) {
-    /* 全局设置（文档值）：频段 + delay/phase/amplitude；不参与提交解析。 */
-    const setBand = (fields) => {
-      const parts = Object.entries(
-        fields && fields.band_lo != null ? { band_lo: fields.band_lo, band_hi: fields.band_hi } : fields)
-        .map(([k, v]) => k + "=" + py(v)).join(", ");
-      exec("genie.set_named('simulation', " + parts + ")",
-        { echo: false }).catch(() => {});
+    /* 全局 source 设置 = 一组保留参数；写它不碰任何 source。 */
+    const MAP = { band_lo: "gsrc_band_lo", band_hi: "gsrc_band_hi",
+                  delay: "gsrc_delay", phase: "gsrc_phase",
+                  amplitude: "gsrc_amplitude" };
+    const setGs = (fields) => {
+      const known = (this.cfg && this.cfg.parameters) || {};
+      const lines = [];
+      for (const [k, v] of Object.entries(fields || {})) {
+        const name = MAP[k];
+        if (!(name in known)) lines.push("genie.add_parameter(" + JSON.stringify(name) + ")");
+        lines.push("genie.set_named(" + JSON.stringify("parameter." + name)
+          + ", value=" + py(v) + ")");
+      }
+      if (lines.length) exec(lines.join("\n"), { echo: false }).catch(() => {});
     };
-    const sim = (this.cfg && this.cfg.simulation) || {};
-    this.renderPage(GLOBAL_SCHEMA(this.cfg || {}, setBand, sim), body);
+    const gs = (this.cfg && this.cfg.parameters) || {};
+    this.renderPage(GLOBAL_SCHEMA(this.cfg || {}, setGs, gs), body);
   },
 
   _domain(body) {

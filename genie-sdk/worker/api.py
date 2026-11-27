@@ -239,7 +239,14 @@ class Surface:
         if name in self._family_members(family):
             raise ValueError(f"{family}.{name} already exists")
 
+    _GS_PARAMS = frozenset({"gsrc_band_lo", "gsrc_band_hi", "gsrc_delay",
+                            "gsrc_phase", "gsrc_amplitude"})
+
     def add_parameter(self, name):
+        if name.startswith("gsrc_") and name not in self._GS_PARAMS:
+            raise ValueError(
+                "gsrc_ names are reserved for Global source setting "
+                f"(allowed: {sorted(self._GS_PARAMS)})")
         self._ensure_free(name, "parameter")
         self._model.parameters[name] = None
         return f"parameter.{name}"
@@ -368,24 +375,6 @@ class Surface:
         return t.addr()
 
     # -- per-kind writers ------------------------------------------------
-
-    def _set_simulation(self, t, fields):
-        """全局设置（文档值，GUI 私有）：频段 + delay/phase/amplitude。
-        core 只存不解释；Use global 的锁状态不落文档。"""
-        allowed = {"band_lo", "band_hi", "delay", "phase", "amplitude"}
-        self._only(t, fields, allowed)
-        cur = dict(t.obj.simulation or {})
-        for k, v in fields.items():
-            if not isinstance(v, (int, float)):
-                raise ValueError(f"simulation.{k} must be a number, got {v!r}")
-            cur[k] = float(v)
-        if ("band_lo" in cur and "band_hi" in cur
-                and not (cur["band_hi"] > cur["band_lo"])):
-            raise ValueError(
-                f"simulation band must satisfy band_lo < band_hi, got "
-                f"{cur['band_lo']!r} / {cur['band_hi']!r}")
-        t.obj.simulation = cur
-        return "simulation"
 
     def _set_parameter(self, t, fields):
         self._only(t, fields, {"value"})

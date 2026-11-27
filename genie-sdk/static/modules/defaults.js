@@ -67,12 +67,11 @@ export function modeSeed(axis = "z") {
 
 export const C0 = 299792458;                 /* 光速，m/s */
 
-/** 全局频段（文档 simulation 段）：真身是 band_lo / band_hi（Hz）。
- * 默认 λ=1.55 µm 为中心、20 THz 带宽。 */
-export function simulationSeed() {
+/** 全局 source 设置的保留参数（GUI 隐藏；source 用表达式引用）。 */
+export function gsSeed() {
   const f = C0 / 1.55e-6;                    /* ≈ 193.4 THz */
-  return { band_lo: f - 10e12, band_hi: f + 10e12,
-           delay: 0.0, phase: 0.0, amplitude: 1.0 };
+  return { gsrc_band_lo: f - 10e12, gsrc_band_hi: f + 10e12,
+           gsrc_delay: 0.0, gsrc_phase: 0.0, gsrc_amplitude: 1.0 };
 }
 
 /** 声明 soft source 后要写下的那一套（193 THz ≈ 1.55 µm） */

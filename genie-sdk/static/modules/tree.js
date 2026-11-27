@@ -54,7 +54,8 @@ export function renderTree() {
   /* Parameters / fdtd 同款 select-folder：行点击进表单，箭头折叠。
    * 计数 0 时也保留节点（空参数页 = 参数系统入口）。 */
   folder("Parameters", "params", 0, "params",
-    (cfg && cfg.parameters && Object.keys(cfg.parameters).length) || null,
+    (cfg && cfg.parameters && Object.keys(cfg.parameters)
+      .filter((k) => !k.startsWith("gsrc_")).length) || null,
     "params");
 
   folder(TREE_META.materials[1], "setup", 0, "materials",

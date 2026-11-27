@@ -394,7 +394,6 @@ class Model:
         self.parameters: dict = {}
         #: 全局仿真设置（文档级，2026-11-26）：freq_center / freq_span。
         #: source/monitor 可选用全局（继承在提交时解析，wire 无此字段）。
-        self.simulation: dict = {}
         self._geometry: list = []
         self._materials: list = []
         self._attributes: list = []
@@ -632,8 +631,6 @@ class Model:
 
     def _document_model(self) -> dict:
         mdl = {
-            # 全局仿真设置（非空才写，旧档不受扰）
-            **({"simulation": dict(self.simulation)} if self.simulation else {}),
             "materials": [to_wire(i) for i in self._materials],
             "geometry": [to_wire(i) for i in self._geometry],
             # Empty attributes are OMITTED: the wire key is additive and
@@ -736,7 +733,6 @@ class Model:
                 s.meshes._items = mesh_items
                 all_meshes += mesh_items
         m.parameters = dict(model.get("parameters") or {})
-        m.simulation = dict(model.get("simulation") or {})
         for kinds, items, src, key in (
                 (_GEO, m._geometry, model, "geometry"),
                 (_MAT, m._materials, model, "materials"),

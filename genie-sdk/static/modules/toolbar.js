@@ -2,8 +2,8 @@ import { $ } from "./util.js";
 import { exec } from "../core/bus.js";
 import { previewEl } from "../views/previews.js";
 import { cfg } from "./state.js";
-import { fdtdSeed, modeSeed, softSourceSeed, simulationSeed,
-         fieldsArg } from "./defaults.js";
+import { fdtdSeed, modeSeed, softSourceSeed, gsSeed,
+         fieldsArg, pyLit } from "./defaults.js";
 import { exitResult, resultMode } from "./result.js";
 import { runBuild, runMode, runModel } from "./term.js";
 /* modules/toolbar.js — 工具条（M1 重接：按钮 → exec → 公开动词）
@@ -34,9 +34,16 @@ export function buildToolbar() {
         exec("s = genie.add_solver(type='" + t + "')\n"
           + "genie.set_named(s, " + fieldsArg(seed) + ")",
           { echo: true }).catch(() => {});
-        if (!(cfg && cfg.simulation && cfg.simulation.freq_center)) {
-          exec("genie.set_named('simulation', "
-            + fieldsArg(simulationSeed()) + ")", { echo: false }).catch(() => {});
+        const gsKnown = (cfg && cfg.parameters) || {};
+        if (!gsKnown.gsrc_band_lo) {
+          const seed = gsSeed();
+          const lines = [];
+          for (const [k, v] of Object.entries(seed)) {
+            lines.push("genie.add_parameter(" + JSON.stringify(k) + ")");
+            lines.push("genie.set_named(" + JSON.stringify("parameter." + k)
+              + ", value=" + pyLit(v) + ")");
+          }
+          exec(lines.join("\n"), { echo: false }).catch(() => {});
         }
       });
       solverBtns.appendChild(b);

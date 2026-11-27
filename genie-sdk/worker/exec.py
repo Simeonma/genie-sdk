@@ -79,9 +79,6 @@ class ExecContext:
         Other solvers render from their own ``config`` slot."""
         snap = self.model.to_config(
             "fdtd" if "fdtd" in self.model.solvers else None)
-        _sim = dict(getattr(self.model, "simulation", {}) or {})
-        if _sim:
-            snap["simulation"] = _sim          # 非空才带，空模型保持旧形
         snap["solvers"] = self.model.solver_list()
         snap["analysis"] = [
             {"name": n,
