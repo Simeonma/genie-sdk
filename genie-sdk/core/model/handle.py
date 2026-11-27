@@ -408,9 +408,9 @@ class Model:
 
     def add_solver(self, name, kind=None) -> Solver:
         kind = kind or name
-        """Declare a solver. **声明只建空包络**（2026-11-26 站长拍：默认值归 GUI）——
-        fdtd 的 ±1 µm / 时间 / CFL / 边界，mode 的轴 / λ / 模式数，都由面板按钮在
-        声明后一条 set_named 写下。
+        """Declare a solver. **声明只建空包络**（Q48 改裁 2026-11-28）：
+        文档只存显式选择；fdtd/mode 的默认值由 ``to_config`` / ``to_view``
+        在边界补全（`core/model/defaults.py`），不在创建时物化、GUI 零 seed。
         The name follows the wire ``_SOLVER_NAME`` pattern (same ruler as
         the protocol -- no second regex here). Duplicate declaration is an
         error (it would silently discard the existing envelope). **One

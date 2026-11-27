@@ -261,7 +261,8 @@ export function DOMAIN_SCHEMA(cfg, commit) {
       const b = bnd[f] || {};
       return {
         kind: "num", path: `domain.boundary.${f}.${key}`,
-        /* 值来自模型（2026-11-25）：pml 面在切换那一刻由 kernel 播种 layers/κ/order */
+        /* 值来自 effective 视图（L-62）：pml 面的 layers/κ/order 由
+         * core/model 的 resolver 按 kind 补，GUI 不播种。 */
         value: isPml ? b[key] : undefined,
         disabled: !isPml,
         aria: `${f} pml ${label}`,
@@ -755,11 +756,11 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
   }] };
 }
 
-/* ══════════════════ 全局 Simulation（2026-11-26 站长拍）══════════════════
- * 文档级（model.simulation）：source/monitor 可选继承它；提交时解析成具体值，
- * wire 没有这个字段。 */
+/* ══════════════════ 全局 source（2026-11-28）══════════════════
+ * 文档级 model.global_source：source 用 id 成员继承；resolver 在 view/载荷
+ * 展开成数值字段；wire 没有这个字段。 */
 export function GLOBAL_SCHEMA(cfg, setGs, gs) {
-  /* 全局 source 设置 = 文档级单例；值为 effective（缺失字段由 resolver 补）。 */
+  /* 全局 source 设置 = 文档级单例（model.global_source）；值为 effective。 */
   const g = gs || {};
   const f = g.freq, bw = g.bandwidth;
   const band = (typeof f === "number" && typeof bw === "number")
@@ -824,7 +825,7 @@ export const FormPanel = {
     const panel = {
       domain: "domain", mesh: "mesh", materials: "materials",
       geometry: "geometry", source: "source", monitor: "monitor", run: "run",
-      mode: "mode", simulation: "simulation",
+      mode: "mode", global_source: "global_source",
     }[this.current];
     if (!panel) return;
 
@@ -841,7 +842,7 @@ export const FormPanel = {
        * 只留名字（图标多余，删）。 */
       const ID = { domain: "Settings", mode: "Settings",
                    mesh: "Mesh", run: "Settings",
-                   simulation: "Settings" }[this.current];
+                   global_source: "Settings" }[this.current];
       if (ID) body.appendChild(this._paneId(ID));
     }
 
@@ -854,7 +855,7 @@ export const FormPanel = {
       case "source": this._source(body); break;
       case "monitor": this._monitor(body); break;
       case "run": this._run(body); break;
-      case "simulation": this._simulation(body); break;
+      case "global_source": this._global_source(body); break;
     }
 
     /* 标签全文兜底（2026-10-21）：窄栏里长字段名（apodize_window /
@@ -1064,7 +1065,7 @@ export const FormPanel = {
   },
 
   /* fdtd 域卡：内容 = DOMAIN_SCHEMA（模块级数据），这里只剩接线。 */
-  _simulation(body) {
+  _global_source(body) {
     /* 全局 source 设置 = 文档级单例；写它不碰任何 source。 */
     const setGs = (fields) => {
       const lines = [];
