@@ -737,7 +737,7 @@ export function GLOBAL_SCHEMA(cfg, setBand, sim) {
   const pair = band ? (wl ? [C0 / band[1], C0 / band[0]] : band) : null;
   return { sections: [{
     type: "section", key: "sim:general",
-    title: "General source setting", open: true,
+    title: "Global source setting", open: true,
     items: [
       /* 一张 1×5 表（2026-11-27 站长拍）：首列 = 量（frequency/wavelength），
        * 后四列 = center/span/min/max 互算；真身 band_lo/band_hi（Hz）。 */
