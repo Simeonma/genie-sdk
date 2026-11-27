@@ -737,11 +737,11 @@ export function GLOBAL_SCHEMA(cfg, setBand, sim) {
   const pair = band ? (wl ? [C0 / band[1], C0 / band[0]] : band) : null;
   return { sections: [{
     type: "section", key: "sim:general",
-    title: "Global frequency/wavelength settings", open: true,
+    title: "General source setting", open: true,
     items: [
       /* 一张 1×5 表（2026-11-27 站长拍）：首列 = 量（frequency/wavelength），
        * 后四列 = center/span/min/max 互算；真身 band_lo/band_hi（Hz）。 */
-      { type: "range", caption: "Frequency band", unit: wl ? "len" : "freq",
+      { type: "range", caption: "Frequency/Wavelength", unit: wl ? "len" : "freq",
         order: ["center", "span", "min", "max"],
         lead: { kind: "select", value: wl ? "wavelength" : "frequency",
                 options: ["frequency", "wavelength"], rerender: true,
@@ -755,9 +755,6 @@ export function GLOBAL_SCHEMA(cfg, setBand, sim) {
             } else { lo = v[0]; hi = v[1]; }
             if (hi > lo) setBand(lo, hi);
           } }] },
-      { type: "note",
-        text: "Sources / monitors 可以选择“Use global”继承这一频段；"
-          + "提交时解析成各自的 freq / bandwidth，内核看不到“全局”。", },
     ],
   }] };
 }
