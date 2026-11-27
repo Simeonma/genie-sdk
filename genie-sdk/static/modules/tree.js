@@ -79,7 +79,7 @@ export function renderTree() {
   folder("Physics", "solvers", 0, "structure", solvers.length || null);
   if (open("solvers")) {
     /* 全局仿真设置（文档级，2026-11-26）：与 solver 卡同级，站 Physics 下 */
-    leaf("simulation", null, "Simulation", 1, null, "params");
+    leaf("simulation", null, "Global setting", 1, null, "params");
     for (const sv of solvers) {
       if (sv.kind !== "fdtd") {
         /* mode：与 fdtd 对称——行点击进 mode 卡片（数据走快照

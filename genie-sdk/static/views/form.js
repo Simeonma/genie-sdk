@@ -772,9 +772,9 @@ export function GLOBAL_SCHEMA(cfg, setGs, gs) {
     ? [g.gsrc_band_lo, g.gsrc_band_hi] : null;
   const pair = band ? (wl ? [C0 / band[1], C0 / band[0]] : band) : null;
   return { sections: [{
-    type: "section", key: "sim:source", title: "Global source setting", open: true,
+    type: "section", key: "sim:source", title: "Global source", open: true,
     items: [
-      { type: "range", caption: "Frequency/Wavelength", unit: wl ? "len" : "freq",
+      { type: "range", caption: "Spectrum", unit: wl ? "len" : "freq",
         order: ["center", "span", "min", "max"],
         lead: { kind: "select", value: wl ? "wavelength" : "frequency",
                 options: ["frequency", "wavelength"], rerender: true,
