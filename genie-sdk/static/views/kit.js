@@ -493,9 +493,6 @@ export const KIT = {
         span: v0[1] - v0[0], min: v0[0], max: v0[1],
       };
       const ins = {};
-      /* 只读行（无 onSet）：值照常显示，但不打开写腿、不进 Tab——给
-       * "引用全局"这类由表达式决定的频谱用。 */
-      const writable = typeof r.onSet === "function";
       for (const name of ORDER) ins[name] = this._mtxInput(val[name], unitKind);
       const apply = (lo, hi) => {
         ins.min.value = this._dispVal(unitKind, lo);
@@ -526,11 +523,9 @@ export const KIT = {
         apply(lo, hi);
         r.onSet([lo, hi]);
       };
-      if (writable) {
-        for (const name of ORDER) {
-          this._edit(ins[name]);
-          ins[name].addEventListener("change", fire(name));
-        }
+      for (const name of ORDER) {
+        this._edit(ins[name]);
+        ins[name].addEventListener("change", fire(name));
       }
       const cells = ORDER.map((name) => ins[name]);
       if (lead) cells.unshift(this._ctl(it, lead, true).el);

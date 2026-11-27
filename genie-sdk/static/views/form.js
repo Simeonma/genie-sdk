@@ -639,39 +639,33 @@ export function MESH_SCHEMA(cfg, commit, m) {
  *   Spectrum = 1×5 范围表（首格 frequency/wavelength 切换 + center/span/
  *              min/max 四列互算）
  *   Temporal = delay / phase / amplitude 三列
- * 数据与写腿由调用方给；onBand/onTemporal 缺省 = 只读（source 勾了
- * Use global 时，值来自 gsrc_ 表达式引用）。SIM_UNIT 是同一份视图状态：
- * 在哪张卡切频率/波长，所有卡一起跟。 */
+ * 数据与写腿由调用方给；SIM_UNIT 是同一份视图状态：在哪张卡切频率/波长，
+ * 所有卡一起跟。 */
 function spectrumTiming({ band, temporal, path, onBand, onTemporal }) {
   const wl = SIM_UNIT === "wavelength";
   const pair = band ? (wl ? [C0 / band[1], C0 / band[0]] : band) : null;
-  const writable = typeof onBand === "function"
-    && typeof onTemporal === "function";
-  const range = {
+  const cell = (field, value, unit) => {
+    const c = { kind: "num", path: `${path}.${field}`, value };
+    if (unit) c.unit = unit;
+    c.onSet = (v) => onTemporal(field, v);
+    return c;
+  };
+  return [{
     type: "range", caption: "Spectrum", unit: wl ? "len" : "freq",
     order: ["center", "span", "min", "max"],
     lead: { kind: "select", value: wl ? "wavelength" : "frequency",
             options: ["frequency", "wavelength"], rerender: true,
             header: "", onPick: (v) => { SIM_UNIT = v; } },
-    rows: [{ value: pair }],
-  };
-  if (writable) {
-    range.rows[0].onSet = (v) => {
-      let lo, hi;
-      if (wl) {
-        if (!(v[0] > 0) || !(v[1] > 0)) return;
-        lo = C0 / v[1]; hi = C0 / v[0];
-      } else { lo = v[0]; hi = v[1]; }
-      if (hi > lo) onBand([lo, hi]);
-    };
-  }
-  const cell = (field, value, unit) => {
-    const c = { kind: "num", path: `${path}.${field}`, value };
-    if (unit) c.unit = unit;
-    if (writable) c.onSet = (v) => onTemporal(field, v);
-    return c;
-  };
-  return [range, {
+    rows: [{ value: pair,
+      onSet: (v) => {
+        let lo, hi;
+        if (wl) {
+          if (!(v[0] > 0) || !(v[1] > 0)) return;
+          lo = C0 / v[1]; hi = C0 / v[0];
+        } else { lo = v[0]; hi = v[1]; }
+        if (hi > lo) onBand([lo, hi]);
+      } }],
+  }, {
     type: "table", caption: "Temporal",
     cols: [{ label: "delay", unit: "fs" }, { label: "phase", unit: "rad" },
            { label: "amplitude" }],
@@ -685,7 +679,8 @@ function spectrumTiming({ band, temporal, path, onBand, onTemporal }) {
 
 /* ══════════════════ FDTD ▸ soft source（2026-11-26 站长拍）══════════════
  * 与 fdtd/mode/mesh 同一副面板：General settings（Position / Type /
- * Polarization）→ Waveform & spectrum（公共件 spectrumTiming）。 */
+ * Polarization）→ Waveform & spectrum（Use global 节首 + 公共件
+ * spectrumTiming；勾上全局时两张表不渲染）。 */
 export function SOURCE_SCHEMA(cfg, commit, s, addr) {
   const vec = (key, fallback) => {
     const v = Array.isArray(s[key]) ? s[key] : fallback;
@@ -703,9 +698,10 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
   };
   const pol = (Array.isArray(s.polarization) && Array.isArray(s.polarization[0]))
     ? s.polarization : [[1, 0], [0, 0], [0, 0]];
-  /* Use global（2026-11-27 第一性版）：勾上 = 五个字段写成对保留参数的
-   * 表达式（提升时求值）；只读状态由“字段是不是 gsrc_ 表达式”决定，
-   * 不另存任何标记。取消 = 把当时的数值写回去。 */
+  /* Use global（2026-11-28 站长拍）：放在 Waveform & spectrum 节首。
+   * 勾上 = 五个字段写成对保留参数的表达式（提升时求值）；此时频谱/时域
+   * 两张表不渲染（值只在 Global source 一处编辑）。取消 = 把当时的全局
+   * 数值写回成数字。只读状态仍由字段是不是 gsrc_ 表达式决定。 */
   const gsp = (cfg && cfg.parameters) || {};
   const isRef = (x) => typeof x === "string" && x.includes("gsrc_");
   const bound = isRef(s.freq);
@@ -719,6 +715,53 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
   const delayVal = isRef(s.delay) ? gsp.gsrc_delay : (s.delay ?? 0);
   const phaseVal = isRef(s.phase) ? gsp.gsrc_phase : (s.phase ?? 0);
   const ampVal = isRef(s.amplitude) ? gsp.gsrc_amplitude : (s.amplitude ?? 1);
+  /* Waveform & spectrum 节：Use global 在节首；勾上时只留开关 + 提示，
+   * 频谱/时域两张表直接不渲染（2026-11-28 站长拍）。 */
+  const wave = [{
+    type: "row", label: "Use global", controls: [{
+      kind: "bool3", path: "source.use_global", value: bound,
+      /* 没配全局就不能勾；已勾的仍可取消（否则旧表达式解不开）。 */
+      disabled: !bandOk && !bound,
+      onSet: (on) => {
+        if (on) {
+          exec("genie.set_named(" + JSON.stringify(addr)
+            + ", freq=" + py("(gsrc_band_lo+gsrc_band_hi)/2")
+            + ", bandwidth=" + py("gsrc_band_hi-gsrc_band_lo")
+            + ", delay=" + py("gsrc_delay")
+            + ", phase=" + py("gsrc_phase")
+            + ", amplitude=" + py("gsrc_amplitude") + ")",
+            { echo: false }).catch(() => {});
+        } else {
+          const f = ((gsp.gsrc_band_lo ?? 0) + (gsp.gsrc_band_hi ?? 0)) / 2;
+          const b = (gsp.gsrc_band_hi ?? 0) - (gsp.gsrc_band_lo ?? 0);
+          exec("genie.set_named(" + JSON.stringify(addr)
+            + ", freq=" + py(f) + ", bandwidth=" + py(b)
+            + ", delay=" + py(gsp.gsrc_delay ?? 0)
+            + ", phase=" + py(gsp.gsrc_phase ?? 0)
+            + ", amplitude=" + py(gsp.gsrc_amplitude ?? 1) + ")",
+            { echo: false }).catch(() => {});
+        }
+      } }] }];
+  if (bound) {
+    wave.push({ type: "note", text: bandOk
+      ? "Spectrum and timing follow the Global source setting."
+      : "Global source setting is not configured." });
+  } else {
+    if (!bandOk) {
+      wave.push({ type: "note",
+        text: "Global source setting is not configured." });
+    }
+    wave.push(...spectrumTiming({
+      band, path: "source",
+      temporal: { delay: delayVal, phase: phaseVal, amplitude: ampVal },
+      onBand: (v) => {
+        exec("genie.set_named(" + JSON.stringify(addr) + ", freq="
+          + py((v[0] + v[1]) / 2) + ", bandwidth=" + py(v[1] - v[0]) + ")",
+          { echo: false }).catch(() => {});
+      },
+      onTemporal: (field, v) => commit(field, py(v)),
+    }));
+  }
   return { sections: [{
     type: "section", key: "src:general", title: "General settings", open: true,
     items: [
@@ -730,31 +773,6 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
           kind: "select", value: s.kind || "electric",
           options: ["electric", "magnetic"], rerender: true,
           onPick: (v) => commit("kind", py(v)) }] },
-      { type: "row", label: "Use global", controls: [{
-          kind: "bool3", path: "source.use_global",
-          value: bound, rerender: true,
-          onSet: (on) => {
-            if (on) {
-              if (!bandOk) return;
-              exec("genie.set_named(" + JSON.stringify(addr)
-                + ", freq=" + py("(gsrc_band_lo+gsrc_band_hi)/2")
-                + ", bandwidth=" + py("gsrc_band_hi-gsrc_band_lo")
-                + ", delay=" + py("gsrc_delay")
-                + ", phase=" + py("gsrc_phase")
-                + ", amplitude=" + py("gsrc_amplitude") + ")",
-                { echo: false }).catch(() => {});
-            } else {
-              const f = ((gsp.gsrc_band_lo ?? 0) + (gsp.gsrc_band_hi ?? 0)) / 2;
-              const b = (gsp.gsrc_band_hi ?? 0) - (gsp.gsrc_band_lo ?? 0);
-              exec("genie.set_named(" + JSON.stringify(addr)
-                + ", freq=" + py(f) + ", bandwidth=" + py(b)
-                + ", delay=" + py(gsp.gsrc_delay ?? 0)
-                + ", phase=" + py(gsp.gsrc_phase ?? 0)
-                + ", amplitude=" + py(gsp.gsrc_amplitude ?? 1) + ")",
-                { echo: false }).catch(() => {});
-            }
-            this._rerender();
-          } }] },
       /* 复数直接输入（2026-11-26 站长拍）：xyz 三列，一格一个复数
        * （`1` / `2j` / `1-0.5j`），写回线格式的 [[re,im]×3]。 */
       { type: "table", caption: "Polarization",
@@ -780,17 +798,7 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
   }, {
     type: "section", key: "src:wave", title: "Waveform & spectrum",
     open: true,
-    items: spectrumTiming({
-      band, path: "source",
-      temporal: { delay: delayVal, phase: phaseVal, amplitude: ampVal },
-      /* 勾了 Use global = 五个字段是 gsrc_ 表达式 → 只读；取消才写回数字。 */
-      onBand: bound ? null : (v) => {
-        exec("genie.set_named(" + JSON.stringify(addr) + ", freq="
-          + py((v[0] + v[1]) / 2) + ", bandwidth=" + py(v[1] - v[0]) + ")",
-          { echo: false }).catch(() => {});
-      },
-      onTemporal: bound ? null : (field, v) => commit(field, py(v)),
-    }),
+    items: wave,
   }] };
 }
 
