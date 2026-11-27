@@ -579,7 +579,9 @@ function wavelengthLiteral(s) {
  * 与 fdtd/mode 同一副面板：General settings = Domain range（四列）+ Refine
  * method（factor | absolute）+ Refinement（一行 x/y/z）+ Growth。 */
 let MESH_METHOD = null;
-let SIM_UNIT = "frequency";      /* 视图偏好：factor | absolute（不落模型） */
+let SIM_UNIT = "frequency";
+/* 本次会话里哪些 source 选了 Use global（不落文档；重开即普通值）。 */
+const LOCKED = new Set();      /* 视图偏好：factor | absolute（不落模型） */
 
 export function MESH_SCHEMA(cfg, commit, m) {
   const useAbs = MESH_METHOD
@@ -656,7 +658,7 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
    * 并把它锁住（use_ids 记在文档里）。不是提交时解析。 */
   const sim = (cfg && cfg.simulation) || {};
   const bandOk = (sim.band_lo != null && sim.band_hi != null);
-  const bound = bandOk && (sim.use_ids || []).includes(s.id);
+  const bound = bandOk && LOCKED.has(addr);
   const freqVal = s.freq, bwVal = s.bandwidth;
   const delayVal = s.delay ?? 0, phaseVal = s.phase ?? 0;
   const ampVal = s.amplitude ?? 1;
@@ -675,20 +677,17 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
           kind: "bool3", path: "source.use_global",
           value: bound, rerender: true,
           onSet: (on) => {
-            const ids = (sim.use_ids || []).filter((x) => x !== s.id);
-            const lines = [];
-            if (on) {
-              if (!bandOk) return;
-              const f = (sim.band_lo + sim.band_hi) / 2;
-              lines.push("genie.set_named(" + JSON.stringify(addr) + ", freq=" + py(f)
-                + ", bandwidth=" + py(sim.band_hi - sim.band_lo)
-                + ", delay=" + py(sim.delay ?? 0)
-                + ", phase=" + py(sim.phase ?? 0)
-                + ", amplitude=" + py(sim.amplitude ?? 1) + ")");
-              ids.push(s.id);
-            }
-            lines.push("genie.set_named('simulation', use_ids=" + py(ids) + ")");
-            exec(lines.join("\n"), { echo: false }).catch(() => {});
+            if (!on) { LOCKED.delete(addr); this._rerender(); return; }
+            if (!bandOk) return;
+            const f = (sim.band_lo + sim.band_hi) / 2;
+            exec("genie.set_named(" + JSON.stringify(addr) + ", freq=" + py(f)
+              + ", bandwidth=" + py(sim.band_hi - sim.band_lo)
+              + ", delay=" + py(sim.delay ?? 0)
+              + ", phase=" + py(sim.phase ?? 0)
+              + ", amplitude=" + py(sim.amplitude ?? 1) + ")",
+              { echo: false }).catch(() => {});
+            LOCKED.add(addr);
+            this._rerender();
           } }] },
       /* 复数直接输入（2026-11-26 站长拍）：xyz 三列，一格一个复数
        * （`1` / `2j` / `1-0.5j`），写回线格式的 [[re,im]×3]。 */
