@@ -71,7 +71,8 @@ export const C0 = 299792458;                 /* 光速，m/s */
  * 默认 λ=1.55 µm 为中心、20 THz 带宽。 */
 export function simulationSeed() {
   const f = C0 / 1.55e-6;                    /* ≈ 193.4 THz */
-  return { band_lo: f - 10e12, band_hi: f + 10e12 };
+  return { band_lo: f - 10e12, band_hi: f + 10e12,
+           delay: 0.0, phase: 0.0, amplitude: 1.0 };
 }
 
 /** 声明 soft source 后要写下的那一套（193 THz ≈ 1.55 µm） */

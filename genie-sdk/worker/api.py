@@ -370,18 +370,31 @@ class Surface:
     # -- per-kind writers ------------------------------------------------
 
     def _set_simulation(self, t, fields):
-        """全局仿真设置（2026-11-26）：只收 freq_center / freq_span（SI Hz）。"""
-        allowed = {"band_lo", "band_hi"}
+        """全局设置（文档值，GUI 私有）：频段 + delay/phase/amplitude +
+        use_ids（哪些 source 选了 Use global）。core 只存不解释。"""
+        allowed = {"band_lo", "band_hi", "delay", "phase", "amplitude", "use_ids"}
         self._only(t, fields, allowed)
+        cur = dict(t.obj.simulation or {})
         for k, v in fields.items():
-            if not isinstance(v, (int, float)) or not v > 0:
-                raise ValueError(f"simulation.{k} must be a positive number, got {v!r}")
-            t.obj.simulation = {**t.obj.simulation, k: float(v)}
-        band = t.obj.simulation
-        if "band_lo" in band and "band_hi" in band and not (band["band_hi"] > band["band_lo"]):
+            if k == "use_ids":
+                if not isinstance(v, (list, tuple)):
+                    raise ValueError(f"simulation.use_ids must be a list, got {v!r}")
+                ids = []
+                for x in v:
+                    if not isinstance(x, int) or isinstance(x, bool) or x < 0:
+                        raise ValueError(f"simulation.use_ids entries must be ids, got {x!r}")
+                    ids.append(int(x))
+                cur["use_ids"] = ids
+            else:
+                if not isinstance(v, (int, float)):
+                    raise ValueError(f"simulation.{k} must be a number, got {v!r}")
+                cur[k] = float(v)
+        if ("band_lo" in cur and "band_hi" in cur
+                and not (cur["band_hi"] > cur["band_lo"])):
             raise ValueError(
                 f"simulation band must satisfy band_lo < band_hi, got "
-                f"{band['band_lo']!r} / {band['band_hi']!r}")
+                f"{cur['band_lo']!r} / {cur['band_hi']!r}")
+        t.obj.simulation = cur
         return "simulation"
 
     def _set_parameter(self, t, fields):

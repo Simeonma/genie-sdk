@@ -635,7 +635,7 @@ export function MESH_SCHEMA(cfg, commit, m) {
 /* ══════════════════ FDTD ▸ soft source（2026-11-26 站长拍）══════════════
  * 与 fdtd/mode/mesh 同一副面板：General settings（时域四件套 + 幅度 + 种类）
  * → Placement（Center / Size 各一行 xyz）→ Polarization（实部/虚部 × xyz）。 */
-export function SOURCE_SCHEMA(cfg, commit, s) {
+export function SOURCE_SCHEMA(cfg, commit, s, addr) {
   const vec = (key, fallback) => {
     const v = Array.isArray(s[key]) ? s[key] : fallback;
     return {
@@ -652,12 +652,14 @@ export function SOURCE_SCHEMA(cfg, commit, s) {
   };
   const pol = (Array.isArray(s.polarization) && Array.isArray(s.polarization[0]))
     ? s.polarization : [[1, 0], [0, 0], [0, 0]];
-  /* 全局频段继承（2026-11-27）：选 global 时 freq/bw 显示解析值且只读。 */
+  /* Use global（2026-11-27 站长拍）：点的时候把全局值复制进这个 source，
+   * 并把它锁住（use_ids 记在文档里）。不是提交时解析。 */
   const sim = (cfg && cfg.simulation) || {};
   const bandOk = (sim.band_lo != null && sim.band_hi != null);
-  const bound = s.freq_from === "global" && bandOk;
-  const freqVal = bound ? (sim.band_lo + sim.band_hi) / 2 : s.freq;
-  const bwVal = bound ? (sim.band_hi - sim.band_lo) : s.bandwidth;
+  const bound = bandOk && (sim.use_ids || []).includes(s.id);
+  const freqVal = s.freq, bwVal = s.bandwidth;
+  const delayVal = s.delay ?? 0, phaseVal = s.phase ?? 0;
+  const ampVal = s.amplitude ?? 1;
   return { sections: [{
     type: "section", key: "src:general", title: "General settings", open: true,
     items: [
@@ -669,10 +671,25 @@ export function SOURCE_SCHEMA(cfg, commit, s) {
           kind: "select", value: s.kind || "electric",
           options: ["electric", "magnetic"], rerender: true,
           onPick: (v) => commit("kind", py(v)) }] },
-      { type: "row", label: "Band", controls: [{
-          kind: "select", value: s.freq_from === "global" ? "global" : "own",
-          options: ["own", "global"], rerender: true,
-          onPick: (v) => commit("freq_from", py(v)) }] },
+      { type: "row", label: "Use global", controls: [{
+          kind: "bool3", path: "source.use_global",
+          value: bound, rerender: true,
+          onSet: (on) => {
+            const ids = (sim.use_ids || []).filter((x) => x !== s.id);
+            const lines = [];
+            if (on) {
+              if (!bandOk) return;
+              const f = (sim.band_lo + sim.band_hi) / 2;
+              lines.push("genie.set_named(" + JSON.stringify(addr) + ", freq=" + py(f)
+                + ", bandwidth=" + py(sim.band_hi - sim.band_lo)
+                + ", delay=" + py(sim.delay ?? 0)
+                + ", phase=" + py(sim.phase ?? 0)
+                + ", amplitude=" + py(sim.amplitude ?? 1) + ")");
+              ids.push(s.id);
+            }
+            lines.push("genie.set_named('simulation', use_ids=" + py(ids) + ")");
+            exec(lines.join("\n"), { echo: false }).catch(() => {});
+          } }] },
       /* 复数直接输入（2026-11-26 站长拍）：xyz 三列，一格一个复数
        * （`1` / `2j` / `1-0.5j`），写回线格式的 [[re,im]×3]。 */
       { type: "table", caption: "Polarization",
@@ -715,12 +732,18 @@ export function SOURCE_SCHEMA(cfg, commit, s) {
         cols: [{ label: "delay", unit: "fs" }, { label: "phase", unit: "rad" },
                { label: "amp" }],
         rows: [{ cells: [
-          { kind: "num", path: "source.delay", value: s.delay ?? 0,
-            unit: "time", onSet: (v) => commit("delay", py(v)) },
-          { kind: "num", path: "source.phase", value: s.phase ?? 0,
-            onSet: (v) => commit("phase", py(v)) },
-          { kind: "num", path: "source.amplitude", value: s.amplitude ?? 1,
-            onSet: (v) => commit("amplitude", py(v)) },
+          bound
+            ? { kind: "num", path: "source.delay", value: delayVal, unit: "time" }
+            : { kind: "num", path: "source.delay", value: delayVal,
+                unit: "time", onSet: (v) => commit("delay", py(v)) },
+          bound
+            ? { kind: "num", path: "source.phase", value: phaseVal }
+            : { kind: "num", path: "source.phase", value: phaseVal,
+                onSet: (v) => commit("phase", py(v)) },
+          bound
+            ? { kind: "num", path: "source.amplitude", value: ampVal }
+            : { kind: "num", path: "source.amplitude", value: ampVal,
+                onSet: (v) => commit("amplitude", py(v)) },
         ] }] },
     ],
   }] };
@@ -753,8 +776,21 @@ export function GLOBAL_SCHEMA(cfg, setBand, sim) {
               if (!(v[0] > 0) || !(v[1] > 0)) return;
               lo = C0 / v[1]; hi = C0 / v[0];
             } else { lo = v[0]; hi = v[1]; }
-            if (hi > lo) setBand(lo, hi);
+            if (hi > lo) setBand({ band_lo: lo, band_hi: hi });
           } }] },
+      /* Temporal：全局的 delay / phase / amplitude（source 的 Use global 会用它们
+       * 一次性写进具体 source；不是提交时解析）。 */
+      { type: "table", caption: "Temporal",
+        cols: [{ label: "delay", unit: "fs" }, { label: "phase", unit: "rad" },
+               { label: "amplitude" }],
+        rows: [{ cells: [
+          { kind: "num", path: "simulation.delay", value: s.delay,
+            unit: "time", onSet: (v) => setBand({ delay: v }) },
+          { kind: "num", path: "simulation.phase", value: s.phase,
+            onSet: (v) => setBand({ phase: v }) },
+          { kind: "num", path: "simulation.amplitude", value: s.amplitude,
+            onSet: (v) => setBand({ amplitude: v }) },
+        ] }] },
     ],
   }] };
 }
@@ -1067,10 +1103,13 @@ export const FormPanel = {
 
   /* fdtd 域卡：内容 = DOMAIN_SCHEMA（模块级数据），这里只剩接线。 */
   _simulation(body) {
-    /* 全局频段卡：真身 band_lo/band_hi（Hz）；显示单位/写法是 GUI 的事。 */
-    const setBand = (lo, hi) => {
-      exec("genie.set_named('simulation', band_lo=" + py(lo)
-        + ", band_hi=" + py(hi) + ")", { echo: false }).catch(() => {});
+    /* 全局设置（文档值）：频段 + delay/phase/amplitude；不参与提交解析。 */
+    const setBand = (fields) => {
+      const parts = Object.entries(
+        fields && fields.band_lo != null ? { band_lo: fields.band_lo, band_hi: fields.band_hi } : fields)
+        .map(([k, v]) => k + "=" + py(v)).join(", ");
+      exec("genie.set_named('simulation', " + parts + ")",
+        { echo: false }).catch(() => {});
     };
     const sim = (this.cfg && this.cfg.simulation) || {};
     this.renderPage(GLOBAL_SCHEMA(this.cfg || {}, setBand, sim), body);
@@ -1461,7 +1500,7 @@ export const FormPanel = {
           + literal + ")", { echo: false }).catch(() => {});
       };
       const wrap = this._el("div", "pane-body");
-      this.renderPage(SOURCE_SCHEMA(this.cfg || {}, commit, src), wrap);
+      this.renderPage(SOURCE_SCHEMA(this.cfg || {}, commit, src, addr), wrap);
       body.appendChild(this._card(
         [this._el("span", "pane-id-name", "Settings")], wrap));
     }

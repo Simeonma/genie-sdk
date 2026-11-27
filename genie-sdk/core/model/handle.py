@@ -627,7 +627,7 @@ class Model:
         for name, s in self._solvers.items():
             solvers.append({"id": s.id, "name": name,
                             "kind": getattr(s, "kind", DEFAULT_SOLVER),
-                            "config": self._envelope_conf(s, document=True)})
+                            "config": self._envelope_conf(s)})
         return {"model": mdl, "solvers": solvers}
 
     def _document_model(self) -> dict:
@@ -644,7 +644,7 @@ class Model:
             mdl["attributes"] = [to_wire(i) for i in self._attributes]
         return mdl
 
-    def _envelope_conf(self, s, document: bool = False) -> dict:
+    def _envelope_conf(self, s) -> dict:
         """One solver envelope → its ``config`` section (fdtd four-part /
         mode Q18 v2 whole-draft; Nones stripped by ``to_wire``)."""
         if isinstance(s, ModeEnvelope):
@@ -655,31 +655,9 @@ class Model:
         return {
             "domain": to_wire(s.domain),
             "mesh": [to_wire(i) for i in s._mesh],
-            "source": [self._resolve_freq(to_wire(i), i, document)
-                       for i in s._source],
-            "monitor": [self._resolve_freq(self._wire_monitor_raw(i), i, document)
-                        for i in s._monitor],
+            "source": [to_wire(i) for i in s._source],
+            "monitor": [self._wire_monitor_raw(i) for i in s._monitor],
         }
-
-    def _resolve_freq(self, out: dict, obj, document: bool) -> dict:
-        """sources/monitors 的全局频段继承（B 方案：只存文档、载荷解析）。
-
-        ``freq_from="global"`` → 载荷里写 ``freq=(lo+hi)/2``、
-        ``bandwidth=hi-lo``（全局 band 未设时保持原值，让 validate 422）；
-        文档里保留 ``freq_from``。``own``/未设 = 原样。"""
-        key = getattr(obj, "freq_from", None)
-        out.pop("freq_from", None)
-        if document:
-            if key is not None:
-                out["freq_from"] = key
-            return out
-        if key == "global":
-            band = self.simulation or {}
-            if band.get("band_lo") is not None and band.get("band_hi") is not None:
-                lo, hi = float(band["band_lo"]), float(band["band_hi"])
-                out["freq"] = (lo + hi) / 2.0
-                out["bandwidth"] = hi - lo
-        return out
 
     @property
     def last_id(self) -> int:
