@@ -634,9 +634,58 @@ export function MESH_SCHEMA(cfg, commit, m) {
   }] };
 }
 
+/* ══════════════════ Spectrum + Temporal（2026-11-28 站长拍）══════════════
+ * 全局 source 与所有 source 卡共用这一副长相：
+ *   Spectrum = 1×5 范围表（首格 frequency/wavelength 切换 + center/span/
+ *              min/max 四列互算）
+ *   Temporal = delay / phase / amplitude 三列
+ * 数据与写腿由调用方给；onBand/onTemporal 缺省 = 只读（source 勾了
+ * Use global 时，值来自 gsrc_ 表达式引用）。SIM_UNIT 是同一份视图状态：
+ * 在哪张卡切频率/波长，所有卡一起跟。 */
+function spectrumTiming({ band, temporal, path, onBand, onTemporal }) {
+  const wl = SIM_UNIT === "wavelength";
+  const pair = band ? (wl ? [C0 / band[1], C0 / band[0]] : band) : null;
+  const writable = typeof onBand === "function"
+    && typeof onTemporal === "function";
+  const range = {
+    type: "range", caption: "Spectrum", unit: wl ? "len" : "freq",
+    order: ["center", "span", "min", "max"],
+    lead: { kind: "select", value: wl ? "wavelength" : "frequency",
+            options: ["frequency", "wavelength"], rerender: true,
+            header: "", onPick: (v) => { SIM_UNIT = v; } },
+    rows: [{ value: pair }],
+  };
+  if (writable) {
+    range.rows[0].onSet = (v) => {
+      let lo, hi;
+      if (wl) {
+        if (!(v[0] > 0) || !(v[1] > 0)) return;
+        lo = C0 / v[1]; hi = C0 / v[0];
+      } else { lo = v[0]; hi = v[1]; }
+      if (hi > lo) onBand([lo, hi]);
+    };
+  }
+  const cell = (field, value, unit) => {
+    const c = { kind: "num", path: `${path}.${field}`, value };
+    if (unit) c.unit = unit;
+    if (writable) c.onSet = (v) => onTemporal(field, v);
+    return c;
+  };
+  return [range, {
+    type: "table", caption: "Temporal",
+    cols: [{ label: "delay", unit: "fs" }, { label: "phase", unit: "rad" },
+           { label: "amplitude" }],
+    rows: [{ cells: [
+      cell("delay", temporal && temporal.delay, "time"),
+      cell("phase", temporal && temporal.phase, null),
+      cell("amplitude", temporal && temporal.amplitude, null),
+    ] }],
+  }];
+}
+
 /* ══════════════════ FDTD ▸ soft source（2026-11-26 站长拍）══════════════
- * 与 fdtd/mode/mesh 同一副面板：General settings（时域四件套 + 幅度 + 种类）
- * → Placement（Center / Size 各一行 xyz）→ Polarization（实部/虚部 × xyz）。 */
+ * 与 fdtd/mode/mesh 同一副面板：General settings（Position / Type /
+ * Polarization）→ Waveform & spectrum（公共件 spectrumTiming）。 */
 export function SOURCE_SCHEMA(cfg, commit, s, addr) {
   const vec = (key, fallback) => {
     const v = Array.isArray(s[key]) ? s[key] : fallback;
@@ -661,8 +710,12 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
   const isRef = (x) => typeof x === "string" && x.includes("gsrc_");
   const bound = isRef(s.freq);
   const bandOk = (gsp.gsrc_band_lo != null && gsp.gsrc_band_hi != null);
-  const freqVal = bound ? (gsp.gsrc_band_lo + gsp.gsrc_band_hi) / 2 : s.freq;
-  const bwVal = bound ? (gsp.gsrc_band_hi - gsp.gsrc_band_lo) : s.bandwidth;
+  const num = (x) => typeof x === "number" && isFinite(x);
+  /* 频段 = 中心 ± 半带宽；勾了 Use global 就跟随全局频段。 */
+  const band = bound
+    ? (bandOk ? [gsp.gsrc_band_lo, gsp.gsrc_band_hi] : null)
+    : (num(s.freq) && num(s.bandwidth)
+       ? [s.freq - s.bandwidth / 2, s.freq + s.bandwidth / 2] : null);
   const delayVal = isRef(s.delay) ? gsp.gsrc_delay : (s.delay ?? 0);
   const phaseVal = isRef(s.phase) ? gsp.gsrc_phase : (s.phase ?? 0);
   const ampVal = isRef(s.amplitude) ? gsp.gsrc_amplitude : (s.amplitude ?? 1);
@@ -727,37 +780,17 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
   }, {
     type: "section", key: "src:wave", title: "Waveform & spectrum",
     open: true,
-    items: [
-      { type: "table", caption: "Spectrum",
-        cols: [{ label: "freq", unit: "THz" }, { label: "bw", unit: "THz" }],
-        rows: [{ cells: [
-          bound
-            ? { kind: "num", path: "source.freq", value: freqVal, unit: "freq" }
-            : { kind: "num", path: "source.freq", value: s.freq, unit: "freq",
-                onSet: (v) => commit("freq", py(v)) },
-          bound
-            ? { kind: "num", path: "source.bandwidth", value: bwVal, unit: "freq" }
-            : { kind: "num", path: "source.bandwidth", value: s.bandwidth,
-                unit: "freq", onSet: (v) => commit("bandwidth", py(v)) },
-        ] }] },
-      { type: "table", caption: "Timing",
-        cols: [{ label: "delay", unit: "fs" }, { label: "phase", unit: "rad" },
-               { label: "amp" }],
-        rows: [{ cells: [
-          bound
-            ? { kind: "num", path: "source.delay", value: delayVal, unit: "time" }
-            : { kind: "num", path: "source.delay", value: delayVal,
-                unit: "time", onSet: (v) => commit("delay", py(v)) },
-          bound
-            ? { kind: "num", path: "source.phase", value: phaseVal }
-            : { kind: "num", path: "source.phase", value: phaseVal,
-                onSet: (v) => commit("phase", py(v)) },
-          bound
-            ? { kind: "num", path: "source.amplitude", value: ampVal }
-            : { kind: "num", path: "source.amplitude", value: ampVal,
-                onSet: (v) => commit("amplitude", py(v)) },
-        ] }] },
-    ],
+    items: spectrumTiming({
+      band, path: "source",
+      temporal: { delay: delayVal, phase: phaseVal, amplitude: ampVal },
+      /* 勾了 Use global = 五个字段是 gsrc_ 表达式 → 只读；取消才写回数字。 */
+      onBand: bound ? null : (v) => {
+        exec("genie.set_named(" + JSON.stringify(addr) + ", freq="
+          + py((v[0] + v[1]) / 2) + ", bandwidth=" + py(v[1] - v[0]) + ")",
+          { echo: false }).catch(() => {});
+      },
+      onTemporal: bound ? null : (field, v) => commit(field, py(v)),
+    }),
   }] };
 }
 
@@ -767,39 +800,17 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
 export function GLOBAL_SCHEMA(cfg, setGs, gs) {
   /* 全局 source 设置 = 保留参数（gsrc_*），GUI 隐藏；source 用表达式引用。 */
   const g = gs || {};
-  const wl = SIM_UNIT === "wavelength";
   const band = (g.gsrc_band_lo != null && g.gsrc_band_hi != null)
     ? [g.gsrc_band_lo, g.gsrc_band_hi] : null;
-  const pair = band ? (wl ? [C0 / band[1], C0 / band[0]] : band) : null;
   return { sections: [{
     type: "section", key: "sim:source", title: "Global source", open: true,
-    items: [
-      { type: "range", caption: "Spectrum", unit: wl ? "len" : "freq",
-        order: ["center", "span", "min", "max"],
-        lead: { kind: "select", value: wl ? "wavelength" : "frequency",
-                options: ["frequency", "wavelength"], rerender: true,
-                header: "", onPick: (v) => { SIM_UNIT = v; } },
-        rows: [{ value: pair,
-          onSet: (v) => {
-            let lo, hi;
-            if (wl) {
-              if (!(v[0] > 0) || !(v[1] > 0)) return;
-              lo = C0 / v[1]; hi = C0 / v[0];
-            } else { lo = v[0]; hi = v[1]; }
-            if (hi > lo) setGs({ band_lo: lo, band_hi: hi });
-          } }] },
-      { type: "table", caption: "Temporal",
-        cols: [{ label: "delay", unit: "fs" }, { label: "phase", unit: "rad" },
-               { label: "amplitude" }],
-        rows: [{ cells: [
-          { kind: "num", path: "gs.delay", value: g.gsrc_delay, unit: "time",
-            onSet: (v) => setGs({ delay: v }) },
-          { kind: "num", path: "gs.phase", value: g.gsrc_phase,
-            onSet: (v) => setGs({ phase: v }) },
-          { kind: "num", path: "gs.amplitude", value: g.gsrc_amplitude,
-            onSet: (v) => setGs({ amplitude: v }) },
-        ] }] },
-    ],
+    items: spectrumTiming({
+      band, path: "gs",
+      temporal: { delay: g.gsrc_delay, phase: g.gsrc_phase,
+                  amplitude: g.gsrc_amplitude },
+      onBand: (v) => setGs({ band_lo: v[0], band_hi: v[1] }),
+      onTemporal: (field, v) => setGs({ [field]: v }),
+    }),
   }] };
 }
 
