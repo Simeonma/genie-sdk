@@ -15,12 +15,15 @@ One address grammar, one write verb, one read verb:
     genie.save(path=None) / open(path)
 
 Addresses are ``<family>.<name>`` for top-level objects, ``<solver>`` for a
-solver itself, and ``<solver>.<name>`` for its children (sources, monitors,
-mesh objects; one shared namespace per solver). Q30: the base grid dx/dy/dz
-lives on the solver's domain; ``add_mesh`` creates named refinement boxes.
+solver itself, ``<solver>.<name>`` for its children (sources, monitors,
+mesh objects; one shared namespace per solver), and ``global_source`` for
+the document-level global source singleton (Q50). Q30: the base grid
+dx/dy/dz lives on the solver's domain; ``add_mesh`` creates named
+refinement boxes.
 """
 from __future__ import annotations
 
+import copy
 import os
 import re
 from pathlib import Path
@@ -134,6 +137,10 @@ class Surface:
                 f"{what} name {name!r} is invalid: letters / digits / '_' / '-' "
                 f"only, must start with a letter, no '.' (the address "
                 f"separator)")
+        if name == "global_source":
+            raise ValueError(
+                "'global_source' is reserved for the document-level global "
+                "source singleton")
 
     def _family_members(self, family):
         """family → {name: obj/tuple} (live view)."""
@@ -210,8 +217,8 @@ class Surface:
                     f"address {addr!r}: {fam} has no object named {name!r} "
                     f"(existing: {self._names_hint(members)})")
             return _Target(fam, fam, name, members[name])
-        if addr == "simulation":                            # 全局仿真设置（文档级）
-            return _Target("simulation", None, addr, self._model)
+        if addr == "global_source":                         # 全局 source 设置（文档级）
+            return _Target("global_source", None, addr, self._model)
         if addr in self._model._solvers:                    # the solver itself
             return _Target("solver", None, addr, self._model.envelope(addr))
         cands = self._all_candidates().get(addr, [])
@@ -239,14 +246,7 @@ class Surface:
         if name in self._family_members(family):
             raise ValueError(f"{family}.{name} already exists")
 
-    _GS_PARAMS = frozenset({"gsrc_band_lo", "gsrc_band_hi", "gsrc_delay",
-                            "gsrc_phase", "gsrc_amplitude"})
-
     def add_parameter(self, name):
-        if name.startswith("gsrc_") and name not in self._GS_PARAMS:
-            raise ValueError(
-                "gsrc_ names are reserved for Global source setting "
-                f"(allowed: {sorted(self._GS_PARAMS)})")
         self._ensure_free(name, "parameter")
         self._model.parameters[name] = None
         return f"parameter.{name}"
@@ -384,6 +384,31 @@ class Surface:
                 f"{t.addr()}.value: expected a number or an expression "
                 f"string, got {type(val).__name__}")
         self._model.parameters[t.name] = val
+
+    def _set_global_source(self, t, fields):
+        """The document-level global source singleton (values + member ids)."""
+        self._only(t, fields, {"freq", "bandwidth", "delay", "phase",
+                               "amplitude", "sources"})
+        gs = self._model._global_source
+        for k, v in fields.items():
+            if k == "sources":
+                if not isinstance(v, (list, tuple)):
+                    raise ValueError(
+                        f"{t.addr()}.sources: expected a list of source ids")
+                known = {it.id for s in self._model._solvers.values()
+                         for it in getattr(s, "_source", [])}
+                ids = [int(x) for x in v]
+                bad = [x for x in ids if x not in known]
+                if bad:
+                    raise ValueError(
+                        f"{t.addr()}.sources: unknown source id(s) {bad}")
+                gs["sources"] = ids
+                continue
+            if not isinstance(v, (int, float, str)):
+                raise ValueError(
+                    f"{t.addr()}.{k}: expected a number or an expression "
+                    f"string, got {type(v).__name__}")
+            gs[k] = v
 
     def _set_material(self, t, fields):
         draft = t.obj
@@ -600,6 +625,9 @@ class Surface:
 
     def _get_parameter(self, t):
         return {"value": self._model.parameters[t.name]}
+
+    def _get_global_source(self, t):
+        return copy.deepcopy(self._model._global_source)
 
     def _get_material(self, t):
         snap = {k: getattr(t.obj, k) for k in type(t.obj).model_fields

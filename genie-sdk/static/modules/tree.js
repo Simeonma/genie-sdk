@@ -54,8 +54,7 @@ export function renderTree() {
   /* Parameters / fdtd 同款 select-folder：行点击进表单，箭头折叠。
    * 计数 0 时也保留节点（空参数页 = 参数系统入口）。 */
   folder("Parameters", "params", 0, "params",
-    (cfg && cfg.parameters && Object.keys(cfg.parameters)
-      .filter((k) => !k.startsWith("gsrc_")).length) || null,
+    (cfg && cfg.parameters && Object.keys(cfg.parameters).length) || null,
     "params");
 
   folder(TREE_META.materials[1], "setup", 0, "materials",
@@ -95,13 +94,14 @@ export function renderTree() {
       const key = "solver:" + sv.name;
       folder(sv.name, key, 1, "solver_fdtd", null, "domain");
       if (!open(key)) continue;
-      ((cfg && cfg.mesh) || []).forEach((m, i) =>
+      const conf = sv.config || {};
+      (conf.mesh || []).forEach((m, i) =>
         leaf("mesh", i, m.name || `refine ${i + 1}`, 2, "mesh"));
-      ((cfg && cfg.source) || []).forEach((item, i) => {
+      (conf.source || []).forEach((item, i) => {
         const fallback = KIND_TYPE_LABEL[item.type] || item.type;
         leaf("source", i, item.name || fallback, 2);
       });
-      ((cfg && cfg.monitor) || []).forEach((item, i) => {
+      (conf.monitor || []).forEach((item, i) => {
         const fallback = KIND_TYPE_LABEL[item.type] || item.type;
         leaf("monitor", i, item.name || fallback, 2);
       });

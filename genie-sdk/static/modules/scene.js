@@ -1,4 +1,4 @@
-import { $ } from "./util.js";
+import { $, fdtdConfig } from "./util.js";
 import { FormPanel } from "../views/form.js";
 import { Scene2D } from "../views/scene2d.js";
 import { Scene3D } from "../views/scene3d.js";
@@ -176,7 +176,8 @@ export function renderRibbonMeta() {
   const el = $("ribbon-meta");
   if (!el) return;
   if (!cfg) { el.replaceChildren(); return; }
-  const dom = cfg.domain || {};
+  const conf = fdtdConfig(cfg);
+  const dom = conf.domain || {};
   const span = (r) => {
     if (!Array.isArray(r) || r.length < 2) return null;
     const v = Math.abs(Number(r[1]) - Number(r[0]));
@@ -190,7 +191,8 @@ export function renderRibbonMeta() {
     const fmt = (v) => (v >= 10 ? v.toFixed(1) : v.toFixed(2));
     rows.push(["Domain", dims.map(fmt).join(" × ") + " µm"]);
   }
-  rows.push(["Objects", String(n("geometry") + n("source") + n("monitor"))]);
+  rows.push(["Objects", String(n("geometry")
+    + ((conf.source || []).length) + ((conf.monitor || []).length))]);
   rows.push(["Materials", String(n("materials"))]);
   const frag = document.createDocumentFragment();
   rows.forEach(([label, value], i) => {

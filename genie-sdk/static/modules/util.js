@@ -62,17 +62,23 @@ export function py(v) {
   throw new Error("py(): unsupported " + typeof v);
 }
 
-/* Q17 嵌套户型 → GUI 平铺视图的一次性投影（视图层零改动）：
- * worker 的 cfg 快照是 {model:{materials,geometry,parameters},
- * config:{domain,mesh,source,monitor}, solvers, analysis}；表单/树/3D/
- * 检查器仍按平铺键读写本地 cfg。投影保留 model/config 原键（serverItems
- * 的 diff 基准两态都能读），顶层平铺键从两段浅抄。
+/* 视图投影（2026-11-28 收口）：worker 的 cfg 快照 = 文档形状的
+ * `{model:{materials,geometry,parameters}, solvers:[{id,name,kind,config}],
+ * analysis}`（effective 值）。这里只把共享 model 键平铺到顶层，**不再**
+ * 平铺 solver config——solver 配置只有 `solvers[].config` 一条路，
+ * 表单/树/3D 经 fdtdConfig(cfg) 取 fdtd 包络。
  * 2026-11-23：从 window 挂载改为模块导出——ESM 迁移后 `typeof guiViewOf`
  * 在模块作用域永远是 undefined，投影被静默跳过（树/3D 吃不到模型）。 */
 export function guiViewOf(c) {
   if (!c || typeof c !== "object") return c;
-  if (!c.model && !c.config) return c;
-  const m = c.model || {}, k = c.config || {};
-  return Object.assign({}, c, m, k);
+  if (!c.model) return c;
+  return Object.assign({}, c, c.model);
+}
+
+/* fdtd 包络的唯一取法：solver 槽按 kind 找，不读任何平铺副本。 */
+export function fdtdConfig(cfg) {
+  const sv = ((cfg && cfg.solvers) || []).find(
+    (s) => s && (s.kind || "fdtd") === "fdtd");
+  return (sv && sv.config) || {};
 }
 

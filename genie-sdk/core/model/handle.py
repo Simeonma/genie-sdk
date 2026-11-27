@@ -32,12 +32,14 @@ envelope shapes:
 """
 from __future__ import annotations
 
+import copy
 import re
 
 from genie_protocol import _wire
 from genie_protocol._wire import _SOLVER_NAME
 
 from .draft import DRAFT_OF, to_wire
+from .defaults import effective_config, effective_model
 
 DomainDraft = DRAFT_OF[_wire.DomainSpec]
 MeshDraft = DRAFT_OF[_wire.MeshSpec]
@@ -50,9 +52,6 @@ ModeConfigDraft = DRAFT_OF[_wire.ModeConfigSpec]
 #: kind may exist per document.
 DEFAULT_SOLVER = "fdtd"
 
-#: 新声明 fdtd 即得一块默认仿真区（2026-11-25 站长拍）：GUI 首屏 / 脚本
-#: 同源——加 fdtd 立刻有框可看。默认值只是 draft 起点（可改可清；清空后
-#: validate 面照旧 422）。
 _SOLVER_RE = re.compile(_SOLVER_NAME)
 
 _GEO: dict = {
@@ -392,8 +391,10 @@ class Model:
     def __init__(self) -> None:
         self._alloc = _Allocator()
         self.parameters: dict = {}
-        #: 全局仿真设置（文档级，2026-11-26）：freq_center / freq_span。
-        #: source/monitor 可选用全局（继承在提交时解析，wire 无此字段）。
+        #: 全局 source 设置（文档级单例，2026-11-28）：{freq, bandwidth,
+        #: delay, phase, amplitude, sources:[source id…]}。`sources` = 继承
+        #: 它的 source id 集合；文档只存显式字段，载荷由 resolver 展开。
+        self._global_source: dict = {}
         self._geometry: list = []
         self._materials: list = []
         self._attributes: list = []
@@ -504,17 +505,21 @@ class Model:
         """The declared solver names (insertion order; read-only)."""
         return tuple(self._solvers)
 
-    def solver_list(self) -> list:
-        """The declared solvers as ``[{"name", "kind", "config"}]`` (the
-        GUI's one fact source — solvers are model declarations, not wire
-        payload: the list rides the cfg snapshot and never the submit
-        payload). ``config`` = that solver's own envelope, so every
-        solver card renders from its slot instead of guessing which
-        envelope the flattened view happened to carry."""
-        return [{"id": s.id, "name": n,
-                 "kind": getattr(s, "kind", DEFAULT_SOLVER),
-                 "config": self._envelope_conf(s)}
-                for n, s in self._solvers.items()]
+    def solver_list(self, global_source: dict | None = None) -> list:
+        """The declared solvers as ``[{"id", "name", "kind", "config"}]``
+        (the GUI's one fact source — solvers are model declarations, not
+        wire payload: the list rides the cfg snapshot and never the submit
+        payload). ``config`` = that solver's **effective** envelope
+        (defaults filled; global-source inheritance expanded; the document
+        itself stays sparse)."""
+        out = []
+        for n, s in self._solvers.items():
+            kind = getattr(s, "kind", DEFAULT_SOLVER)
+            out.append({"id": s.id, "name": n, "kind": kind,
+                        "config": effective_config(
+                            self._envelope_conf_raw(s), kind,
+                            global_source=global_source)})
+        return out
 
     # -- promotion ------------------------------------------------------
 
@@ -583,15 +588,15 @@ class Model:
             mon.mode_expansion = old
 
     def to_config(self, solver: str | None = None) -> dict:
-        """Promotion: draft → a dict in the **Q17 nested** SimConfig shape
-        (Nones stripped) for one run of ``solver``: structure under
-        ``model``, that solver's envelope under ``config`` (shape follows
-        the solver — fdtd: domain/mesh/source/monitor; mode: Q18 v2
-        sections). **No ``run`` section** (Q38): resources are action
-        parameters assembled into the payload at submit, never document
-        state. The caller must then go through
-        ``genie_protocol.resolve.validate_for_ui`` (the single
-        validation surface).
+        """Promotion: draft → the **effective** wire payload for one run:
+        shared structure under ``model``, that solver's envelope under
+        ``config``, defaults filled (L-62). The document is not changed;
+        defaults live only at this boundary.
+
+        **No ``run`` section** (Q38): resources are action parameters
+        assembled into the payload at submit, never document state. The
+        caller must then go through ``genie_protocol.resolve.validate_for_ui``
+        (the single validation surface).
 
         **No default solver** (2026-11-24 站长拍)：``solver=None`` means
         "snapshot the model as-is" — zero declared solvers → a model-only
@@ -604,15 +609,41 @@ class Model:
             return {"model": self._document_model()}
         else:
             s = self._solvers[next(iter(self._solvers))]
-        conf = self._envelope_conf(s)
-        cfg = {
-            "model": self._document_model(),
-            "config": conf,
-        }
         kind = getattr(s, "kind", DEFAULT_SOLVER)
+        model = effective_model(
+            self._document_model(), with_global_source=(kind == "fdtd"))
+        gs = model.get("global_source") if kind == "fdtd" else None
+        cfg = {
+            "model": model,
+            "config": effective_config(
+                self._envelope_conf_raw(s), kind, global_source=gs,
+                strip_authoring=True),
+        }
+        # authoring-only document state never rides the payload
+        cfg["model"].pop("global_source", None)
         if kind != DEFAULT_SOLVER:
             cfg["solver"] = kind
         return cfg
+
+    def to_view(self) -> dict:
+        """The GUI projection: the **document shape** with effective values.
+
+        Same ``{model, solvers}`` schema as :meth:`to_document`; the only
+        difference is that every solver config (and the document-level
+        global source) has its authoring defaults filled, and each source
+        carries ``use_global`` (membership in ``global_source.sources``).
+        No flattened copy, no payload wrapper — the form reads one solver
+        slot.
+        """
+        kinds = [getattr(s, "kind", DEFAULT_SOLVER)
+                 for s in self._solvers.values()]
+        with_gs = "fdtd" in kinds or bool(self._global_source)
+        model = effective_model(
+            self._document_model(), with_global_source=with_gs)
+        return {
+            "model": model,
+            "solvers": self.solver_list(model.get("global_source")),
+        }
 
     def to_document(self) -> dict:
         """The **authoring document** (the ``simconfig.json`` member of a
@@ -626,7 +657,7 @@ class Model:
         for name, s in self._solvers.items():
             solvers.append({"id": s.id, "name": name,
                             "kind": getattr(s, "kind", DEFAULT_SOLVER),
-                            "config": self._envelope_conf(s)})
+                            "config": self._envelope_conf_raw(s)})
         return {"model": mdl, "solvers": solvers}
 
     def _document_model(self) -> dict:
@@ -639,11 +670,16 @@ class Model:
         }
         if self._attributes:
             mdl["attributes"] = [to_wire(i) for i in self._attributes]
+        if self._global_source:
+            mdl["global_source"] = copy.deepcopy(self._global_source)
         return mdl
 
-    def _envelope_conf(self, s) -> dict:
-        """One solver envelope → its ``config`` section (fdtd four-part /
-        mode Q18 v2 whole-draft; Nones stripped by ``to_wire``)."""
+    def _envelope_conf_raw(self, s) -> dict:
+        """One solver envelope → its **raw** ``config`` section (explicit
+        choices only; fdtd four-part / mode Q18 v2 whole-draft; Nones
+        stripped by ``to_wire``). Defaults are applied by
+        :func:`genie.core.model.defaults.effective_config` at the payload
+        and view boundaries, never here."""
         if isinstance(s, ModeEnvelope):
             # mode：包络段 = config draft 整体（Q18 v2 分段；Q30 起 mesh
             # = 带名对象列表，draft 里的列表原样承运）；未填字段自然
@@ -733,6 +769,9 @@ class Model:
                 s.meshes._items = mesh_items
                 all_meshes += mesh_items
         m.parameters = dict(model.get("parameters") or {})
+        gs = model.get("global_source")
+        if isinstance(gs, dict):
+            m._global_source = copy.deepcopy(gs)
         for kinds, items, src, key in (
                 (_GEO, m._geometry, model, "geometry"),
                 (_MAT, m._materials, model, "materials"),

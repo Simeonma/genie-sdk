@@ -344,15 +344,6 @@ export const KIT = {
       }
       return { el: wrap, input: inp, desc: c };
     }
-    if (c.kind === "bool3") {
-      const sel = this._boolSelect(c.path, c.value === true, c.aria || c.path);
-      if (!c.disabled) {
-        sel.disabled = false;
-        sel.addEventListener("change",
-          () => c.onSet(sel.value === "true", sel));
-      }
-      return { el: sel, input: sel, desc: c };
-    }
     if (c.kind === "select") {
       const sel = this._select(c.path, c.value, c.options || []);
       if (inTable) sel.classList.add("mtx-sel");   /* 表格格：与行内下拉共用一套长相 */

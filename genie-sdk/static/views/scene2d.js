@@ -1,4 +1,5 @@
 import { updateScene } from "../modules/scene.js";
+import { fdtdConfig } from "../modules/util.js";
 import { Scene3D, matColor } from "./scene3d.js";
 import { SCENE_PALETTE } from "./scene_palette.js";
 import { cfg, scene } from "../modules/state.js";
@@ -105,7 +106,7 @@ export class Scene2D {
   /* 与 Scene3D._pmlBox 同款：每 pml 面 layers × 该轴名义格距（Q30 起
    * 基础格距住 domain） */
   _pmlBox(cfg, d) {
-    const dom = cfg.domain || {};
+    const dom = fdtdConfig(cfg).domain || {};
     const dx = dom.dx || 20e-9;
     const hs = { x_min: dx, x_max: dx, y_min: dom.dy || dx, y_max: dom.dy || dx,
                  z_min: dom.dz || dx, z_max: dom.dz || dx };
@@ -153,7 +154,7 @@ export class Scene2D {
   updateScene(cfg) {
     this.updateCount = (this.updateCount || 0) + 1;   // 重渲计数（UI 同步批 1 e2e 场景标志）
     this._cfg = cfg;
-    const dom = cfg.domain || {};
+    const dom = fdtdConfig(cfg).domain || {};
     const d = {
       xmin: dom.x_range ? dom.x_range[0] : -1e-6, xmax: dom.x_range ? dom.x_range[1] : 1e-6,
       ymin: dom.y_range ? dom.y_range[0] : -1e-6, ymax: dom.y_range ? dom.y_range[1] : 1e-6,
@@ -190,6 +191,7 @@ export class Scene2D {
     this._dirty = false;
     const d = this._d;
     const cfg = this._cfg;
+    const conf = fdtdConfig(cfg);
     const ctx = this.ctx;
     const W = this.canvas.width, H = this.canvas.height;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -204,7 +206,7 @@ export class Scene2D {
     }
 
     // 域框（六面 BC 色分着 12 条边：顶/底环 + 竖棱按所属面着色）
-    const bnd = cfg.domain ? (cfg.domain.boundary || {}) : {};
+    const bnd = (conf.domain || {}).boundary || {};
     const bc = (f) => (bnd[f] && bnd[f].kind) || "pec";
     // 简化：整个域框按主色（z_min 面）+ 四条竖棱按 x/y 面色
     this._strokeBox(d.xmin, d.xmax, d.ymin, d.ymax, d.zmin, d.zmax,
@@ -223,7 +225,7 @@ export class Scene2D {
 
     // 网格线（三个远侧面，抽稀到 ≤48/轴；Q30 起基础格距住 domain）
     if (this.showGrid) {
-      const dom = cfg.domain || {};
+      const dom = conf.domain || {};
       const dx = dom.dx || 20e-9;
       ctx.strokeStyle = this._cssRgba(SCENE_PALETTE.GRID.CANVAS_2D, 0.35);
       ctx.lineWidth = 0.7;
@@ -294,7 +296,7 @@ export class Scene2D {
     }
 
     // 源 / 监视器标记
-    for (const s of (cfg.source || [])) {
+    for (const s of (conf.source || [])) {
       const p = this._proj(s.center || [0, 0, 0]);
       ctx.fillStyle = this._cssHex(SCENE_PALETTE.MARKERS.SOURCE);
       ctx.beginPath();
@@ -305,7 +307,7 @@ export class Scene2D {
         ctx.fillText(String(s.name).slice(0, 10), p[0] + 6, p[1] + 3);
       }
     }
-    for (const m of (cfg.monitor || [])) {
+    for (const m of (conf.monitor || [])) {
       const p = this._proj(m.center || [0, 0, 0]);
       ctx.strokeStyle = this._cssHex(SCENE_PALETTE.MARKERS.MONITOR);
       ctx.lineWidth = 1.4;

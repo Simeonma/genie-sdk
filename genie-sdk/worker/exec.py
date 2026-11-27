@@ -66,20 +66,17 @@ class ExecContext:
         return Client(self.gw_base_url, worker_token=self.worker_token)
 
     def gui_snapshot(self) -> dict:
-        """The cfg event's model snapshot: the wire payload **plus** the
-        model-level declarations the GUI tree must show — ``solvers:
-        [{name, kind, config}]`` and ``analysis: [{name, script, call}]``
-        (Q11 recipes; the inspector edits the source text in place).
-        GUI-only keys; the submit payload never carries them.
+        """The cfg event's model snapshot: the **document shape** with
+        effective values — ``{model, solvers: [{id,name,kind,config}]}`` —
+        plus ``analysis`` (Q11 recipes; the inspector edits the source text
+        in place).
 
-        The flattened payload keys (domain/mesh/source/monitor) follow
-        the **fdtd** envelope whenever one is declared — GUI v1 is
-        fdtd-bound, and declaration order is a document fact, not a GUI
-        fact (a mode declared first must not hijack the form/3D view).
-        Other solvers render from their own ``config`` slot."""
-        snap = self.model.to_config(
-            "fdtd" if "fdtd" in self.model.solvers else None)
-        snap["solvers"] = self.model.solver_list()
+        One solver config path: every solver (fdtd included) lives under
+        ``solvers[]``; there is no flattened fdtd copy and no payload
+        wrapper. The form reads ``solvers[<kind>].config``. Defaults are
+        applied by ``Model.to_view``; the document stays sparse.
+        """
+        snap = self.model.to_view()
         snap["analysis"] = [
             {"name": n,
              "script": (rec or {}).get("code") or "",

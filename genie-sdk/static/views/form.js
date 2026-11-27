@@ -1,12 +1,11 @@
 import { apiNotice } from "../modules/api.js";
 import { exec } from "../core/bus.js";
-import { py, parseComplex, formatComplex } from "../modules/util.js";
+import { py, parseComplex, formatComplex, fdtdConfig } from "../modules/util.js";
 import { GEO_TYPE_LABEL, previewEl } from "./previews.js";
 import { matColor } from "./scene3d.js";
 import { cfg, scene } from "../modules/state.js";
 import { KIT } from "./kit.js";
-import { BOUNDARY_DEFAULTS, MODE_TRANSVERSE, modeSeed, fieldsArg,
-         C0 } from "../modules/defaults.js";
+import { C0 } from "../modules/constants.js";
 /* Genie FDTD service — 参数面板（Phase B2 工作台版，2026-08-30）
  *
  * 旧 Studio 排版复活：config 栏一次只渲染 nav 选中的一节（Materials/
@@ -133,12 +132,9 @@ export function DOMAIN_SCHEMA(cfg, commit) {
     d.boundary = nb;
     commit("boundary", py(nb));
   };
-  /* 换 kind = 丢掉旧 kind 的参数 + 补新 kind 的默认值（GUI 侧规则） */
-  const setFaceKind = (f, kind) => {
-    const face = { kind };
-    if (BOUNDARY_DEFAULTS[kind]) Object.assign(face, BOUNDARY_DEFAULTS[kind]);
-    commitFace(f, face);
-  };
+  /* 换 kind = 只写 kind；pml/bloch 的专属字段由 core/model 的 resolver
+   * 按 kind 补/清（L-62，GUI 不写默认值）。 */
+  const setFaceKind = (f, kind) => commitFace(f, { kind });
 
   /* 1. General settings —— 域范围（min/max/center/size 同时可编）+ 时间步进 */
   const rangeRows = ["x", "y", "z"].map((a) => ({
@@ -311,8 +307,8 @@ export function MODE_SCHEMA(cfg, commit, solverName) {
   const mc = sv.config || {};
   const d = mc.domain || {};
   const axis = ["x", "y", "z"].includes(d.axis) ? d.axis : "z";
-  const [t1, t2] = MODE_TRANSVERSE[axis];
-  const edges = MODE_FACES[axis];
+  const edges = MODE_FACES[axis] || MODE_FACES.z;
+  const [t1, t2] = [edges[0][0], edges[2][0]];
   const bo = mc.boundary || {};
   const kindOf = (f) => (bo[f] || {}).kind || "";
   const range = (a) => {
@@ -329,29 +325,14 @@ export function MODE_SCHEMA(cfg, commit, solverName) {
     mc.boundary = nb;
     commit("boundary", py(nb));
   };
-  const setFaceKind = (f, kind) => {
-    const face = { kind };
-    if (BOUNDARY_DEFAULTS[kind]) Object.assign(face, BOUNDARY_DEFAULTS[kind]);
-    commitFace(f, face);
-  };
+  const setFaceKind = (f, kind) => commitFace(f, { kind });
   const hasSpacing = [t1, t2].some((a) => Array.isArray(d[`${a}_spacing`]));
   const nRef = (v) => (typeof v === "string" ? v : (v == null ? "" : String(v)));
 
   const IDX = { x: 0, y: 1, z: 2 };
-  /* 换轴 = 布局重排（2026-11-25 站长拍，**面板规范**）：一条 set_named 同时
-   * 写下新轴与整套默认值——传播轴清窗口/网格，两条横轴回 ±1 µm 与 0.05 µm；
-   * 失效的旋转轴清成"无旋转"；边界换成新轴四缘（已有 kind 保留，缺席 pec）。 */
-  const switchAxis = (v) => {
-    /* 换轴 = 布局重排（2026-11-26 站长拍，**面板规范**）：整套默认值来自
-     * defaults.js——新轴清窗口/网格、横轴回 ±1 µm 与 0.05 µm、边界换四缘。 */
-    exec("genie.set_named(" + JSON.stringify(name) + ", "
-      + fieldsArg(modeSeed(v)) + ")", { echo: false }).catch(() => {});
-    if (mc.rotate_axis && !MODE_TRANSVERSE[v].includes(mc.rotate_axis)) {
-      exec("genie.set_named(" + JSON.stringify(name)
-        + ", rotate_axis=None, rotate_angle=0.0, rotate_radius=0.0)",
-        { echo: false }).catch(() => {});
-    }
-  };
+  /* 换轴 = 只写 axis；新轴的横轴窗口/网格/边界与失效旋转由
+   * core/model 的 resolver 按 axis 产出（L-62，GUI 不写默认值）。 */
+  const switchAxis = (v) => commit("axis", py(v));
 
   const sections = [{
     type: "section", key: "mode:general", title: "General settings", open: true,
@@ -615,12 +596,7 @@ export function MESH_SCHEMA(cfg, commit, m) {
             rerender: true,
             onPick: (v) => {
               MESH_METHOD = v;
-              if (v === "absolute") {
-                /* 切到绝对步长：空轴补 50 nm（已有值的轴不动） */
-                for (const a of ["x", "y", "z"]) {
-                  if (m[`d${a}`] == null) commit(`d${a}`, py(5e-8));
-                }
-              }
+              /* 绝对步长留空，由用户填；默认值（factor=1）由 resolver 给。 */
             } },
           { kind: "num", path: "mesh.growth_rate", value: m.growth_rate,
             hint: "过渡带渐变率（1.0 = 硬跳）",
@@ -698,62 +674,39 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
   };
   const pol = (Array.isArray(s.polarization) && Array.isArray(s.polarization[0]))
     ? s.polarization : [[1, 0], [0, 0], [0, 0]];
-  /* Use global（2026-11-28 站长拍）：放在 Waveform & spectrum 节首。
-   * 勾上 = 五个字段写成对保留参数的表达式（提升时求值）；此时频谱/时域
-   * 两张表不渲染（值只在 Global source 一处编辑）。取消 = 把当时的全局
-   * 数值写回成数字。只读状态仍由字段是不是 gsrc_ 表达式决定。 */
-  const gsp = (cfg && cfg.parameters) || {};
-  const isRef = (x) => typeof x === "string" && x.includes("gsrc_");
-  const bound = isRef(s.freq);
-  const bandOk = (gsp.gsrc_band_lo != null && gsp.gsrc_band_hi != null);
+  /* Use global（2026-11-28 站长拍）：节首一个二元开关。勾上 = 这个 source
+   * 的 id 进文档级 `global_source.sources`（resolver 在 view/载荷里展开），
+   * 频谱/时域两张表不渲染。关掉 = 从集合移除；source 自己的字段原样保留，
+   * 所以来回切不丢值。 */
+  const bound = s.use_global === true;
   const num = (x) => typeof x === "number" && isFinite(x);
-  /* 频段 = 中心 ± 半带宽；勾了 Use global 就跟随全局频段。 */
-  const band = bound
-    ? (bandOk ? [gsp.gsrc_band_lo, gsp.gsrc_band_hi] : null)
-    : (num(s.freq) && num(s.bandwidth)
-       ? [s.freq - s.bandwidth / 2, s.freq + s.bandwidth / 2] : null);
-  const delayVal = isRef(s.delay) ? gsp.gsrc_delay : (s.delay ?? 0);
-  const phaseVal = isRef(s.phase) ? gsp.gsrc_phase : (s.phase ?? 0);
-  const ampVal = isRef(s.amplitude) ? gsp.gsrc_amplitude : (s.amplitude ?? 1);
-  /* Waveform & spectrum 节：Use global 在节首；勾上时只留开关 + 提示，
-   * 频谱/时域两张表直接不渲染（2026-11-28 站长拍）。 */
+  const band = (num(s.freq) && num(s.bandwidth))
+    ? [s.freq - s.bandwidth / 2, s.freq + s.bandwidth / 2] : null;
+  const toggleGlobal = (on) => {
+    if (s.id == null) return;
+    const known = new Set((fdtdConfig(cfg).source || []).map((x) => x.id));
+    const cur = new Set((((cfg || {}).global_source || {}).sources) || []);
+    if (on) cur.add(s.id); else cur.delete(s.id);
+    const ids = Array.from(cur).filter((x) => known.has(x))
+      .sort((a, b) => a - b);
+    exec("genie.set_named('global_source', sources=" + py(ids) + ")",
+      { echo: false }).catch(() => {});
+  };
+  /* Waveform & spectrum 节：Use global 在节首；勾上时只留开关 + 提示。 */
   const wave = [{
     type: "row", label: "Use global", controls: [{
-      kind: "bool3", path: "source.use_global", value: bound,
-      /* 没配全局就不能勾；已勾的仍可取消（否则旧表达式解不开）。 */
-      disabled: !bandOk && !bound,
-      onSet: (on) => {
-        if (on) {
-          exec("genie.set_named(" + JSON.stringify(addr)
-            + ", freq=" + py("(gsrc_band_lo+gsrc_band_hi)/2")
-            + ", bandwidth=" + py("gsrc_band_hi-gsrc_band_lo")
-            + ", delay=" + py("gsrc_delay")
-            + ", phase=" + py("gsrc_phase")
-            + ", amplitude=" + py("gsrc_amplitude") + ")",
-            { echo: false }).catch(() => {});
-        } else {
-          const f = ((gsp.gsrc_band_lo ?? 0) + (gsp.gsrc_band_hi ?? 0)) / 2;
-          const b = (gsp.gsrc_band_hi ?? 0) - (gsp.gsrc_band_lo ?? 0);
-          exec("genie.set_named(" + JSON.stringify(addr)
-            + ", freq=" + py(f) + ", bandwidth=" + py(b)
-            + ", delay=" + py(gsp.gsrc_delay ?? 0)
-            + ", phase=" + py(gsp.gsrc_phase ?? 0)
-            + ", amplitude=" + py(gsp.gsrc_amplitude ?? 1) + ")",
-            { echo: false }).catch(() => {});
-        }
-      } }] }];
+      kind: "select", path: "source.use_global",
+      value: bound ? "on" : "off", options: ["off", "on"],
+      onSet: (v) => toggleGlobal(v === "on"),
+    }] }];
   if (bound) {
-    wave.push({ type: "note", text: bandOk
-      ? "Spectrum and timing follow the Global source setting."
-      : "Global source setting is not configured." });
+    wave.push({ type: "note",
+      text: "Spectrum and timing follow the Global source setting." });
   } else {
-    if (!bandOk) {
-      wave.push({ type: "note",
-        text: "Global source setting is not configured." });
-    }
     wave.push(...spectrumTiming({
       band, path: "source",
-      temporal: { delay: delayVal, phase: phaseVal, amplitude: ampVal },
+      temporal: { delay: s.delay ?? 0, phase: s.phase ?? 0,
+                  amplitude: s.amplitude ?? 1 },
       onBand: (v) => {
         exec("genie.set_named(" + JSON.stringify(addr) + ", freq="
           + py((v[0] + v[1]) / 2) + ", bandwidth=" + py(v[1] - v[0]) + ")",
@@ -806,17 +759,18 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
  * 文档级（model.simulation）：source/monitor 可选继承它；提交时解析成具体值，
  * wire 没有这个字段。 */
 export function GLOBAL_SCHEMA(cfg, setGs, gs) {
-  /* 全局 source 设置 = 保留参数（gsrc_*），GUI 隐藏；source 用表达式引用。 */
+  /* 全局 source 设置 = 文档级单例；值为 effective（缺失字段由 resolver 补）。 */
   const g = gs || {};
-  const band = (g.gsrc_band_lo != null && g.gsrc_band_hi != null)
-    ? [g.gsrc_band_lo, g.gsrc_band_hi] : null;
+  const f = g.freq, bw = g.bandwidth;
+  const band = (typeof f === "number" && typeof bw === "number")
+    ? [f - bw / 2, f + bw / 2] : null;
   return { sections: [{
     type: "section", key: "sim:source", title: "Global source", open: true,
     items: spectrumTiming({
-      band, path: "gs",
-      temporal: { delay: g.gsrc_delay, phase: g.gsrc_phase,
-                  amplitude: g.gsrc_amplitude },
-      onBand: (v) => setGs({ band_lo: v[0], band_hi: v[1] }),
+      band, path: "global_source",
+      temporal: { delay: g.delay, phase: g.phase, amplitude: g.amplitude },
+      onBand: (v) => setGs({ freq: (v[0] + v[1]) / 2,
+                             bandwidth: v[1] - v[0] }),
       onTemporal: (field, v) => setGs({ [field]: v }),
     }),
   }] };
@@ -1044,25 +998,6 @@ export const FormPanel = {
     return sel;
   },
 
-  /* 三态布尔选择（真/false/未设置=删除字段）——bool 走 JSON 线格式 */
-  _boolSelect(path, val, label) {
-    const sel = document.createElement("select");
-    sel.disabled = true;                    /* L-35：写腿随 M4 重接 */
-    if (path) sel.dataset.path = path;
-    this._tagField(sel, path);
-    sel.dataset.kind = "bool";
-    sel.title = label;
-    sel.setAttribute("aria-label", label);   /* P2-5 a11y：✓/✗/— 无文字，显式可访问名 */
-    for (const [v, t] of [["", "—"], ["true", "✓"], ["false", "✗"]]) {
-      const o = document.createElement("option");
-      o.value = v;
-      o.textContent = t;
-      sel.appendChild(o);
-    }
-    sel.value = val === true ? "true" : val === false ? "false" : "";
-    return sel;
-  },
-
   /* 材料场编辑器（L-35 拔线后 = 只读；写腿随 M4）。2026-11-25 收编：
    * 形态与值行都走 _row（表单行唯一资产），不再手搓 .frow。 */
   _matEditor(path, mt, base, name) {
@@ -1130,22 +1065,15 @@ export const FormPanel = {
 
   /* fdtd 域卡：内容 = DOMAIN_SCHEMA（模块级数据），这里只剩接线。 */
   _simulation(body) {
-    /* 全局 source 设置 = 一组保留参数；写它不碰任何 source。 */
-    const MAP = { band_lo: "gsrc_band_lo", band_hi: "gsrc_band_hi",
-                  delay: "gsrc_delay", phase: "gsrc_phase",
-                  amplitude: "gsrc_amplitude" };
+    /* 全局 source 设置 = 文档级单例；写它不碰任何 source。 */
     const setGs = (fields) => {
-      const known = (this.cfg && this.cfg.parameters) || {};
       const lines = [];
       for (const [k, v] of Object.entries(fields || {})) {
-        const name = MAP[k];
-        if (!(name in known)) lines.push("genie.add_parameter(" + JSON.stringify(name) + ")");
-        lines.push("genie.set_named(" + JSON.stringify("parameter." + name)
-          + ", value=" + py(v) + ")");
+        lines.push("genie.set_named('global_source', " + k + "=" + py(v) + ")");
       }
       if (lines.length) exec(lines.join("\n"), { echo: false }).catch(() => {});
     };
-    const gs = (this.cfg && this.cfg.parameters) || {};
+    const gs = (this.cfg && this.cfg.global_source) || {};
     this.renderPage(GLOBAL_SCHEMA(this.cfg || {}, setGs, gs), body);
   },
 
@@ -1154,7 +1082,7 @@ export const FormPanel = {
       exec("genie.set_named('fdtd', " + field + "=" + literal + ")",
         { echo: false }).catch(() => {});
     };
-    this.renderPage(DOMAIN_SCHEMA(this.cfg || {}, commit), body);
+    this.renderPage(DOMAIN_SCHEMA(fdtdConfig(this.cfg), commit), body);
   },
 
   /* 输入框 → SI 数（裸数按字段单位换算；带后缀 0.5um 后缀优先）；
@@ -1209,7 +1137,7 @@ export const FormPanel = {
     const sv = ((this.cfg && this.cfg.solvers) || [])
       .find((x) => (x.kind || "fdtd") === "fdtd");
     const solver = (sv && sv.name) || "fdtd";
-    for (const [m, i] of this._items(this.cfg.mesh || [])) {
+    for (const [m, i] of this._items(fdtdConfig(this.cfg).mesh || [])) {
       const addr = solver + "." + m.name;
       const commit = (field, literal) => {
         exec("genie.set_named(" + JSON.stringify(addr) + ", " + field + "="
@@ -1514,7 +1442,7 @@ export const FormPanel = {
     const sv = ((this.cfg && this.cfg.solvers) || [])
       .find((x) => (x.kind || "fdtd") === "fdtd");
     const solver = (sv && sv.name) || "fdtd";
-    const list = this.cfg.source || [];
+    const list = fdtdConfig(this.cfg).source || [];
     if (!list.length) {
       body.appendChild(this._paneEmpty("soft_source", "No sources yet",
         "Add from the FDTD ribbon: Sources ▸ Soft source"));
@@ -1541,7 +1469,7 @@ export const FormPanel = {
   },
 
   _monitor(body) {
-    const list = this.cfg.monitor || [];
+    const list = fdtdConfig(this.cfg).monitor || [];
     if (!list.length) {
       body.appendChild(this._paneEmpty("mon_time", "No monitors yet",
         "Add them in the script (rewiring pending)"));
@@ -1565,11 +1493,11 @@ export const FormPanel = {
       sMon1.body.appendChild(this._row("field",
         this._select(`monitor.${i}.field`, m.field, fieldOpts)));
       if (m.type === "freq") {
-        m.freq = m.freq || { center: 300e12, bw: 120e12, n: 200 };
+        const freq = m.freq || {};
         sMon1.body.appendChild(this._row("freq c/bw (THz) · n",
-          this._input(`monitor.${i}.freq.center`, m.freq.center, "num", "freq"),
-          this._input(`monitor.${i}.freq.bw`, m.freq.bw, "num", "freq"),
-          this._input(`monitor.${i}.freq.n`, m.freq.n, "num")));
+          this._input(`monitor.${i}.freq.center`, freq.center, "num", "freq"),
+          this._input(`monitor.${i}.freq.bw`, freq.bw, "num", "freq"),
+          this._input(`monitor.${i}.freq.n`, freq.n, "num")));
         /* apodize：side + 窗 + 宽（定量谱学的首程窗——陷阱 #5/#7）；
          * 不预创建空 dict——用户不动就不写进 cfg（避免 apodize:{} 噪音） */
         const ap = m.apodize || {};

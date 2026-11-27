@@ -2,8 +2,6 @@ import { $ } from "./util.js";
 import { exec } from "../core/bus.js";
 import { previewEl } from "../views/previews.js";
 import { cfg } from "./state.js";
-import { fdtdSeed, modeSeed, softSourceSeed, gsSeed,
-         fieldsArg, pyLit } from "./defaults.js";
 import { exitResult, resultMode } from "./result.js";
 import { runBuild, runMode, runModel } from "./term.js";
 /* modules/toolbar.js — 工具条（M1 重接：按钮 → exec → 公开动词）
@@ -28,23 +26,10 @@ export function buildToolbar() {
       b.appendChild(previewEl("solver_" + t));
       b.appendChild(document.createTextNode(t));
       b.addEventListener("click", () => {
-        /* 声明 + 播种同一条 exec：实例名由 add_solver 返回，mode 自动命名也指得对
-         * （默认值归 GUI，2026-11-26 站长拍）。 */
-        const seed = t === "fdtd" ? fdtdSeed() : modeSeed("z");
-        exec("s = genie.add_solver(type='" + t + "')\n"
-          + "genie.set_named(s, " + fieldsArg(seed) + ")",
+        /* 声明 = 只建包络；默认值是 payload/view 边界的纯函数（L-62），
+         * GUI 不写种子。 */
+        exec("genie.add_solver(type='" + t + "')",
           { echo: true }).catch(() => {});
-        const gsKnown = (cfg && cfg.parameters) || {};
-        if (!gsKnown.gsrc_band_lo) {
-          const seed = gsSeed();
-          const lines = [];
-          for (const [k, v] of Object.entries(seed)) {
-            lines.push("genie.add_parameter(" + JSON.stringify(k) + ")");
-            lines.push("genie.set_named(" + JSON.stringify("parameter." + k)
-              + ", value=" + pyLit(v) + ")");
-          }
-          exec(lines.join("\n"), { echo: false }).catch(() => {});
-        }
       });
       solverBtns.appendChild(b);
     }
@@ -63,29 +48,18 @@ export function buildToolbar() {
     b.addEventListener("click", () => {
       const sv = ((cfg && cfg.solvers) || []).find((x) => x.kind === "fdtd");
       const solver = (sv && sv.name) || "fdtd";
-      const taken = new Set(((cfg && cfg.mesh) || []).map((m) => m.name));
+      const taken = new Set((((sv && sv.config) || {}).mesh || [])
+        .map((m) => m.name));
       let name = "mesh", i = 1;
       while (taken.has(name)) { i += 1; name = "mesh_" + i; }
       exec("genie." + solver + ".add_mesh(" + JSON.stringify(name) + ")",
         { echo: true }).catch(() => {});
-      /* 默认值归 GUI（2026-11-25 站长拍）：建完立刻写一套可用的加密区——
-       * 范围 = 域范围、factor = 1、growth_rate = 1.2。 */
-      const dom = (cfg && cfg.domain) || {};
-      const dflt = (a) => {
-        const r = dom[`${a}_range`];
-        return Array.isArray(r) ? `(${r[0]}, ${r[1]})` : "(-1e-6, 1e-6)";
-      };
-      exec("genie.set_named(" + JSON.stringify(solver + "." + name)
-        + ", x_range=" + dflt("x") + ", y_range=" + dflt("y")
-        + ", z_range=" + dflt("z")
-        + ", factor_x=1, factor_y=1, factor_z=1, growth_rate=1.2)",
-        { echo: false }).catch(() => {});
     });
     meshBtns.appendChild(b);
   }
 
-  /* FDTD ▸ Sources：soft source（偶极子式点/小体源）。名字自动编号；
-   * 声明 + 默认值同一条 exec（默认值归 GUI，2026-11-26）。 */
+  /* FDTD ▸ Sources：soft source（偶极子式点源）。名字自动编号；
+   * 声明只建对象，默认值由 payload/view 的 resolver 给（L-62）。 */
   const srcBtns = $("tb-src-btns");
   if (srcBtns) {
     const b = document.createElement("button");
@@ -97,13 +71,12 @@ export function buildToolbar() {
     b.addEventListener("click", () => {
       const sv = ((cfg && cfg.solvers) || []).find((x) => x.kind === "fdtd");
       const solver = (sv && sv.name) || "fdtd";
-      const taken = new Set(((cfg && cfg.source) || []).map((x) => x.name));
+      const taken = new Set((((sv && sv.config) || {}).source || [])
+        .map((x) => x.name));
       let name = "source", i = 1;
       while (taken.has(name)) { i += 1; name = "source_" + i; }
-      exec("s = genie." + solver + ".add_source(" + JSON.stringify(name)
-        + ", 'soft_source')\n"
-        + "genie.set_named(s, " + fieldsArg(softSourceSeed()) + ")",
-        { echo: true }).catch(() => {});
+      exec("genie." + solver + ".add_source(" + JSON.stringify(name)
+        + ", 'soft_source')", { echo: true }).catch(() => {});
     });
     srcBtns.appendChild(b);
   }

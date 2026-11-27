@@ -1,5 +1,6 @@
 import { selectObj } from "../modules/inspector.js";
 import { updateScene } from "../modules/scene.js";
+import { fdtdConfig } from "../modules/util.js";
 import { SCENE_PALETTE } from "./scene_palette.js";
 import { cfg, scene } from "../modules/state.js";
 "use strict";
@@ -501,7 +502,8 @@ export class Scene3D {
     this.clearGroup(this.meshGroup);
     this.structureMeshes = [];
 
-    const dom = cfg.domain || {};
+    const conf = fdtdConfig(cfg);
+    const dom = conf.domain || {};
     const rng = (arr, i) => {
       if (!Array.isArray(arr)) return NaN;
       const v = Number(arr[i]);
@@ -602,8 +604,8 @@ export class Scene3D {
     const markerR = domainSz * 0.02;
     this._srcGroups = {};
     this._monGroups = {};
-    (cfg.source || []).forEach((s, i) => this._buildSourceMarker(s, i, markerR, d));
-    (cfg.monitor || []).forEach((m, i) => this._buildMonitorMarker(m, i, markerR, d));
+    (conf.source || []).forEach((s, i) => this._buildSourceMarker(s, i, markerR, d));
+    (conf.monitor || []).forEach((m, i) => this._buildMonitorMarker(m, i, markerR, d));
 
     // ── 简化模式收尾：徽标 + 包围盒（r128 Box3.setFromObject 不展开
     // InstancedMesh 实例，_simBox 由合批器手算）──
@@ -629,7 +631,7 @@ export class Scene3D {
   /* PML 扩展盒：每面 layers × 该轴名义格距（dy/dz 未设回退 dx，同 schema 语义；
    * Q30 起基础格距住 domain） */
   _pmlBox(cfg, d) {
-    const dom = cfg.domain || {};
+    const dom = fdtdConfig(cfg).domain || {};
     const dx = dom.dx || 20e-9;
     const hs = { x_min: dx, x_max: dx, y_min: dom.dy || dx, y_max: dom.dy || dx,
                  z_min: dom.dz || dx, z_max: dom.dz || dx };
@@ -1091,7 +1093,7 @@ export class Scene3D {
   /* 网格线：三个远侧面按名义格距画（每轴 ≤200 条，超出抽稀；
    * Q30 起基础格距住 domain） */
   _updateGridLines(cfg, d) {
-    const dom = cfg.domain || {};
+    const dom = fdtdConfig(cfg).domain || {};
     const dx = dom.dx || 20e-9;
     const steps = { x: dom.dx || dx, y: dom.dy || dx, z: dom.dz || dx };
     const sp = {};
@@ -1118,13 +1120,14 @@ export class Scene3D {
    * 真实非均匀分布不可知，真值以 mesh_preview / 提交后为准）。下一轮
    * clearGroup 自然清除。 */
   _updateRefineLines(cfg, d) {
-    const dom = cfg.domain || {};
+    const conf = fdtdConfig(cfg);
+    const dom = conf.domain || {};
     const base = { x: dom.dx || 20e-9, y: dom.dy || dom.dx || 20e-9,
                    z: dom.dz || dom.dx || 20e-9 };
     const mat = new THREE.LineBasicMaterial(
       { color: SCENE_PALETTE.GRID.REFINE, transparent: true,
         opacity: 0.75, depthTest: true });
-    for (const m of (cfg.mesh || [])) {
+    for (const m of (conf.mesh || [])) {
       if (!m || typeof m !== "object") continue;
       const xr = m.x_range, yr = m.y_range, zr = m.z_range;
       if (!Array.isArray(xr) || !Array.isArray(yr) || !Array.isArray(zr)) continue;
