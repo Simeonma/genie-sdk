@@ -90,7 +90,7 @@ export function parseSuffixed(t) {
  * FormPanel.renderPage 生成；写字段只经 commit（exec set_named + py）。
  * DOMAIN_FIELDS / BOUNDARY_FIELDS = 本卡覆盖 wire 的哪些字段，测试按
  * DomainSpec / BoundarySpec 反射校验（不抄类型、不抄默认值）。 */
-export const DOMAIN_FIELDS = ["x_range", "y_range", "z_range", "dx", "dy",
+export const DOMAIN_FIELDS = ["center", "size", "dx", "dy",
   "dz", "x_spacing", "y_spacing", "z_spacing", "total_time", "cfl",
   "auto_shutoff", "boundary"];
 export const BOUNDARY_FIELDS = ["kind", "layers", "kappa_max", "order",
@@ -102,10 +102,25 @@ function _fmtSeg(t) {
 }
 
 /* mode 卡覆盖的字段（测试按 ModeDomainSpec / ModeConfigSpec 反射校验）。 */
-export const MODE_FIELDS = ["axis", "position", "x_range", "y_range", "z_range",
+export const MODE_FIELDS = ["axis", "position", "center", "size",
   "dx", "dy", "dz", "x_spacing", "y_spacing", "z_spacing",
   "boundary", "wavelength", "n_modes", "n_ref",
   "rotate_axis", "rotate_angle", "rotate_radius"];
+
+/* 放置词汇 v2（2.0.6a1）：center+size 槽对 → (lo, hi) 互算（UI 表仍以
+ * min/max 形展示，落盘写 center/size）。fdtd 全槽；mode 槽级 null。 */
+function csRange(center, size, i) {
+  const ci = Array.isArray(center) ? Number(center[i]) : NaN;
+  const si = Array.isArray(size) ? Number(size[i]) : NaN;
+  return isFinite(ci) && isFinite(si) && si > 0
+    ? [ci - si / 2, ci + si / 2] : null;
+}
+
+function csCommit(commit, cur, key, i, val) {
+  const arr = (Array.isArray(cur) ? cur.slice() : [null, null, null]);
+  arr[i] = val;
+  commit(key, `[${arr.map((x) => x == null ? "None" : py(x)).join(", ")}]`);
+}
 
 const MODE_FACES = { x: ["y_min", "y_max", "z_min", "z_max"],
                      y: ["x_min", "x_max", "z_min", "z_max"],
@@ -113,12 +128,7 @@ const MODE_FACES = { x: ["y_min", "y_max", "z_min", "z_max"],
 
 export function DOMAIN_SCHEMA(cfg, commit, gs, setGs, gmon, setGm) {
   const d = (cfg && cfg.domain) || {};
-  const range = (a) => {
-    const r = d[`${a}_range`];
-    if (!Array.isArray(r)) return null;
-    const lo = Number(r[0]), hi = Number(r[1]);
-    return isFinite(lo) && isFinite(hi) ? [lo, hi] : null;
-  };
+  const range = (a) => csRange(d.center, d.size, "xyz".indexOf(a));
   const hasTable = ["x", "y", "z"].some((a) => d[`${a}_spacing`]);
   const bnd = d.boundary || {};
   const kindOf = (f) => (bnd[f] || {}).kind || "";
@@ -134,11 +144,14 @@ export function DOMAIN_SCHEMA(cfg, commit, gs, setGs, gmon, setGm) {
    * 按 kind 补/清（L-62，GUI 不写默认值）。 */
   const setFaceKind = (f, kind) => commitFace(f, { kind });
 
-  /* 1. General settings —— 域范围（min/max/center/size 同时可编）+ 时间步进 */
-  const rangeRows = ["x", "y", "z"].map((a) => ({
+  /* 1. General settings —— 域放置（center/size，表内 min/max 互算）+ 时间步进 */
+  const rangeRows = ["x", "y", "z"].map((a, i) => ({
     label: a,
     value: range(a),
-    onSet: (v) => commit(`${a}_range`, `(${py(v[0])}, ${py(v[1])})`),
+    onSet: (v) => {
+      csCommit(commit, d.center, "center", i, (v[0] + v[1]) / 2);
+      csCommit(commit, d.size, "size", i, v[1] - v[0]);
+    },
   }));
 
   const sections = [{
@@ -321,12 +334,7 @@ export function MODE_SCHEMA(cfg, commit, solverName) {
   const [t1, t2] = [edges[0][0], edges[2][0]];
   const bo = mc.boundary || {};
   const kindOf = (f) => (bo[f] || {}).kind || "";
-  const range = (a) => {
-    const r = d[`${a}_range`];
-    if (!Array.isArray(r)) return null;
-    const lo = Number(r[0]), hi = Number(r[1]);
-    return isFinite(lo) && isFinite(hi) ? [lo, hi] : null;
-  };
+  const range = (a) => csRange(d.center, d.size, "xyz".indexOf(a));
   const commitFace = (f, face) => {
     const cur = mc.boundary || {};
     const nb = {};
@@ -352,12 +360,14 @@ export function MODE_SCHEMA(cfg, commit, solverName) {
           onPick: (v) => switchAxis(v) }] },
       { type: "range", caption: "Domain range", unit: "len",
         order: ["center", "size", "min", "max"],
-        rows: ["x", "y", "z"].map((a) => (a === axis
+        rows: ["x", "y", "z"].map((a, i) => (a === axis
           ? { label: a, centerOnly: true, position: d.position,
               onCenter: (v) => commit("position", py(v)) }
           : { label: a, value: range(a),
-              onSet: (v) => commit(`${a}_range`,
-                `(${py(v[0])}, ${py(v[1])})`) })) },
+              onSet: (v) => {
+                csCommit(commit, d.center, "center", i, (v[0] + v[1]) / 2);
+                csCommit(commit, d.size, "size", i, v[1] - v[0]);
+              } })) },
       { type: "table", caption: "mode solver control",
         cols: [{ label: "Wavelength", unit: "µm" }, { label: "Modes" },
                { label: "Search index" }],
@@ -593,10 +603,13 @@ export function MESH_SCHEMA(cfg, commit, m) {
     items: [
       { type: "range", caption: "Range", unit: "len",
         order: ["center", "size", "min", "max"],
-        rows: ["x", "y", "z"].map((a) => ({
+        rows: ["x", "y", "z"].map((a, i) => ({
           label: a,
-          value: Array.isArray(m[`${a}_range`]) ? m[`${a}_range`] : null,
-          onSet: (v) => commit(`${a}_range`, `(${py(v[0])}, ${py(v[1])})`),
+          value: csRange(m.center, m.size, i),
+          onSet: (v) => {
+            csCommit(commit, m.center, "center", i, (v[0] + v[1]) / 2);
+            csCommit(commit, m.size, "size", i, v[1] - v[0]);
+          },
         })) },
       /* 方法与渐变率放在同一张表（2026-11-25 站长拍）：都是"怎么加密"的控制量 */
       { type: "table", caption: "Mesh control",
@@ -1054,7 +1067,7 @@ export const FormPanel = {
   },
 
   /* 路径归一(08-31cd): 内核错误路径含中间类型段
-   * (geometry.0.box.x_range), 表单字段路径没有 (geometry.0.x_range.0);
+   * (geometry.0.box.center), 表单字段路径没有 (geometry.0.center.0);
    * 剥掉中间段才能前缀匹配标红。 */
   _normErrPath(p) {
     return String(p).replace(
@@ -1541,9 +1554,8 @@ export const FormPanel = {
       const sGeo2 = this._sec("Position & size", true, posCount);
       inner.appendChild(sGeo2.head); inner.appendChild(sGeo2.body);
       if (g.type === "box") {
-        sGeo2.body.appendChild(this._rangeRow("x_range (µm)", `geometry.${i}.x_range`, g.x_range, "len"));
-        sGeo2.body.appendChild(this._rangeRow("y_range (µm)", `geometry.${i}.y_range`, g.y_range, "len"));
-        sGeo2.body.appendChild(this._rangeRow("z_range (µm)", `geometry.${i}.z_range`, g.z_range, "len"));
+        sGeo2.body.appendChild(this._vec("center (µm)", `geometry.${i}.center`, g.center, 3, "len"));
+        sGeo2.body.appendChild(this._vec("size (µm)", `geometry.${i}.size`, g.size, 3, "len"));
       } else if (g.type === "polygon_z" || g.type === "polygon_swept") {
         /* 顶点编辑器（L-35 拔线后只读展示）；写腿随 M4 重接 */
         const ta = document.createElement("textarea");

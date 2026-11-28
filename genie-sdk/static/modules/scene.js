@@ -177,12 +177,12 @@ export function renderRibbonMeta() {
   if (!cfg) { el.replaceChildren(); return; }
   const conf = fdtdConfig(cfg);
   const dom = conf.domain || {};
-  const span = (r) => {
-    if (!Array.isArray(r) || r.length < 2) return null;
-    const v = Math.abs(Number(r[1]) - Number(r[0]));
-    return isFinite(v) ? v * 1e6 : null;
+  /* 放置词汇 v2（2.0.6a1）：域 = center + size（µm 遥测读三轴全幅） */
+  const sizeOf = (i) => {
+    const s = Array.isArray(dom.size) ? Number(dom.size[i]) : NaN;
+    return isFinite(s) && s > 0 ? s * 1e6 : null;
   };
-  const dims = [span(dom.x_range), span(dom.y_range), span(dom.z_range)]
+  const dims = [sizeOf(0), sizeOf(1), sizeOf(2)]
     .filter((v) => v != null);
   const n = (k) => ((cfg && cfg[k]) || []).length;
   const rows = [];

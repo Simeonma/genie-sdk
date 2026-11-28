@@ -21,17 +21,16 @@ Example wire-format JSON shape (2.0.1a1 nested house, Q17)::
       "model": {                       # structure — shared by every solver
         "materials": [{"name": "sio2", "type": "const", "eps": 2.10}],
         "geometry":  [{"type": "box", "material": "sio2", "priority": 1,
-                       "x_range": [-0.5e-6, 0.5e-6], "y_range": [-0.5e-6, 0.5e-6],
-                       "z_range": [-0.1e-6, 0.1e-6]}],
+                       "center": [0, 0, 0], "size": [1e-6, 1e-6, 0.2e-6]}],
         "parameters": {"L": 2e-6}},
       "solver": "fdtd",                # solver selection (open set; omit = fdtd)
       "config": {                      # that solver's envelope
-        "domain":   {"x_range": [-1e-6, 1e-6], "y_range": [-1e-6, 1e-6],
-                      "z_range": [-1e-6, 1e-6], "dx": 20e-9,
+        "domain":   {"center": [0, 0, 0], "size": [2e-6, 2e-6, 2e-6],
+                      "dx": 20e-9,
                       "total_time": 60e-15, "cfl": 0.9,
                       "boundary": {"z_min": {"kind": "pml", "layers": 12}}},
-        "mesh":     [{"name": "core", "x_range": [-0.2e-6, 0.2e-6],
-                      "y_range": [-0.2e-6, 0.2e-6], "z_range": [-1e-6, 1e-6],
+        "mesh":     [{"name": "core", "center": [0, 0, 0],
+                      "size": [0.4e-6, 0.4e-6, 2e-6],
                       "factor_x": 2, "factor_y": 2}],   # named refine boxes
         "source":   [{"type": "soft_source", "freq": 300e12, "bandwidth": 60e12,
                       "name": "s0", "center": [0, 0, -0.3e-6],
@@ -172,6 +171,7 @@ _INDEX_FIELD_SET = ("eps", "mu", "both")
 
 Range2 = tuple[float, float]
 Vec3 = tuple[float, float, float]
+OptVec3 = tuple[Optional[float], Optional[float], Optional[float]]
 # Value shapes of the material eps family (protocol 2.0.1a16, P2-5):
 # a float base (iso, same value on all three axes) + OPTIONAL per-axis
 # diagonal named keys (``eps_xx`` / ``eps_yy`` / ``eps_zz`` — a key that
@@ -308,12 +308,61 @@ def _check_den(v):
     return (b0, b1)
 
 
-class _RangeModel(_StrictModel):
-    x_range: Range2
-    y_range: Range2
-    z_range: Range2
+class _BoxVocab(_StrictModel):
+    """放置词汇 v2（2.0.6a1 断代，站长拍）：三轴 ``x/y/z_range``
+    (min, max) 拼写退役，统一为 ``center`` + ``size``（三轴正长度）——
+    与 source / monitor / 几何对象同一心智。``_RangeModel`` 退役；
+    ``center`` 三槽必填（无域回落、无默认——放置是用户的决定）。"""
 
-    _v = field_validator("x_range", "y_range", "z_range", mode="after")(_check_range)
+    center: Vec3
+    size: Vec3
+
+    def lo(self, axis: str) -> float:
+        return getattr(self, "center")["xyz".index(axis)] \
+            - getattr(self, "size")["xyz".index(axis)] / 2.0
+
+    def hi(self, axis: str) -> float:
+        return getattr(self, "center")["xyz".index(axis)] \
+            + getattr(self, "size")["xyz".index(axis)] / 2.0
+
+    def axis_range(self, axis: str) -> tuple[float, float]:
+        return (self.lo(axis), self.hi(axis))
+
+    @field_validator("size", mode="after")
+    @classmethod
+    def _size_positive(cls, v):
+        bad = [s for s in v if not s > 0.0]
+        if bad:
+            raise ValueError(
+                f"size slots must be positive lengths, got non-positive "
+                f"values {bad} — a zero-width box is not a physical object "
+                f"(monitors/sources use a null slot for that; domains and "
+                f"geometry boxes do not)")
+        return v
+
+
+def _window_pair_check(center, size):
+    """放置词汇 v2 的 mode 侧槽对联合校验（2.0.6a1，ModeDomain /
+    ModeMesh 的 model_validator 调用）：center/size 都是三元组、槽级
+    null = 该轴无窗口；同槽位只给一半 = 半个真相 → 422；size 槽非
+    null 必须 > 0。传播轴槽禁令在各自 spec / 组合层（单段物化不知
+    道哪根轴是传播轴）。"""
+    if center is None and size is None:
+        return
+    if (center is None) != (size is None):
+        raise ValueError(
+            "center and size come as a pair — one without the other is "
+            "half a window, not a placement")
+    for i, a in enumerate("xyz"):
+        c = center[i]
+        s = size[i]
+        if (c is None) != (s is None):
+            raise ValueError(
+                f"slot {a!r}: center and size come as a pair — one "
+                f"without the other is half a window")
+        if s is not None and not s > 0.0:
+            raise ValueError(
+                f"slot {a!r}: size must be a positive length, got {s!r}")
 
 
 def _norm_polarization(v):
@@ -423,7 +472,7 @@ def _check_spacing(axis: str, segments, rng) -> None:
             f"no meaning; give a coarse segment for empty regions)")
 
 
-class DomainSpec(_RangeModel):
+class DomainSpec(_BoxVocab):
     """fdtd 域 = 仿真世界的**全部标定**（Q30，2.0.1a17；Q31 a18）：三轴
     范围 + 时间/CFL/边界 + **基础网格**。基准每轴二选一（Q31）：
 
@@ -486,7 +535,7 @@ class DomainSpec(_RangeModel):
                     raise ValueError(
                         f"domain.{a}_spacing: empty table — give at least "
                         f"one segment (or drop the key and use d{a})")
-                _check_spacing(a, segs, getattr(self, f"{a}_range"))
+                _check_spacing(a, segs, self.axis_range(a))
         return self
 
 
@@ -498,7 +547,7 @@ class _NamedMesh(_Identified):
     name: str = Field(min_length=1)
 
 
-class MeshSpec(_RangeModel, _NamedMesh):
+class MeshSpec(_BoxVocab, _NamedMesh):
     """fdtd mesh = **带名加密区对象**（Q30，2.0.1a17 断代）：一个 box
     区间（三轴 range）+ 该区间自己的间距定义——**每轴二选一**：
 
@@ -862,7 +911,7 @@ class _NamedGeo(_Identified):
 #   自身中心旋转恒等（填了合法、无效果——文档写明即可）。
 
 
-class BoxSpec(_RangeModel, _NamedGeo):
+class BoxSpec(_BoxVocab, _NamedGeo):
     type: Literal["box"] = "box"
     material: str = Field(min_length=1)
     priority: int = 0
@@ -1606,7 +1655,7 @@ class FdtdConfigSpec(_StrictModel):
                             f"refines its box, it cannot coarsen it (use "
                             f"factor or a spacing <= the base)")
                 else:
-                    rng = getattr(m, f"{a}_range")
+                    rng = m.axis_range(a)
                     covered = [s.d for s in bv
                                if s.lo < rng[1] and rng[0] < s.hi]
                     if covered and d > min(covered):
@@ -1642,34 +1691,30 @@ class FdtdConfigSpec(_StrictModel):
 
 #: 传播轴 → (横截面轴1, 横截面轴2)（Q18 拍②：窗口/网格用**真轴名**，
 #: h/v 视图相对词退役；轴1 = 字母序在前的横轴——mesh「第二轴缺省 =
-#: 第一轴」的锚）。mode 的域是 2D 截面：传播轴没有 range / 网格字段。
+#: 第一轴」的锚）。mode 的域是 2D 截面：传播轴没有窗口槽 / 网格字段。
 _TRANSVERSE = {"x": ("y", "z"), "y": ("x", "z"), "z": ("x", "y")}
-
-
-def _check_opt_range(v):
-    """Optional 版 range 守卫：None 直通（mode 域的 range 按轴可选，
-    横截面两轴必填、传播轴禁止——存在性守卫在 ModeDomainSpec._check）。"""
-    return None if v is None else _check_range(v)
 
 
 class ModeDomainSpec(_StrictModel):
     """mode 包络段·域（Q18 拍②/③，2.0.1a3 断代；Q20 v2.1；Q30 2.0.1a17
-    基础网格自 ModeMeshSpec 搬入；Q31 a18 段表）：截面放置 + 两根
-    **横截面真轴**的窗口 range 元组 + 背景 + **基础网格**（每横轴
-    间距 / 坐标向量 / 段表**三选一**）。center/span 拼写退役（与 fdtd
-    同一 range 心智）；range 元组槽位吃表达式串（Q13 同一求值面）。
-    **Q20：横轴 range 可省**——domain 给了该轴 coords 时窗口由坐标
-    向量 min/max 派生（都给 = 两个真相，在 ModeConfigSpec 组合层
-    422——单段物化时没有对方判据，存在性守卫跟着事实走）；**段表
-    形态下 range 必填**（段表只给间距不给窗口）。**传播轴禁止任何
-    网格字段与 range**（2D 截面不沿传播轴网格化，本段._check）。
-    auto_grid（Q31）的 mode 对称产物 = 横轴段表。"""
+    基础网格自 ModeMeshSpec 搬入；Q31 a18 段表；2.0.6a1 放置词汇 v2）：
+    截面放置 + 两根**横截面真轴**的窗口（``center``+``size`` 槽对，
+    槽级 null = 该轴无窗口）+ 背景 + **基础网格**（每横轴间距 / 坐标
+    向量 / 段表**三选一**）。Q18 的 range 心智随 2.0.6a1 与 fdtd 一同
+    改为 center+size（站长拍，一套放置词汇）；**Q20：横轴窗口可省**——
+    domain 给了该轴 coords 时窗口由坐标向量 min/max 派生（都给 = 两个
+    真相，在 ModeConfigSpec 组合层 422——单段物化时没有对方判据，
+    存在性守卫跟着事实走）；**段表形态下窗口必填**（段表只给间距不给
+    窗口）。**传播轴禁止任何网格字段与窗口槽**（2D 截面不沿传播轴
+    网格化，本段._check）。auto_grid（Q31）的 mode 对称产物 = 横轴段表。"""
 
     axis: Literal["x", "y", "z"]              # 传播轴（截面法向）
     position: float                           # 截面沿传播轴的位置 [m]
-    x_range: Optional[Range2] = None
-    y_range: Optional[Range2] = None
-    z_range: Optional[Range2] = None
+    # ── 放置词汇 v2（2.0.6a1）：center/size 槽对 = 横轴窗口；槽 null =
+    # 该轴无窗口（coords 派生 / 整轴缺省）。半个真相（只给 center 槽或
+    # 只给 size 槽）422；size 槽非 null 必须 > 0；传播轴槽禁（._check）。──
+    center: Optional[OptVec3] = None
+    size: Optional[OptVec3] = None
     # ── 基础网格（Q30 自旧 ModeMeshSpec 搬入；Q31 加段表）──
     dx: Optional[float] = Field(default=None, gt=0.0)
     dy: Optional[float] = Field(default=None, gt=0.0)
@@ -1681,14 +1726,20 @@ class ModeDomainSpec(_StrictModel):
     y_coords: Optional[list[float]] = None
     z_coords: Optional[list[float]] = None
     #: Q31：非均匀基准段表（每段区间+间距+growth）。横轴与 d/coords
-    #: 三选一；无缝覆盖该轴窗口（range 必填——守卫住组合层，这里
+    #: 三选一；无缝覆盖该轴窗口（窗口必填——守卫住组合层，这里
     #: 单段物化时窗口可能由 coords 派生缺席）。
     x_spacing: Optional[list[SpacingSegmentSpec]] = None
     y_spacing: Optional[list[SpacingSegmentSpec]] = None
     z_spacing: Optional[list[SpacingSegmentSpec]] = None
 
-    _v = field_validator("x_range", "y_range", "z_range",
-                         mode="after")(_check_opt_range)
+    def window(self, a: str):
+        """横轴窗口 → (lo, hi) | None（槽 null = 无窗口）。"""
+        i = "xyz".index(a)
+        c = self.center[i] if self.center is not None else None
+        s = self.size[i] if self.size is not None else None
+        if c is None and s is None:
+            return None
+        return (c - s / 2.0, c + s / 2.0)
 
     def _axis_mesh(self, a: str):
         """单轴网格口径 → ("spacing", v) | ("coords", v) | ("table", v)
@@ -1703,19 +1754,26 @@ class ModeDomainSpec(_StrictModel):
 
     @model_validator(mode="after")
     def _check(self):
-        # 传播轴 range / 网格字段禁止：那是 fdtd 的 3D 域概念，mode 是
-        # 2D 问题（写了就 422，不给"静默忽略"留门）。横轴 range 的
+        # 放置词汇 v2（2.0.6a1）：槽对联合校验（成对 + size > 0）。
+        _window_pair_check(self.center, self.size)
+        # 传播轴窗口槽 / 网格字段禁止：那是 fdtd 的 3D 域概念，mode 是
+        # 2D 问题（写了就 422，不给"静默忽略"留门）。横轴窗口的
         # "必填/可省"守卫住 ModeConfigSpec（要看有没有 coords——Q20）。
         t1, t2 = _TRANSVERSE[self.axis]
         for a in ("x", "y", "z"):
+            i = "xyz".index(a)
             if a == self.axis and (
-                    getattr(self, f"{a}_range") is not None
+                    (self.center is not None
+                     and self.center[i] is not None)
+                    or (self.size is not None
+                        and self.size[i] is not None)
                     or self._axis_mesh(a) is not None):
                 raise ValueError(
-                    f"domain.{a}_range / d{a} / {a}_coords / {a}_spacing: "
-                    f"axis {a!r} is the propagation axis — a mode "
-                    f"cross-section has no extent or grid along it (give "
-                    f"the two transverse axes {t1}/{t2})")
+                    f"domain.center/{a} / domain.size/{a} / d{a} / "
+                    f"{a}_coords / {a}_spacing: axis {a!r} is the "
+                    f"propagation axis — a mode cross-section has no "
+                    f"extent or grid along it (give the two transverse "
+                    f"axes {t1}/{t2})")
             # 每轴「间距 / 坐标向量 / 段表」三选一（Q31 从二选一放宽
             # 为三选一——同轴两个非 None = 两个真相 422）+ coords 形状
             # （>=2 点、严格递增）。
@@ -1741,16 +1799,16 @@ class ModeDomainSpec(_StrictModel):
 
 class ModeMeshSpec(_StrictModel, _NamedMesh):
     """mode mesh = **带名 2D 加密区对象**（Q30 对称迁移，2.0.1a17 断代）：
-    两根横轴的 box 区间 + 每轴间距定义——**每轴二选一**（factor 缺省 1
-    / 绝对值 <= 该轴基础间距，组合层校验）。传播轴的任何槽（range /
+    两根横轴的 box 窗口（2.0.6a1 起与其他放置对象同一 center+size 词汇，
+    槽级 null = 该轴无窗口）+ 每轴间距定义——**每轴二选一**（factor 缺省
+    1 / 绝对值 <= 该轴基础间距，组合层校验）。传播轴的任何槽（窗口 /
     factor / d*）在 ModeConfigSpec 组合层 422（单段物化时不知道哪根
     轴是传播轴）。**全 factor=1 = 合法无操作区**（Q30 改裁 Q22）。
     生成器 = fdtd `_grow_refined_grid` 同款算法（mode 侧复述 + 对锁
     测试）。渐变过渡带沿用 refine 旧做法（growth_rate，1.0 = 硬跳）。"""
 
-    x_range: Optional[Range2] = None
-    y_range: Optional[Range2] = None
-    z_range: Optional[Range2] = None
+    center: Optional[OptVec3] = None
+    size: Optional[OptVec3] = None
     factor_x: int = Field(default=1, ge=1)
     factor_y: int = Field(default=1, ge=1)
     factor_z: int = Field(default=1, ge=1)
@@ -1759,11 +1817,19 @@ class ModeMeshSpec(_StrictModel, _NamedMesh):
     dz: Optional[float] = Field(default=None, gt=0.0)
     growth_rate: float = Field(default=1.2, ge=1.0)
 
-    _v = field_validator("x_range", "y_range", "z_range",
-                         mode="after")(_check_opt_range)
+    def window(self, a: str):
+        """横轴窗口 → (lo, hi) | None（槽 null = 无窗口）。"""
+        i = "xyz".index(a)
+        c = self.center[i] if self.center is not None else None
+        s = self.size[i] if self.size is not None else None
+        if c is None and s is None:
+            return None
+        return (c - s / 2.0, c + s / 2.0)
 
     @model_validator(mode="after")
     def _check(self):
+        # 放置词汇 v2（2.0.6a1）：槽对联合校验（成对 + size > 0）。
+        _window_pair_check(self.center, self.size)
         # 同轴互斥判「值」不判「显式给」：model_dump() 会把默认值全部
         # 物化（factor=1 / dx=None 都进 dump），fields_set 在 JSON 往返
         # 后失真——往返恒等是硬契约。factor=1 是空操作，与绝对覆盖并存
@@ -1843,27 +1909,28 @@ class ModeConfigSpec(_StrictModel):
         # 组合层守卫（单段物化没有对方判据的，都住这里）。
         ax = self.domain.axis
         t1, t2 = _TRANSVERSE[ax]
-        # Q20：横轴 range × coords——每根横轴恰有一个真相：
-        #   coords 在手 → range 可省（窗口由坐标 min/max 派生）；
+        # Q20：横轴窗口 × coords——每根横轴恰有一个真相：
+        #   coords 在手 → 窗口可省（窗口由坐标 min/max 派生）；
         #   两者都给 → 422（两个真相不许并存，与间距/coords 二选一
-        #   同款铁律）；coords/段表都没有 → range 必填（间距离散它；
-        #   Q31 段表只给间距不给窗口，段表轴的 range 同样必填）。
+        #   同款铁律）；coords/段表都没有 → 窗口必填（间距离散它；
+        #   Q31 段表只给间距不给窗口，段表轴的窗口同样必填）。
         for a in (t1, t2):
-            rng = getattr(self.domain, f"{a}_range")
+            rng = self.domain.window(a)
             coords = getattr(self.domain, f"{a}_coords")
             if rng is not None and coords is not None:
                 raise ValueError(
-                    f"domain.{a}_range and domain.{a}_coords are two "
+                    f"domain.center/size {a} and domain.{a}_coords are two "
                     f"truths for one axis window — give exactly one "
                     f"(coords imply the extent)")
             if rng is None and coords is None:
                 raise ValueError(
-                    f"domain.{a}_range is required unless domain.{a}_coords "
-                    f"is given (axis={ax!r} → transverse axes {t1}/{t2})")
-            # 段表轴：无缝覆盖窗口（range 必在上面已判非 None）。
+                    f"domain window on axis {a!r} is required unless "
+                    f"domain.{a}_coords is given (axis={ax!r} → transverse "
+                    f"axes {t1}/{t2})")
+            # 段表轴：无缝覆盖窗口（窗口必在上面已判非 None）。
             segs = getattr(self.domain, f"{a}_spacing")
             if segs is not None:
-                _check_spacing(a, segs, getattr(self.domain, f"{a}_range"))
+                _check_spacing(a, segs, rng)
         # 轴1（字母序在前的横轴）必须给 spacing/coords/段表之一；轴2
         # 缺省 = 轴1 的**间距**（向量与段表都不可继承——两轴长度各自
         # 独立；段表不跨轴继承与 fdtd 同一条铁律）。
@@ -1880,7 +1947,7 @@ class ModeConfigSpec(_StrictModel):
                 f"{t2}_spacing (only a spacing can be inherited from "
                 f"{t1}, not coordinates or a table)")
         # mesh zone 守卫（Q30：带名 2D 加密区）：名字唯一；传播轴槽禁；
-        # 横轴 box 完整（两根横轴 range 都给）；zone 区间 × 该轴 coords
+        # 横轴 box 完整（两根横轴窗口都给）；zone 窗口 × 该轴 coords
         # = 两个真相；绝对间距 <= 该轴基础间距（mesh 只加密不粗化）。
         znames = [z.name for z in self.mesh]
         if len(znames) != len(set(znames)):
@@ -1902,10 +1969,15 @@ class ModeConfigSpec(_StrictModel):
 
         for zi, z in enumerate(self.mesh):
             for a in ("x", "y", "z"):
-                rng = getattr(z, f"{a}_range")
+                i = "xyz".index(a)
+                rng = z.window(a)
                 d = getattr(z, f"d{a}")
                 if a == ax and (rng is not None or d is not None
-                                or getattr(z, f"factor_{a}") != 1):
+                                or getattr(z, f"factor_{a}") != 1
+                                or (z.center is not None
+                                    and z.center[i] is not None)
+                                or (z.size is not None
+                                    and z.size[i] is not None)):
                     raise ValueError(
                         f"mesh[{zi}] ({z.name!r}): axis {a!r} is the "
                         f"propagation axis — a mode cross-section is not "
@@ -1913,17 +1985,16 @@ class ModeConfigSpec(_StrictModel):
                 if a in (t1, t2):
                     if rng is None:
                         raise ValueError(
-                            f"mesh[{zi}] ({z.name!r}): {a}_range is "
-                            f"required — a mesh is a box on the two "
-                            f"transverse axes (factor=1 marks an axis "
-                            f"that is not refined)")
-                    if rng is not None and getattr(
-                            self.domain, f"{a}_coords") is not None:
+                            f"mesh[{zi}] ({z.name!r}): the {a!r} window "
+                            f"(center+size) is required — a mesh is a box "
+                            f"on the two transverse axes (factor=1 marks "
+                            f"an axis that is not refined)")
+                    if getattr(self.domain, f"{a}_coords") is not None:
                         raise ValueError(
-                            f"mesh[{zi}] ({z.name!r}): {a}_range and "
-                            f"domain.{a}_coords are two truths for one "
-                            f"axis grid — coords carry the whole axis, "
-                            f"a mesh cannot apply on top")
+                            f"mesh[{zi}] ({z.name!r}): the {a!r} window "
+                            f"and domain.{a}_coords are two truths for "
+                            f"one axis grid — coords carry the whole "
+                            f"axis, a mesh cannot apply on top")
                     if d is not None:
                         base = _base_of(a)
                         if base is not None:

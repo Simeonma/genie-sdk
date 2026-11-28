@@ -153,10 +153,17 @@ export class Scene2D {
     this.updateCount = (this.updateCount || 0) + 1;   // 重渲计数（UI 同步批 1 e2e 场景标志）
     this._cfg = cfg;
     const dom = fdtdConfig(cfg).domain || {};
+    /* 放置词汇 v2（2.0.6a1）：域 = center + size → min/max 视图盒 */
+    const cs = (i) => {
+      const c = Array.isArray(dom.center) ? Number(dom.center[i]) : 0;
+      const s = Array.isArray(dom.size) ? Number(dom.size[i]) : 2e-6;
+      return isFinite(c) && isFinite(s) && s > 0
+        ? [c - s / 2, c + s / 2] : [-1e-6, 1e-6];
+    };
     const d = {
-      xmin: dom.x_range ? dom.x_range[0] : -1e-6, xmax: dom.x_range ? dom.x_range[1] : 1e-6,
-      ymin: dom.y_range ? dom.y_range[0] : -1e-6, ymax: dom.y_range ? dom.y_range[1] : 1e-6,
-      zmin: dom.z_range ? dom.z_range[0] : -1e-6, zmax: dom.z_range ? dom.z_range[1] : 1e-6,
+      xmin: cs(0)[0], xmax: cs(0)[1],
+      ymin: cs(1)[0], ymax: cs(1)[1],
+      zmin: cs(2)[0], zmax: cs(2)[1],
     };
     this._d = d;
     this._fitView();
@@ -252,9 +259,11 @@ export class Scene2D {
     for (const g of (cfg.geometry || [])) {
       const color = this._cssHex(matColor(g.material));  // 材料色与 3D 同源（SCENE_PALETTE.MATERIALS）
       if (g.type === "box") {
-        const xr = g.x_range || [-1e-7, 1e-7], yr = g.y_range || [-1e-7, 1e-7],
-              zr = g.z_range || [-1e-7, 1e-7];
-        this._strokeBox(xr[0], xr[1], yr[0], yr[1], zr[0], zr[1], color, 1.3);
+        /* 放置词汇 v2：box = center + size（画线框转 min/max） */
+        const c = g.center || [0, 0, 0], sz = g.size || [2e-7, 2e-7, 2e-7];
+        this._strokeBox(c[0] - sz[0] / 2, c[0] + sz[0] / 2,
+                        c[1] - sz[1] / 2, c[1] + sz[1] / 2,
+                        c[2] - sz[2] / 2, c[2] + sz[2] / 2, color, 1.3);
       } else if (g.type === "sphere" || g.type === "cylinder") {
         const c = g.center || [0, 0, 0];
         const r = Math.abs(g.radius || 1e-7);
@@ -283,10 +292,7 @@ export class Scene2D {
       }
       // 材料名标签
       if (g.material) {
-        const pc2 = this._proj(g.type === "box"
-          ? [(g.x_range[0] + g.x_range[1]) / 2, (g.y_range ? (g.y_range[0] + g.y_range[1]) / 2 : 0),
-             (g.z_range ? (g.z_range[0] + g.z_range[1]) / 2 : 0)]
-          : (g.center || [0, 0, 0]));
+        const pc2 = this._proj(g.center || [0, 0, 0]);
         ctx.fillStyle = color;
         ctx.font = "11px ui-monospace, monospace";
         ctx.fillText(String(g.material).slice(0, 12), pc2[0] + 4, pc2[1] - 4);

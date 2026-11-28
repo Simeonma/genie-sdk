@@ -23,7 +23,10 @@ from typing import Any
 #: speed of light (m/s) — the default band is anchored at 1.55 µm
 C0 = 299792458.0
 
-DEFAULT_RANGE = (-1.0e-6, 1.0e-6)
+#: 放置词汇 v2（2.0.6a1）的默认域：center 原点、三轴 2 µm（等价旧
+#: DEFAULT_RANGE (-1 µm, 1 µm)）
+DEFAULT_CENTER = (0.0, 0.0, 0.0)
+DEFAULT_SIZE = 2.0e-6
 DEFAULT_SPACING = 5.0e-8
 DEFAULT_TOTAL_TIME = 1.0e-12
 DEFAULT_CFL = 0.99
@@ -74,6 +77,19 @@ def _set(d: dict, key: str, value: Any) -> None:
         d[key] = copy.deepcopy(value)
 
 
+def _set_slot(d: dict, key: str, axis: str, value: Any) -> None:
+    """Slot-level fill for the mode-side center/size window pairs
+    (2.0.6a1): the arrays are triplets with per-slot null; only an
+    absent/null slot is filled."""
+    i = "xyz".index(axis)
+    arr = d.get(key)
+    if arr is None:
+        arr = [None, None, None]
+        d[key] = arr
+    if arr[i] is None:
+        arr[i] = value
+
+
 def _boundary_face(raw: Any) -> dict:
     """One boundary face: only the fields that apply to its kind."""
     raw = dict(raw or {})
@@ -92,11 +108,12 @@ def _boundary_face(raw: Any) -> dict:
 
 
 def _domain(d: dict) -> None:
-    for a in "xyz":
-        # a spacing table defines the base grid itself; its window must be
-        # explicit (filling a default window could not cover the table)
-        if not d.get(f"{a}_spacing"):
-            _set(d, f"{a}_range", DEFAULT_RANGE)
+    # placement vocabulary v2 (2.0.6a1): center + size; a spacing table
+    # defines the base grid itself and its window must be explicit (the
+    # default window could not cover the table)
+    if not any(d.get(f"{a}_spacing") for a in "xyz"):
+        _set(d, "center", list(DEFAULT_CENTER))
+        _set(d, "size", [DEFAULT_SIZE] * 3)
     _set(d, "total_time", DEFAULT_TOTAL_TIME)
     _set(d, "cfl", DEFAULT_CFL)
     _set(d, "auto_shutoff", DEFAULT_AUTO_SHUTOFF)
@@ -109,7 +126,7 @@ def _domain(d: dict) -> None:
 
 
 def _mesh(m: dict) -> None:
-    """加密区：范围不补（2026-11-28 站长拍）——wire 层 x/y/z_range
+    """加密区：放置不补（2026-11-28 站长拍）——wire 层 center/size
     必填，缺 = 422（用户的决定，不回落域范围）；factor/growth 是
     常数默认（不依存任何其他对象）。"""
     for a in "xyz":
@@ -140,7 +157,7 @@ def _source(s: dict) -> None:
             # 2026-11-28：2 µm）；文档不物化，用户写了就用显式值
             _set(s, "radius", 2.0e-6)
         # center / size 不补（2026-11-28 站长拍）：放置是用户的决定，
-        # 不回落域范围——缺 center 时 validate_for_ui 422 指路。
+        # 不回落域范围——wire 上两者 Optional，缺就是缺（不拦）。
     elif t == "mode":
         _set(s, "amplitude", 1.0)
         _set(s, "rotate_angle", 0.0)
@@ -204,7 +221,8 @@ def _mode(conf: dict) -> None:
         # coords / a spacing table define the window themselves; only fill
         # the uniform default when neither is present
         if not d.get(f"{a}_coords") and not d.get(f"{a}_spacing"):
-            _set(d, f"{a}_range", DEFAULT_RANGE)
+            _set_slot(d, "center", a, 0.0)
+            _set_slot(d, "size", a, DEFAULT_SIZE)
             _set(d, f"d{a}", DEFAULT_SPACING)
     raw = conf.get("boundary") or {}
     edges = [f"{a}_{side}" for a in (t1, t2) for side in ("min", "max")]
@@ -223,8 +241,12 @@ def _mode(conf: dict) -> None:
     conf["mesh"] = [dict(m) for m in (conf.get("mesh") or [])]
     for m in conf["mesh"]:
         for a in (t1, t2):
-            _set(m, f"{a}_range",
-                 d.get(f"{a}_range") or DEFAULT_RANGE)
+            # 窗口默认跟 domain 横轴窗口走（旧语义：mesh range 缺 →
+            # domain range）；domain 槽也缺时用默认中心 0 / DEFAULT_SIZE
+            dc = (d.get("center") or [None, None, None])["xyz".index(a)]
+            dsz = (d.get("size") or [None, None, None])["xyz".index(a)]
+            _set_slot(m, "center", a, 0.0 if dc is None else dc)
+            _set_slot(m, "size", a, DEFAULT_SIZE if dsz is None else dsz)
             _set(m, f"factor_{a}", 1)
         _set(m, "growth_rate", 1.2)
 

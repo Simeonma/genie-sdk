@@ -502,15 +502,16 @@ export class Scene3D {
 
     const conf = fdtdConfig(cfg);
     const dom = conf.domain || {};
-    const rng = (arr, i) => {
-      if (!Array.isArray(arr)) return NaN;
-      const v = Number(arr[i]);
-      return isFinite(v) ? v : NaN;
+    /* 放置词汇 v2（2.0.6a1）：域 = center + size → min/max 视图盒 */
+    const cs = (i) => {
+      const c = Array.isArray(dom.center) ? Number(dom.center[i]) : NaN;
+      const s = Array.isArray(dom.size) ? Number(dom.size[i]) : NaN;
+      return isFinite(c) && isFinite(s) ? [c - s / 2, c + s / 2] : [NaN, NaN];
     };
     const d = {
-      xmin: rng(dom.x_range, 0), xmax: rng(dom.x_range, 1),
-      ymin: rng(dom.y_range, 0), ymax: rng(dom.y_range, 1),
-      zmin: rng(dom.z_range, 0), zmax: rng(dom.z_range, 1),
+      xmin: cs(0)[0], xmax: cs(0)[1],
+      ymin: cs(1)[0], ymax: cs(1)[1],
+      zmin: cs(2)[0], zmax: cs(2)[1],
     };
     let hasDomain = true;
     for (const ax of ["x", "y", "z"]) {
@@ -678,8 +679,7 @@ export class Scene3D {
     };
     switch (out.type) {
       case "box":
-        return (tuple("x_range", "x_range") && tuple("y_range", "y_range")
-          && tuple("z_range", "z_range")) ? out : null;
+        return (tuple("center", "center") && tuple("size", "size")) ? out : null;
       case "sphere":
         return (tuple("center", "center") && scalar("radius", "radius")) ? out : null;
       case "cylinder":
@@ -736,11 +736,11 @@ export class Scene3D {
     let geo = null, pos = { x: 0, y: 0, z: 0 };
     switch (g.type) {
       case "box": {
-        const xr = g.x_range || [-1e-7, 1e-7], yr = g.y_range || [-1e-7, 1e-7],
-              zr = g.z_range || [-1e-7, 1e-7];
-        pos = { x: (xr[0] + xr[1]) / 2, y: (yr[0] + yr[1]) / 2, z: (zr[0] + zr[1]) / 2 };
+        /* 放置词汇 v2（2.0.6a1）：box = center + size */
+        const c = g.center || [0, 0, 0], sz = g.size || [2e-7, 2e-7, 2e-7];
+        pos = { x: c[0], y: c[1], z: c[2] };
         geo = new THREE.BoxGeometry(
-          Math.abs(xr[1] - xr[0]), Math.abs(yr[1] - yr[0]), Math.abs(zr[1] - zr[0]));
+          Math.abs(sz[0]), Math.abs(sz[1]), Math.abs(sz[2]));
         break;
       }
       case "sphere": {
@@ -1048,10 +1048,9 @@ export class Scene3D {
 
   _geoTop(g) {
     if (g.type === "box") {
-      const xr = g.x_range || [-1e-7, 1e-7], yr = g.y_range || [-1e-7, 1e-7],
-            zr = g.z_range || [-1e-7, 1e-7];
-      return { p: [(xr[0] + xr[1]) / 2, (yr[0] + yr[1]) / 2, zr[1]],
-               size: Math.max(xr[1] - xr[0], yr[1] - yr[0], zr[1] - zr[0]) };
+      const c = g.center || [0, 0, 0], sz = g.size || [2e-7, 2e-7, 2e-7];
+      return { p: [c[0], c[1], c[2] + sz[2] / 2],
+               size: Math.max(sz[0], sz[1], sz[2]) };
     }
     if (g.type === "sphere") {
       const c = g.center || [0, 0, 0], r = Math.abs(g.radius || 1e-7);
@@ -1127,8 +1126,13 @@ export class Scene3D {
         opacity: 0.75, depthTest: true });
     for (const m of (conf.mesh || [])) {
       if (!m || typeof m !== "object") continue;
-      const xr = m.x_range, yr = m.y_range, zr = m.z_range;
-      if (!Array.isArray(xr) || !Array.isArray(yr) || !Array.isArray(zr)) continue;
+      /* 放置词汇 v2（2.0.6a1）：mesh = center + size → 三轴区间 */
+      const mc = Array.isArray(m.center) ? m.center : null;
+      const ms = Array.isArray(m.size) ? m.size : null;
+      if (!mc || !ms) continue;
+      const xr = [mc[0] - ms[0] / 2, mc[0] + ms[0] / 2];
+      const yr = [mc[1] - ms[1] / 2, mc[1] + ms[1] / 2];
+      const zr = [mc[2] - ms[2] / 2, mc[2] + ms[2] / 2];
       const step = {
         x: m.dx || base.x / Math.max(1, m.factor_x || 1),
         y: m.dy || base.y / Math.max(1, m.factor_y || 1),
@@ -1209,13 +1213,12 @@ export class Scene3D {
       const rg = this._resolveGeometry(g);
       if (!rg) continue;
       if (rg.type === "box") {
-        const xr = rg.x_range || [-1e-7, 1e-7], yr = rg.y_range || [-1e-7, 1e-7],
-              zr = rg.z_range || [-1e-7, 1e-7];
+        const c = rg.center || [0, 0, 0], sz = rg.size || [2e-7, 2e-7, 2e-7];
         items.push({ kind: "box",
-          pos: [(xr[0] + xr[1]) / 2, (yr[0] + yr[1]) / 2, (zr[0] + zr[1]) / 2],
-          scale: [Math.max(Math.abs(xr[1] - xr[0]), 1e-12),
-                  Math.max(Math.abs(yr[1] - yr[0]), 1e-12),
-                  Math.max(Math.abs(zr[1] - zr[0]), 1e-12)],
+          pos: [c[0], c[1], c[2]],
+          scale: [Math.max(Math.abs(sz[0]), 1e-12),
+                  Math.max(Math.abs(sz[1]), 1e-12),
+                  Math.max(Math.abs(sz[2]), 1e-12)],
           color: new THREE.Color(this._materialColor(rg.material)).convertSRGBToLinear() });
       } else if (rg.type === "sphere") {
         const c = rg.center || [0, 0, 0];

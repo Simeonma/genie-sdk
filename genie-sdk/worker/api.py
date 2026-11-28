@@ -68,9 +68,10 @@ _MON_TYPES = {"time", "freq", "index"}
 #: base grid dx/dy/dz lives on domain; the caps (max_refinement /
 #: min_cells) are deleted from the language. Q31: per-axis spacing
 #: tables (mutually exclusive with dx — auto_grid writes them).
+#: 放置词汇 v2（2.0.6a1）：x/y/z_range → center + size（站长拍断代）。
 _SOLVER_FIELDS = {
-    "x_range": ("domain", "x_range"), "y_range": ("domain", "y_range"),
-    "z_range": ("domain", "z_range"), "total_time": ("domain", "total_time"),
+    "center": ("domain", "center"), "size": ("domain", "size"),
+    "total_time": ("domain", "total_time"),
     "cfl": ("domain", "cfl"), "boundary": ("domain", "boundary"),
     "dx": ("domain", "dx"), "dy": ("domain", "dy"), "dz": ("domain", "dz"),
     "x_spacing": ("domain", "x_spacing"),
@@ -893,12 +894,17 @@ class Surface:
             f_lo = f_hi / 2.0          # 单 λ：以 λ 为中心的一个倍频程
             ranges = {}
             for a in (t1, t2):
-                rng = getattr(env.domain, f"{a}_range")
-                if rng is None:
+                i = "xyz".index(a)
+                c = getattr(env.domain, "center", None)
+                s = getattr(env.domain, "size", None)
+                ci = c[i] if c is not None else None
+                si = s[i] if s is not None else None
+                if ci is None or si is None:
                     raise ValueError(
-                        f"auto_grid: mode domain.{a}_range is required "
-                        f"(spacing tables carry no window)")
-                ranges[a] = rng
+                        f"auto_grid: the mode domain window on axis {a!r} "
+                        f"(center + size) is required (spacing tables "
+                        f"carry no window)")
+                ranges[a] = (ci - si / 2, ci + si / 2)
             out = {}
             for a, rng in ranges.items():
                 segs = core_grid.project_axis(a, geometries, materials,
@@ -920,7 +926,13 @@ class Surface:
         f_lo, f_hi = core_grid._C0 / wl_hi, core_grid._C0 / wl_lo
         lam_min = wl_lo
         d = env.domain
-        ranges = {"x": d.x_range, "y": d.y_range, "z": d.z_range}
+        c, s = getattr(d, "center", None), getattr(d, "size", None)
+        if c is None or s is None:
+            raise ValueError(
+                "auto_grid: the domain placement (center + size) is "
+                "required — spacing tables must cover an explicit window")
+        ranges = {a: (c[i] - s[i] / 2, c[i] + s[i] / 2)
+                  for i, a in enumerate("xyz")}
         tables = core_grid.auto_grid_tables(
             ranges, geometries, materials, (f_lo, f_hi),
             ppw=core_grid.DEFAULT_PPW if n is None else n, growth=growth)

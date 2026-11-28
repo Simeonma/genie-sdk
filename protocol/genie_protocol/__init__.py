@@ -24,7 +24,7 @@ when an attribute is first touched; star imports trigger the full load per
 """
 from __future__ import annotations
 
-__version__ = "2.0.5a1"
+__version__ = "2.0.6a1"
 
 
 def _forbid_double_owner() -> None:
@@ -91,7 +91,7 @@ __all__ = [
 # them and dir() must enumerate them (locked by tests); they stay out of
 # __all__.
 _INTERNAL = frozenset({
-    "_StrictModel", "_RangeModel", "_TemporalMixin", "_MonitorMixin",
+    "_StrictModel", "_BoxVocab", "_TemporalMixin", "_MonitorMixin",
     "_env_int", "_check_range", "_norm_polarization",
 })
 

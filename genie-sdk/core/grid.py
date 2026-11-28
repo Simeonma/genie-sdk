@@ -81,7 +81,10 @@ def _unrotated_extents(g):
     t = getattr(g, "type", None)
     c = list(getattr(g, "center", (0.0, 0.0, 0.0)))
     if t == "box":
-        return tuple(tuple(getattr(g, f"{a}_range")) for a in "xyz")
+        # 放置词汇 v2（2.0.6a1）：box = center + size（真源 wire BoxSpec）
+        s = list(getattr(g, "size", (0.0, 0.0, 0.0)))
+        return tuple((c[i] - s[i] / 2, c[i] + s[i] / 2)
+                     for i in range(3))
     if t == "sphere":
         r = float(g.radius)
         return tuple((c[i] - r, c[i] + r) for i in range(3))

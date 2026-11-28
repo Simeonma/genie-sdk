@@ -71,8 +71,8 @@ demand — there is no default (`genie.fdtd` exists only after
 
 ```python
 genie.add_solver(name="fdtd", type="fdtd")
-genie.set_named("fdtd", x_range=(-1e-6, 1e-6), y_range=(-1e-6, 1e-6),
-                z_range=(-1e-6, 1e-6), total_time=60e-15, dx=40e-9)
+genie.set_named("fdtd", center=(0.0, 0.0, 0.0), size=(2e-6, 2e-6, 2e-6),
+                total_time=60e-15, dx=40e-9)
 
 genie.add_material(name="Au", type="library", library="Au")
 genie.set_named("material.Au", band=(400e-9, 1000e-9), tolerance=0.01)
@@ -80,8 +80,7 @@ genie.fit_material("Au")                    # explicit fit (lazy on run too)
 
 genie.add_geometry(name="wg", type="box")
 genie.set_named("geometry.wg", material="Au",
-                x_range=(-5e-7, 5e-7), y_range=(-5e-7, 5e-7),
-                z_range=(-5e-7, 5e-7))
+                center=(0.0, 0.0, 0.0), size=(1e-6, 1e-6, 1e-6))
 
 genie.fdtd.add_source(name="src", type="plane_wave")
 genie.set_named("fdtd.src", freq_center=300e12, freq_bw=60e12)
