@@ -1,5 +1,6 @@
 import { FormPanel } from "../views/form.js";
 import { GEO_TYPE_LABEL, previewEl } from "../views/previews.js";
+import { fdtdConfig } from "./util.js";
 import { buildToolbar } from "./toolbar.js";
 import { renderTree } from "./tree.js";
 /* modules/state.js — 共享状态与通用 UI（cfg/displayCfg/选中态/场景柄/toast）+ 树元数据
@@ -32,7 +33,12 @@ export const TREE_META = {
   params: ["params", "Parameters"],
 };
 export function treePreviewKey(kind, i) {
-  const it = (cfg && cfg[kind]) ? cfg[kind][i] : null;
+  /* 快照 v2（2026-11-28）：fdtd 子对象（source/monitor/mesh）住
+   * solvers[].config，不在顶层——顶层读法会让图标永远走兜底。 */
+  const inFdtd = kind === "source" || kind === "monitor" || kind === "mesh";
+  const it = inFdtd
+    ? ((fdtdConfig(cfg)[kind] || [])[i] || null)
+    : ((cfg && cfg[kind]) ? cfg[kind][i] : null);
   const t = it && it.type;
   if (kind === "materials")
     return it && it.type === "const" ? "mat_const"

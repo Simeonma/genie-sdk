@@ -120,6 +120,10 @@ def _source(s: dict) -> None:
     elif t in ("plane_wave", "gaussian_beam"):
         _set(s, "amplitude", 1.0)
         _set(s, "direction", "+")
+        # propagation_axis 默认 z（2026-11-28 站长拍）：正入射平面波的
+        # 惯例方向；center / size / from_face 不补——None is meaningful
+        # （size 全 null = 横截面全跨度，wire 现成语义）
+        _set(s, "propagation_axis", "z")
         _set(s, "theta", 0.0)
         _set(s, "phi", 0.0)
         _set(s, "psi", 0.0)

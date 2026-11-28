@@ -806,8 +806,8 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
                 c[IDX[a]] = (v[0] + v[1]) / 2;
                 z[IDX[a]] = v[1] - v[0];
               }) })) },
-      { type: "table", caption: "Incidence",
-        cols: [{ label: "θ" }, { label: "φ" }],
+      { type: "table", caption: "Angles",
+        cols: [{ label: "θ" }, { label: "φ" }, { label: "ψ" }],
         rows: [{ cells: [
           { kind: "num", path: "source.theta", value: s.theta,
             hint: "degrees, polar angle off the propagation axis; 0 = on-axis",
@@ -815,11 +815,10 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
           { kind: "num", path: "source.phi", value: s.phi,
             hint: "degrees, azimuth in the transverse plane; 0 = reference",
             onSet: (v) => commit("phi", py(v)) },
+          { kind: "num", path: "source.psi", value: s.psi,
+            hint: "degrees, polarization angle; 0 = reference",
+            onSet: (v) => commit("psi", py(v)) },
         ] }] },
-      { type: "row", label: "Polarization (ψ)",
-        controls: [{ kind: "num", path: "source.psi", value: s.psi,
-          hint: "degrees, polarization angle; 0 = reference",
-          onSet: (v) => commit("psi", py(v)) }] },
     ];
   }
   return { sections: [{
