@@ -84,7 +84,8 @@ export function buildToolbar() {
     srcBtns.appendChild(mkSourceBtn("soft_source", "Soft source", "source"));
     srcBtns.appendChild(mkSourceBtn("plane_wave", "Plane wave", "source"));
     srcBtns.appendChild(mkSourceBtn("gaussian_beam", "Gaussian beam", "source"));
-    srcBtns.appendChild(mkSourceBtn("mode", "Mode source", "source"));
+    /* mode source 暂下架（L-65）：direction/横截面窗口的能力面待 kernel
+     * 改动后重定，卡先不给入口——wire 字段仍在，脚本可建。 */
   }
 
   /* FDTD ▸ Simulation：Run（主 CTA，两态）+ Build（预演，伴生钮）。 */
