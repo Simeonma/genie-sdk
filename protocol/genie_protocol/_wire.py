@@ -162,7 +162,38 @@ LIBRARY_FIT_DEFAULTS = {
     "maxfev": 5000,
 }
 _FIELD_SET = ("Ex", "Ey", "Ez", "Hx", "Hy", "Hz", "all")
+#: the six Yee components — the legal members of a field subset list
+#: (L-66). "all" is str-only; a list containing it is a 422.
+_COMPONENTS = ("Ex", "Ey", "Ez", "Hx", "Hy", "Hz")
 _INDEX_FIELD_SET = ("eps", "mu", "both")
+
+
+def _check_mon_field(v):
+    """time/freq monitor field (L-66): str ("all" | one component —
+    legacy, unchanged) or a subset list. List rules: non-empty, no
+    duplicates, members ∈ the six components, "all" not allowed inside.
+    Round-trip identity — a full-six list is NOT rewritten to "all"
+    (that normalization is the GUI write leg's business, never the
+    wire's)."""
+    if isinstance(v, str):
+        if v not in _FIELD_SET:
+            raise ValueError(f"field {v!r} not in {_FIELD_SET}")
+        return v
+    if not v:
+        raise ValueError(
+            "field: an empty list selects no components — pass 'all' or "
+            "a non-empty subset of (Ex, Ey, Ez, Hx, Hy, Hz)")
+    seen = set()
+    for item in v:
+        if item not in _COMPONENTS:
+            raise ValueError(
+                f"field: {item!r} is not a field component — a list "
+                f"selects a subset of {_COMPONENTS}; 'all' is a str-only "
+                "value, not a list member")
+        if item in seen:
+            raise ValueError(f"field: duplicate component {item!r}")
+        seen.add(item)
+    return list(v)
 
 
 # ---------------------------------------------------------------------------
@@ -1317,16 +1348,19 @@ class _MonitorMixin(_Identified, _StrictModel):
     # time/freq default to the [0,0,0] point monitor (null slot =
     # full-domain span — the volume guard stops abuse first)
     size: tuple[Optional[float], Optional[float], Optional[float]] = (0.0, 0.0, 0.0)
-    field: str
+    # str ("all" | single component) or a subset list (L-66); the index
+    # monitor narrows this back to str via its own validator.
+    field: Union[str, list[str]]
 
 
 class TimeMonSpec(_MonitorMixin):
     type: Literal["time"] = "time"
     # field defaults to 'all' (aligned with the fdtd local API default)
     # — all six components are recorded, so Poynting/flux/transmission
-    # can be derived; an explicit single component (saving 6x
-    # data/VRAM) remains a legal path.
-    field: str = "all"
+    # can be derived; an explicit single component or a subset list
+    # (L-66, e.g. 4 components for a Poynting derivation) saves the
+    # unrecorded components' data/VRAM.
+    field: Union[str, list[str]] = "all"
     # down_sample belongs to time only: time-domain gating for freq is
     # apodize's job, and index has no time axis. A freq monitor
     # carrying down_sample would pass validation then hit
@@ -1339,9 +1373,7 @@ class TimeMonSpec(_MonitorMixin):
     @field_validator("field", mode="after")
     @classmethod
     def _f(cls, v):
-        if v not in _FIELD_SET:
-            raise ValueError(f"field {v!r} not in {_FIELD_SET}")
-        return v
+        return _check_mon_field(v)
 
 
 class ModeExpansionSpec(_StrictModel):
@@ -1395,17 +1427,16 @@ class FreqMonSpec(_MonitorMixin):
     type: Literal["freq"] = "freq"
     freq: dict[str, float]  # {"center": Hz, "bw": Hz, "n": point count}
     apodize: Optional[ApodizeSpec] = None
-    # Same as TimeMonSpec: defaults to 'all'.
-    field: str = "all"
-    #: optional mode-expansion profile (a14); requires field='all'
+    # Same as TimeMonSpec: defaults to 'all'; str | subset list (L-66).
+    field: Union[str, list[str]] = "all"
+    #: optional mode-expansion profile (a14); requires the full field
+    #: set ('all' — a subset list cannot feed the six Yee components)
     mode_expansion: Optional[ModeExpansionSpec] = None
 
     @field_validator("field", mode="after")
     @classmethod
     def _f(cls, v):
-        if v not in _FIELD_SET:
-            raise ValueError(f"field {v!r} not in {_FIELD_SET}")
-        return v
+        return _check_mon_field(v)
 
     @field_validator("freq", mode="before")
     @classmethod

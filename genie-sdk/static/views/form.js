@@ -1748,8 +1748,47 @@ export function MONITOR_SCHEMA(cfg, commit, m, addr) {
       { echo: false }).catch(() => {});
   };
 
-  const fieldOpts = m.type === "index"
-    ? ["eps", "mu", "both"] : ["Ex", "Ey", "Ez", "Hx", "Hy", "Hz", "all"];
+  /* field 多选（L-66）：str（"all"/单分量）或六分量子集 list。归一只在
+   * GUI 写腿——全六开写 "all" 省表示（wire 层不归一）。空集不可写
+   * （wire 422）：关到空就地弹回，不发明值。index 型不参与：仍是
+   * eps/mu/both 下拉。 */
+  const COMPONENTS = ["Ex", "Ey", "Ez", "Hx", "Hy", "Hz"];
+  let fieldItems;
+  if (m.type === "index") {
+    fieldItems = [{ type: "row", label: "field", controls: [{
+        kind: "select", value: m.field,
+        options: ["eps", "mu", "both"],
+        onSet: (v) => commit("field", py(v)) }] }];
+  } else {
+    const cur = m.field === "all" ? new Set(COMPONENTS)
+      : new Set(Array.isArray(m.field) ? m.field
+        : (m.field ? [m.field] : []));
+    const write = (next) => {
+      if (next.size === 6) commit("field", py("all"));
+      else commit("field", py(COMPONENTS.filter((c) => next.has(c))));
+    };
+    const cell = (comp) => ({
+      kind: "select", path: "mon.field." + comp,
+      value: cur.has(comp) ? "on" : "off", options: ["off", "on"],
+      aria: comp, rerender: true,
+      onSet: (v, sel) => {
+        const next = new Set(cur);
+        if (v === "on") next.add(comp); else next.delete(comp);
+        if (!next.size) { sel.value = "on"; return; }   /* 关到空 = 弹回 */
+        write(next);
+      } });
+    const allCell = {
+      kind: "select", path: "mon.field.all",
+      value: cur.size === 6 ? "on" : "off", options: ["off", "on"],
+      aria: "all", rerender: true,
+      onSet: (v, sel) => {
+        if (v === "on") { commit("field", py("all")); return; }
+        sel.value = cur.size === 6 ? "on" : "off";      /* 全关 = 弹回 */
+      } };
+    fieldItems = [{ type: "table", caption: "field",
+      cols: COMPONENTS.map((c) => ({ label: c })).concat([{ label: "all" }]),
+      rows: [{ cells: COMPONENTS.map(cell).concat([allCell]) }] }];
+  }
 
   const sections = [{
     type: "section", key: "mon:general", title: "General settings", open: true,
@@ -1776,10 +1815,7 @@ export function MONITOR_SCHEMA(cfg, commit, m, addr) {
             commit("size", py(z));
           },
         })) },
-      { type: "row", label: "field", controls: [{
-          kind: "select", value: m.field,
-          options: fieldOpts,
-          onSet: (v) => commit("field", py(v)) }] },
+      ...fieldItems,
     ],
   }];
 
