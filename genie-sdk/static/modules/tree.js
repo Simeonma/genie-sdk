@@ -17,6 +17,7 @@ import { TREE_META, cfg, treeGroupOpen, treePreviewIcon, treeSel } from "./state
  * 源/监视器走本表——行内只留一个词，见 mkRowEl 的命名注释）。 */
 export const KIND_TYPE_LABEL = {
   soft_source: "Dipole", plane_wave: "Plane wave", gaussian_beam: "Gaussian",
+  mode: "Mode",
   time: "Time", freq: "Freq", index: "Index",
 };
 

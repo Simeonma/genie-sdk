@@ -756,6 +756,103 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
           },
         })) }] },
     ];
+  } else if (s.type === "mode") {
+    /* mode source（2026-11-28，可抄部分先落）：时域节 / 换轴骨架 /
+     * Rotation 表（mode solver 同款三件）/ mode_selection 表（Solve 同形）。
+     * 放置 = axis + center（wire v1：注入恒沿 +axis，无 direction；
+     * mode 定义在全截面——无 size 窗口）。 */
+    const mAxis = s.propagation_axis || "z";
+    const t1 = { x: "y", y: "x", z: "x" }[mAxis];
+    const t2 = { x: "z", y: "z", z: "y" }[mAxis];
+    const center = Array.isArray(s.center) ? s.center : null;
+    const setCenter = (mut) => {
+      const c = [0, 1, 2].map((k) =>
+        (center && typeof center[k] === "number") ? center[k] : 0.0);
+      mut(c);
+      exec("genie.set_named(" + JSON.stringify(addr)
+        + ", center=" + py(c) + ")",
+        { echo: false }).catch(() => {});
+    };
+    const sel = (s.mode_selection && typeof s.mode_selection === "object")
+      ? s.mode_selection : {};
+    const setSel = (patch) => {
+      const d = { n_modes: sel.n_modes != null ? sel.n_modes : 1,
+                 index: sel.index != null ? sel.index : 0 };
+      if (sel.neff_target != null) d.neff_target = sel.neff_target;
+      Object.assign(d, patch);
+      exec("genie.set_named(" + JSON.stringify(addr)
+        + ", mode_selection=" + py(d) + ")",
+        { echo: false }).catch(() => {});
+    };
+    const rot = { axis: s.rotate_axis || "", angle: s.rotate_angle,
+                  radius: s.rotate_radius };
+    general = [
+      { type: "table", caption: "Propagation",
+        cols: [{ label: "axis" }],
+        rows: [{ cells: [
+          { kind: "select", path: "source.propagation_axis", value: mAxis,
+            options: ["x", "y", "z"], rerender: true,
+            onPick: (v) => commit("propagation_axis", py(v)) },
+        ] }] },
+      { type: "row", label: "Injection face",
+        controls: [{ kind: "num", path: "source.center",
+          value: center && center[{ x: 0, y: 1, z: 2 }[mAxis]],
+          unit: "len",
+          hint: "injection plane centre along the propagation axis; 0 = origin",
+          onSet: (v) => setCenter((c) => {
+            c[{ x: 0, y: 1, z: 2 }[mAxis]] = v;
+          }) }] },
+      /* Rotation：mode solver 同款三件（wire"同三句"）；旋转轴限横轴
+       * （= 传播轴的 spin 被 wire 拒），选轴落 0、清轴三清。 */
+      { type: "table", caption: "Rotation",
+        cols: [{ label: "Axis" }, { label: "Angle" },
+               { label: "Radius", unit: "µm" }],
+        rows: [{ cells: [
+          { kind: "select", path: "source.rotate_axis", value: rot.axis,
+            options: ["", t1, t2], rerender: true,
+            onSet: (v) => {
+              if (!v) {
+                exec("genie.set_named(" + JSON.stringify(addr)
+                  + ", rotate_axis=None, rotate_angle=None,"
+                  + " rotate_radius=None)",
+                  { echo: false }).catch(() => {});
+              } else {
+                exec("genie.set_named(" + JSON.stringify(addr)
+                  + ", rotate_axis=" + py(v) + ", rotate_angle=0.0,"
+                  + " rotate_radius=0.0)",
+                  { echo: false }).catch(() => {});
+              }
+            } },
+          { kind: "num", path: "source.rotate_angle",
+            value: rot.axis ? rot.angle : undefined,
+            disabled: !rot.axis,
+            hint: "degrees, right-hand rule; |angle| < 90",
+            onSet: (v) => commit("rotate_angle", py(v)) },
+          { kind: "num", path: "source.rotate_radius",
+            value: rot.axis ? rot.radius : undefined,
+            disabled: !rot.axis, unit: "len",
+            hint: "offset of the rotation axis from the plane centre; 0 = centre",
+            onSet: (v) => commit("rotate_radius", py(v)) },
+        ] }] },
+      /* mode_selection（嵌套 dict 单字段整份写）：n_modes / index /
+       * neff_target（空 = 截面最大折射率）。 */
+      { type: "table", caption: "Mode selection",
+        cols: [{ label: "Modes" }, { label: "Index" },
+               { label: "neff target" }],
+        rows: [{ cells: [
+          { kind: "num", path: "source.mode_selection.n_modes",
+            value: sel.n_modes, hint: "solve this many; pick by index; 1 = single",
+            onSet: (v) => setSel({ n_modes: v }) },
+          { kind: "num", path: "source.mode_selection.index",
+            value: sel.index, hint: "which solved mode to inject; 0 = first",
+            onSet: (v) => setSel({ index: v }) },
+          { kind: "num", path: "source.mode_selection.neff_target",
+            value: sel.neff_target,
+            hint: "search centre for the solver; empty = cross-section max",
+            onClear: () => setSel({ neff_target: null }),
+            onSet: (v) => setSel({ neff_target: v }) },
+        ] }] },
+    ];
   } else {
     /* plane_wave（2026-11-28 站长拍）：位置/窗口 = Domain range 四列表
      * （mode 同款；传播轴行 centerOnly，横轴行 range → 整份写 center+size，
