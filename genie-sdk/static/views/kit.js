@@ -509,12 +509,20 @@ export const KIT = {
           return;
         }
         let lo = v.min, hi = v.max;
+        /* allowZero（monitor 卡，2026-11-28 站长拍）：size 槽 ≥ 0——
+         * 0 长 = 该轴单格（点/线/面监视器）；min == max 也合法。 */
+        const zok = it.allowZero === true;
         if (which === "center" || which === WIDTH) {    /* 改中心/宽度 → 反算边界 */
           const s = v[WIDTH];
-          if (!(s > 0)) { this._reject(ins[WIDTH], "span must be > 0"); return; }
+          if (zok ? s < 0 : !(s > 0)) {
+            this._reject(ins[WIDTH],
+              zok ? "span must be ≥ 0" : "span must be > 0");
+            return;
+          }
           lo = v.center - s / 2; hi = v.center + s / 2;
-        } else if (!(hi > lo)) {                        /* 改边界 → 必须 lo < hi */
-          this._reject(ins[which], "min must be < max");
+        } else if (zok ? hi < lo : !(hi > lo)) {        /* 改边界 → 必须 lo < hi */
+          this._reject(ins[which],
+            zok ? "min must be ≤ max" : "min must be < max");
           return;
         }
         apply(lo, hi);
