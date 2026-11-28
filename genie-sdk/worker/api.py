@@ -141,6 +141,10 @@ class Surface:
             raise ValueError(
                 "'global_source' is reserved for the document-level global "
                 "source singleton")
+        if name == "global_monitor":
+            raise ValueError(
+                "'global_monitor' is reserved for the document-level global "
+                "monitor singleton")
 
     def _family_members(self, family):
         """family → {name: obj/tuple} (live view)."""
@@ -219,6 +223,8 @@ class Surface:
             return _Target(fam, fam, name, members[name])
         if addr == "global_source":                         # 全局 source 设置（文档级）
             return _Target("global_source", None, addr, self._model)
+        if addr == "global_monitor":                        # 全局 monitor 设置（文档级，B 案）
+            return _Target("global_monitor", None, addr, self._model)
         if addr in self._model._solvers:                    # the solver itself
             return _Target("solver", None, addr, self._model.envelope(addr))
         cands = self._all_candidates().get(addr, [])
@@ -410,6 +416,42 @@ class Surface:
                     f"string, got {type(v).__name__}")
             gs[k] = v
 
+    def _set_global_monitor(self, t, fields):
+        """The document-level global monitor singleton (B 案, 2026-11-28):
+        measurement spectrum + point count + apodize + member monitor ids."""
+        self._only(t, fields, {"freq", "bandwidth", "n", "apodize",
+                               "monitors"})
+        gm = self._model._global_monitor
+        for k, v in fields.items():
+            if k == "monitors":
+                if not isinstance(v, (list, tuple)):
+                    raise ValueError(
+                        f"{t.addr()}.monitors: expected a list of monitor ids")
+                known = {it.id for s in self._model._solvers.values()
+                         for it in getattr(s, "_monitor", [])}
+                ids = [int(x) for x in v]
+                bad = [x for x in ids if x not in known]
+                if bad:
+                    raise ValueError(
+                        f"{t.addr()}.monitors: unknown monitor id(s) {bad}")
+                gm["monitors"] = ids
+                continue
+            if k == "apodize":
+                if v is None:
+                    gm.pop("apodize", None)   # None = 无窗（矩形）
+                    continue
+                if not isinstance(v, dict):
+                    raise ValueError(
+                        f"{t.addr()}.apodize: expected a dict "
+                        f"(side/time_window/width)")
+                gm["apodize"] = v
+                continue
+            if not isinstance(v, (int, float, str)):
+                raise ValueError(
+                    f"{t.addr()}.{k}: expected a number or an expression "
+                    f"string, got {type(v).__name__}")
+            gm[k] = v
+
     def _set_material(self, t, fields):
         draft = t.obj
         meta = self._mat_meta.get(t.name)
@@ -551,6 +593,13 @@ class Surface:
             setattr(draft, k, v)
         if band:
             draft.freq = band
+        # 显式写频谱组（center/bw/n）或 apodize = 退出全局 monitor 名单
+        # （同 source 的 Use global 语义：写即独立）
+        if set(fields) & (set(_MON_BAND) | {"apodize"}):
+            gm = self._model._global_monitor
+            ids = gm.get("monitors") or []
+            if draft.id in ids:
+                gm["monitors"] = [x for x in ids if x != draft.id]
 
     def _set_mesh(self, t, fields):
         draft = t.obj
@@ -1180,7 +1229,15 @@ class _SolverChildren:
         if type not in _MON_TYPES:
             raise ValueError(f"monitor type {type!r} is invalid (expected: "
                              f"{', '.join(sorted(_MON_TYPES))})")
-        self._env().monitors._add(type, name)
+        env = self._env()
+        env.monitors._add(type, name)
+        # 新 freq monitor 默认继承全局 monitor（同 source 先例）：
+        # freq 型才有频谱；time/index 不入名单
+        if type == "freq":
+            mid = env._monitor[-1].id
+            gm = self._s._model._global_monitor
+            if mid not in gm.setdefault("monitors", []):
+                gm["monitors"].append(mid)
         return f"{self._name}.{name}"
 
     def add_mesh(self, name):

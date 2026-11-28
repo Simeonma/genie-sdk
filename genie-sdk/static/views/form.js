@@ -111,7 +111,7 @@ const MODE_FACES = { x: ["y_min", "y_max", "z_min", "z_max"],
                      y: ["x_min", "x_max", "z_min", "z_max"],
                      z: ["x_min", "x_max", "y_min", "y_max"] };
 
-export function DOMAIN_SCHEMA(cfg, commit, gs, setGs) {
+export function DOMAIN_SCHEMA(cfg, commit, gs, setGs, gmon, setGm) {
   const d = (cfg && cfg.domain) || {};
   const range = (a) => {
     const r = d[`${a}_range`];
@@ -297,6 +297,11 @@ export function DOMAIN_SCHEMA(cfg, commit, gs, setGs) {
    * 内容（spectrumTiming）直接住 fdtd 卡末尾；写腿 = global_source 单例。 */
   if (typeof setGs === "function") {
     sections.push(GLOBAL_SCHEMA(cfg, setGs, gs).sections[0]);
+  }
+  /* 全局 monitor 节（2026-11-28 B 案）：测量频谱/点数/apodize；
+   * 写腿 = global_monitor 单例。 */
+  if (typeof setGm === "function") {
+    sections.push(GLOBAL_MONITOR_SCHEMA(cfg, setGm, gmon).sections[0]);
   }
 
   return { sections };
@@ -632,7 +637,7 @@ function spectrumTiming({ band, temporal, path, onBand, onTemporal }) {
     c.onSet = (v) => onTemporal(field, v);
     return c;
   };
-  return [{
+  const out = [{
     type: "range", caption: "Spectrum", unit: wl ? "len" : "freq",
     order: ["center", "span", "min", "max"],
     lead: { kind: "select", value: wl ? "wavelength" : "frequency",
@@ -647,17 +652,22 @@ function spectrumTiming({ band, temporal, path, onBand, onTemporal }) {
         } else { lo = v[0]; hi = v[1]; }
         if (hi > lo) onBand([lo, hi]);
       } }],
-  }, {
-    type: "table", caption: "Temporal",
-    cols: [{ label: "delay", unit: "fs" }, { label: "phase", unit: "rad" },
-           { label: "amplitude" }],
-    rows: [{ cells: [
-      cell("delay", temporal && temporal.delay, "time",
-        "extra offset after the auto-placed pulse peak; 0 = none"),
-      cell("phase", temporal && temporal.phase, null),
-      cell("amplitude", temporal && temporal.amplitude, null),
-    ] }],
   }];
+  /* temporal == null = monitor 版（测量侧无时域参数），只出 Spectrum */
+  if (temporal != null) {
+    out.push({
+      type: "table", caption: "Temporal",
+      cols: [{ label: "delay", unit: "fs" }, { label: "phase", unit: "rad" },
+             { label: "amplitude" }],
+      rows: [{ cells: [
+        cell("delay", temporal && temporal.delay, "time",
+          "extra offset after the auto-placed pulse peak; 0 = none"),
+        cell("phase", temporal && temporal.phase, null),
+        cell("amplitude", temporal && temporal.amplitude, null),
+      ] }],
+    });
+  }
+  return out;
 }
 
 /* ══════════════════ FDTD ▸ soft source（2026-11-26 站长拍）══════════════
@@ -877,6 +887,70 @@ export function GLOBAL_SCHEMA(cfg, setGs, gs) {
                              bandwidth: v[1] - v[0] }),
       onTemporal: (field, v) => setGs({ [field]: v }),
     }),
+  }] };
+}
+
+/* ══════════════════ 全局 monitor（2026-11-28 B 案）══════════════════
+ * 文档级 model.global_monitor：测量频谱独立于激励（global_source）。
+ * freq 型 monitor 用 id 成员继承：频谱（center/bw）+ 点数 n + apodize；
+ * 显式写频谱组或 apodize = 退出名单（resolver 展开、载荷剥 use_global）。 */
+export function GLOBAL_MONITOR_SCHEMA(cfg, setGm, gm) {
+  const g = gm || {};
+  const f = g.freq, bw = g.bandwidth;
+  const band = (typeof f === "number" && typeof bw === "number")
+    ? [f - bw / 2, f + bw / 2] : null;
+  const ap = g.apodize || {};
+  const setAp = (patch) => {
+    if (patch.side === null || patch.side === "") {
+      /* side 空 = 无窗（矩形窗）——删整键，不残留孤儿 width */
+      setGm({ apodize: null });
+      return;
+    }
+    const d = {};
+    if (ap.side) d.side = ap.side;
+    if (Array.isArray(ap.time_window)) d.time_window = ap.time_window;
+    if (ap.width != null) d.width = ap.width;
+    Object.assign(d, patch);
+    if (!d.side && !d.time_window && d.width == null) {
+      setGm({ apodize: null });
+      return;
+    }
+    setGm({ apodize: d });
+  };
+  return { sections: [{
+    type: "section", key: "sim:monitor", title: "Global monitor",
+    open: true,
+    items: [
+      ...spectrumTiming({
+        band, path: "global_monitor", temporal: null,
+        onBand: (v) => setGm({ freq: (v[0] + v[1]) / 2,
+                               bandwidth: v[1] - v[0] }),
+        onTemporal: null,
+      }),
+      { type: "row", label: "Frequency points",
+        controls: [{ kind: "num", path: "global_monitor.n", value: g.n,
+          hint: "DFT sample count across the band; 0 = unset",
+          onSet: (v) => setGm({ n: v }) }] },
+      /* apodize：定量谱学的首程窗；side 空 = 无窗（矩形） */
+      { type: "table", caption: "Apodization",
+        cols: [{ label: "side" }, { label: "window (fs)" },
+               { label: "width (fs)" }],
+        rows: [{ cells: [
+          { kind: "select", path: "global_monitor.apodize.side",
+            value: ap.side || "", options: ["", "start", "stop", "both"],
+            unsetLabel: "none",
+            onSet: (v) => setAp({ side: v || null }) },
+          { kind: "num", path: "global_monitor.apodize.time_window",
+            value: Array.isArray(ap.time_window) ? ap.time_window[0] : undefined,
+            unit: "time",
+            hint: "window start; second slot follows width",
+            onSet: (v) => setAp({ time_window: [v, (ap.width || 0) + v] }) },
+          { kind: "num", path: "global_monitor.apodize.width",
+            value: ap.width, unit: "time",
+            hint: "cosine taper width; empty = no window",
+            onSet: (v) => setAp({ width: v }) },
+        ] }] },
+    ],
   }] };
 }
 
@@ -1172,18 +1246,21 @@ export const FormPanel = {
       exec("genie.set_named('fdtd', " + field + "=" + literal + ")",
         { echo: false }).catch(() => {});
     };
-    /* 全局 source 单例写腿（住进 fdtd 卡，2026-11-28）：地址不同
-     * （'global_source'，不是 fdtd solver），一条命令一个字段。 */
-    const setGs = (fields) => {
+    /* 全局单例写腿（住进 fdtd 卡，2026-11-28）：地址不同（'global_source'
+     * / 'global_monitor'，不是 fdtd solver），一条命令一个字段。 */
+    const mkSingleton = (addr) => (fields) => {
       const lines = [];
       for (const [k, v] of Object.entries(fields || {})) {
-        lines.push("genie.set_named('global_source', " + k + "=" + py(v) + ")");
+        lines.push("genie.set_named('" + addr + "', " + k + "=" + py(v) + ")");
       }
       if (lines.length) exec(lines.join("\n"), { echo: false }).catch(() => {});
     };
+    const setGs = mkSingleton("global_source");
+    const setGm = mkSingleton("global_monitor");
     const gs = (this.cfg && this.cfg.global_source) || {};
-    this.renderPage(DOMAIN_SCHEMA(fdtdConfig(this.cfg), commit, gs, setGs),
-      body);
+    const gmon = (this.cfg && this.cfg.global_monitor) || {};
+    this.renderPage(DOMAIN_SCHEMA(fdtdConfig(this.cfg), commit, gs, setGs,
+      gmon, setGm), body);
   },
 
   /* 输入框 → SI 数（裸数按字段单位换算；带后缀 0.5um 后缀优先）；

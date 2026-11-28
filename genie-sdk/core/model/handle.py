@@ -395,6 +395,10 @@ class Model:
         #: delay, phase, amplitude, sources:[source id…]}。`sources` = 继承
         #: 它的 source id 集合；文档只存显式字段，载荷由 resolver 展开。
         self._global_source: dict = {}
+        #: 全局 monitor 设置（文档级单例，2026-11-28 B 案）：{freq,
+        #: bandwidth, n, apodize, monitors:[monitor id…]}。测量频谱独立
+        #: 于激励（global_source）；`monitors` = 继承名单。
+        self._global_monitor: dict = {}
         self._geometry: list = []
         self._materials: list = []
         self._attributes: list = []
@@ -505,7 +509,8 @@ class Model:
         """The declared solver names (insertion order; read-only)."""
         return tuple(self._solvers)
 
-    def solver_list(self, global_source: dict | None = None) -> list:
+    def solver_list(self, global_source: dict | None = None,
+                    global_monitor: dict | None = None) -> list:
         """The declared solvers as ``[{"id", "name", "kind", "config"}]``
         (the GUI's one fact source — solvers are model declarations, not
         wire payload: the list rides the cfg snapshot and never the submit
@@ -518,7 +523,8 @@ class Model:
             out.append({"id": s.id, "name": n, "kind": kind,
                         "config": effective_config(
                             self._envelope_conf_raw(s), kind,
-                            global_source=global_source)})
+                            global_source=global_source,
+                            global_monitor=global_monitor)})
         return out
 
     # -- promotion ------------------------------------------------------
@@ -611,16 +617,19 @@ class Model:
             s = self._solvers[next(iter(self._solvers))]
         kind = getattr(s, "kind", DEFAULT_SOLVER)
         model = effective_model(
-            self._document_model(), with_global_source=(kind == "fdtd"))
+            self._document_model(), with_global_source=(kind == "fdtd"),
+            with_global_monitor=(kind == "fdtd"))
         gs = model.get("global_source") if kind == "fdtd" else None
+        gm = model.get("global_monitor") if kind == "fdtd" else None
         cfg = {
             "model": model,
             "config": effective_config(
                 self._envelope_conf_raw(s), kind, global_source=gs,
-                strip_authoring=True),
+                global_monitor=gm, strip_authoring=True),
         }
         # authoring-only document state never rides the payload
         cfg["model"].pop("global_source", None)
+        cfg["model"].pop("global_monitor", None)
         if kind != DEFAULT_SOLVER:
             cfg["solver"] = kind
         return cfg
@@ -638,11 +647,14 @@ class Model:
         kinds = [getattr(s, "kind", DEFAULT_SOLVER)
                  for s in self._solvers.values()]
         with_gs = "fdtd" in kinds or bool(self._global_source)
+        with_gm = "fdtd" in kinds or bool(self._global_monitor)
         model = effective_model(
-            self._document_model(), with_global_source=with_gs)
+            self._document_model(), with_global_source=with_gs,
+            with_global_monitor=with_gm)
         return {
             "model": model,
-            "solvers": self.solver_list(model.get("global_source")),
+            "solvers": self.solver_list(
+                model.get("global_source"), model.get("global_monitor")),
         }
 
     def to_document(self) -> dict:
@@ -672,6 +684,8 @@ class Model:
             mdl["attributes"] = [to_wire(i) for i in self._attributes]
         if self._global_source:
             mdl["global_source"] = copy.deepcopy(self._global_source)
+        if self._global_monitor:
+            mdl["global_monitor"] = copy.deepcopy(self._global_monitor)
         return mdl
 
     def _envelope_conf_raw(self, s) -> dict:
@@ -772,6 +786,9 @@ class Model:
         gs = model.get("global_source")
         if isinstance(gs, dict):
             m._global_source = copy.deepcopy(gs)
+        gm = model.get("global_monitor")
+        if isinstance(gm, dict):
+            m._global_monitor = copy.deepcopy(gm)
         for kinds, items, src, key in (
                 (_GEO, m._geometry, model, "geometry"),
                 (_MAT, m._materials, model, "materials"),

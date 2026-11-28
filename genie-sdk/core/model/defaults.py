@@ -45,6 +45,16 @@ BOUNDARY_BLOCH = {"k": [0.0, 0.0, 0.0], "from_source": False}
 
 SOFT_POLARIZATION = [[1.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
 
+#: Global monitor defaults (B 案，2026-11-28 站长拍)：测量频谱独立于激励
+#: （global_source）——频段/点数/apodize 是测量侧参数；apodize 不预设
+#: （无窗 = 矩形窗），显式给才生效。
+GLOBAL_MONITOR_DEFAULTS = {
+    "freq": C0 / 1.55e-6,
+    "bandwidth": 20.0e12,
+    "n": 200,
+    "monitors": [],
+}
+
 #: Global source defaults (document-level singleton + the source ids that
 #: inherit it). The document stores only explicit fields; the resolver
 #: fills the rest and expands ``use_global`` into each source's payload.
@@ -257,8 +267,38 @@ def _apply_global(conf: dict, global_source: dict | None,
             s["use_global"] = use
 
 
+def _apply_global_monitor(conf: dict, global_monitor: dict | None,
+                          strip: bool) -> None:
+    """Expand the global-monitor membership into each freq monitor (B 案):
+    freq dict (center/bw/n) + apodize follow ``global_monitor`` — the
+    measurement spectrum is independent of the excitation (global_source).
+    Explicit writes mean leaving the list (same semantics as sources)."""
+    if not isinstance(global_monitor, dict):
+        global_monitor = {}
+    ids = set(global_monitor.get("monitors") or [])
+    for m in conf.get("monitor") or []:
+        use = m.get("id") in ids and m.get("type") == "freq"
+        if use:
+            freq = m.get("freq")
+            freq = dict(freq) if isinstance(freq, dict) else {}
+            freq["center"] = global_monitor.get(
+                "freq", GLOBAL_MONITOR_DEFAULTS["freq"])
+            freq["bw"] = global_monitor.get(
+                "bandwidth", GLOBAL_MONITOR_DEFAULTS["bandwidth"])
+            freq["n"] = global_monitor.get(
+                "n", GLOBAL_MONITOR_DEFAULTS["n"])
+            m["freq"] = freq
+            if "apodize" in global_monitor:
+                m["apodize"] = copy.deepcopy(global_monitor["apodize"])
+        if strip:
+            m.pop("use_global", None)
+        else:
+            m["use_global"] = use
+
+
 def effective_config(conf: dict, kind: str,
                      *, global_source: dict | None = None,
+                     global_monitor: dict | None = None,
                      strip_authoring: bool = False) -> dict:
     """Return a new config with the authoring defaults filled in."""
     out = copy.deepcopy(conf or {})
@@ -267,11 +307,14 @@ def effective_config(conf: dict, kind: str,
     else:
         _fdtd(out)
         _apply_global(out, global_source, strip=strip_authoring)
+        _apply_global_monitor(out, global_monitor, strip=strip_authoring)
     return out
 
 
-def effective_model(model: dict, *, with_global_source: bool = False) -> dict:
-    """Return a new model section with the effective global-source block."""
+def effective_model(model: dict, *, with_global_source: bool = False,
+                    with_global_monitor: bool = False) -> dict:
+    """Return a new model section with the effective global-source /
+    global-monitor blocks."""
     out = copy.deepcopy(model or {})
     if with_global_source:
         gs = out.get("global_source")
@@ -280,4 +323,11 @@ def effective_model(model: dict, *, with_global_source: bool = False) -> dict:
             out["global_source"] = gs
         for k, v in GLOBAL_SOURCE_DEFAULTS.items():
             _set(gs, k, v)
+    if with_global_monitor:
+        gm = out.get("global_monitor")
+        if not isinstance(gm, dict):
+            gm = {}
+            out["global_monitor"] = gm
+        for k, v in GLOBAL_MONITOR_DEFAULTS.items():
+            _set(gm, k, v)
     return out
