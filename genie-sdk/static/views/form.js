@@ -1760,25 +1760,27 @@ export function GEOMETRY_SCHEMA(cfg, commit, g, matNames) {
     }
   }
 
-  const metaItems = [
-    { type: "row", label: "priority", controls: [{
-      kind: "num", path: addr + ".priority", value: g.priority,
-      onSet: (v) => setField("priority", py(v)) }] },
-    { type: "table", caption: "Rotation (°)",
-      cols: AX.map((a) => ({ label: a })),
-      rows: [{ cells: AX.map((a, i) => ({
-        kind: "num", path: addr + ".rotation." + i,
-        value: Array.isArray(g.rotation) ? g.rotation[i] : undefined,
-        onSet: (v) => setVecSlot("rotation", i, v) })) }] },
-  ];
+  const materialRow = items[0];
+  const rotationTable = { type: "table", caption: "Rotation (°)",
+    cols: AX.map((a) => ({ label: a })),
+    rows: [{ cells: AX.map((a, i) => ({
+      kind: "num", path: addr + ".rotation." + i,
+      value: Array.isArray(g.rotation) ? g.rotation[i] : undefined,
+      onSet: (v) => setVecSlot("rotation", i, v) })) }] };
+  const priorityRow = { type: "row", label: "priority", controls: [{
+    kind: "num", path: addr + ".priority", value: g.priority,
+    onSet: (v) => setField("priority", py(v)) }] };
 
+  /* 节序（2026-11-28 站长拍）：先 Position & size（几何体本身），
+   * 再 General settings（material + rotation），最后 priority。 */
   return { sections: [
+    { type: "section", key: "geo:pos", open: true,
+      title: g.type === "polygon_z" ? "Geometry" : "Position & size",
+      items: posItems },
     { type: "section", key: "geo:general", title: "General settings",
-      open: true, items },
-    { type: "section", key: "geo:pos", title: "Position & size",
-      open: true, items: posItems },
-    { type: "section", key: "geo:meta", title: "Priority · rotation",
-      open: false, items: metaItems },
+      open: true, items: [materialRow, rotationTable] },
+    { type: "section", key: "geo:priority", title: "Priority",
+      open: false, items: [priorityRow] },
   ] };
 }
 

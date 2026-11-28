@@ -86,7 +86,9 @@ export function renderTree() {
         /* mode：与 fdtd 对称——行点击进 mode 卡片（数据走快照
          * solvers[].config 的 mode 槽）；mode 无 source/monitor（本征
          * 问题不吃激励），加密区子行待 L-13 mode 表单分段再长 */
-        leaf("mode", null, sv.name, 1, "solver_" + (sv.kind || "mode"));
+        const sp = leaf("mode", null, sv.name, 1, "solver_" + (sv.kind || "mode"));
+        sp.del = sv.name;                 /* 删求解器 = 包络整体消失 */
+        sp.delConfirm = `删除 ${sv.name} 求解器？`;
         continue;
       }
       /* fdtd：domain 是包络单件（每求解器一枚、不可 add），不设树节点——
@@ -94,18 +96,26 @@ export function renderTree() {
        * mesh = 带名加密区集合（Q30），**平铺**在 fdtd 下（不设容器层，
        * 基础网格 dx/dy/dz 住在 domain）；source/monitor 同款平铺 */
       const key = "solver:" + sv.name;
-      folder(sv.name, key, 1, "solver_fdtd", null, "domain");
+      const svSp = folder(sv.name, key, 1, "solver_fdtd", null, "domain");
+      /* 删除求解器 = 级联（domain/source/monitor/mesh 一并消失）——
+       * 大动作，确认后走 genie.remove(<solver>)（2026-11-28 站长拍）。 */
+      svSp.del = sv.name;
+      svSp.delConfirm = `删除 ${sv.name} 求解器（其 domain/source/monitor/mesh 一并删除）？`;
       if (!open(key)) continue;
       const conf = sv.config || {};
-      (conf.mesh || []).forEach((m, i) =>
-        leaf("mesh", i, m.name || `refine ${i + 1}`, 2, "mesh"));
+      (conf.mesh || []).forEach((m, i) => {
+        const sp = leaf("mesh", i, m.name || `refine ${i + 1}`, 2, "mesh");
+        if (m.name) sp.del = sv.name + "." + m.name;
+      });
       (conf.source || []).forEach((item, i) => {
         const fallback = KIND_TYPE_LABEL[item.type] || item.type;
-        leaf("source", i, item.name || fallback, 2);
+        const sp = leaf("source", i, item.name || fallback, 2);
+        if (item.name) sp.del = sv.name + "." + item.name;
       });
       (conf.monitor || []).forEach((item, i) => {
         const fallback = KIND_TYPE_LABEL[item.type] || item.type;
-        leaf("monitor", i, item.name || fallback, 2);
+        const sp = leaf("monitor", i, item.name || fallback, 2);
+        if (item.name) sp.del = sv.name + "." + item.name;
       });
     }
     if (!solvers.length) model.push({ t: "hint" });
@@ -309,7 +319,8 @@ export function renderTree() {
       row.addEventListener("click", () => selectObj(sp.kind, sp.i));
     }
     /* 删除 ✕（Q44 补二 C）：树上给叉、不加独立按钮；remove 是级联语义
-     * （2026-11-28 接几何；其余族的删除入口随各自模块落）。 */
+     * （2026-11-28：几何 + 求解器 + source/monitor/mesh 全覆盖；求解器
+     * 删除级联整包络，走确认）。 */
     if (sp.del) {
       const del = document.createElement("button");
       del.className = "tree-del";
@@ -319,6 +330,7 @@ export function renderTree() {
       del.setAttribute("aria-label", "删除 " + sp.label);
       del.addEventListener("click", (e) => {
         e.stopPropagation();
+        if (sp.delConfirm && !window.confirm(sp.delConfirm)) return;
         exec("genie.remove(" + JSON.stringify(sp.del) + ")", { echo: true })
           .catch(() => {});
       });
