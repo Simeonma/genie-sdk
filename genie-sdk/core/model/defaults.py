@@ -124,6 +124,10 @@ def _source(s: dict, domain: dict | None = None) -> None:
         _set(s, "theta", 0.0)
         _set(s, "phi", 0.0)
         _set(s, "psi", 0.0)
+        if t == "gaussian_beam":
+            # wire 必填（gt=0、无默认）——resolver 给缺省孔径（站长拍
+            # 2026-11-28：2 µm）；文档不物化，用户写了就用显式值
+            _set(s, "radius", 2.0e-6)
         # Domain range 默认（2026-11-28 站长拍）：横截面 = 域范围
         # （mesh 同款先例——窗口跟域走）；注入面放传播轴的域 min 端
         # （"从这头打进去"；center 是整份 Vec3，无逐轴槽）。未写才补；

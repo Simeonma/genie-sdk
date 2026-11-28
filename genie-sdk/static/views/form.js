@@ -836,7 +836,7 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
       general.splice(2, 0, { type: "row", label: "Radius",
         controls: [{ kind: "num", path: "source.radius", value: s.radius,
           unit: "len",
-          hint: "required; transverse 1/e² aperture, w ≈ 0.47·radius",
+          hint: "transverse 1/e² aperture, w ≈ 0.47·radius; default = 2 µm",
           onSet: (v) => commit("radius", py(v)) }] });
     }
   }
