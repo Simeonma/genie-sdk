@@ -88,6 +88,35 @@ export function buildToolbar() {
      * 改动后重定，卡先不给入口——wire 字段仍在，脚本可建。 */
   }
 
+  /* FDTD ▸ Monitors：time / freq / index 三型（genie.<fdtd>.add_monitor）。
+   * 名字自动编号（source/mesh 同款）；声明只建对象，新 freq monitor
+   * 默认入 global_monitor 名单、频谱缺省由 resolver 给（L-62）。 */
+  const monBtns = $("tb-mon-btns");
+  if (monBtns) {
+    const mkMonBtn = (type, label, prefix) => {
+      const b = document.createElement("button");
+      b.className = "tb-btn tb-add";
+      b.type = "button";
+      b.title = `加一个${label}（genie.<fdtd>.add_monitor(name, '${type}')）`;
+      b.appendChild(previewEl("mon_" + type));
+      b.appendChild(document.createTextNode(label));
+      b.addEventListener("click", () => {
+        const sv = ((cfg && cfg.solvers) || []).find((x) => x.kind === "fdtd");
+        const solver = (sv && sv.name) || "fdtd";
+        const taken = new Set((((sv && sv.config) || {}).monitor || [])
+          .map((x) => x.name));
+        let name = prefix, i = 1;
+        while (taken.has(name)) { i += 1; name = prefix + "_" + i; }
+        exec("genie." + solver + ".add_monitor(" + JSON.stringify(name)
+          + ", '" + type + "')", { echo: true }).catch(() => {});
+      });
+      return b;
+    };
+    monBtns.appendChild(mkMonBtn("time", "Time", "mon"));
+    monBtns.appendChild(mkMonBtn("freq", "Freq", "freq_mon"));
+    monBtns.appendChild(mkMonBtn("index", "Index", "index_mon"));
+  }
+
   /* FDTD ▸ Simulation：Run（主 CTA，两态）+ Build（预演，伴生钮）。 */
   const fdtdRun = $("tb-fdtd-run-btns");
   if (fdtdRun) {

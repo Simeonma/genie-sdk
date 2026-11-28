@@ -1684,8 +1684,7 @@ export const FormPanel = {
     const list = fdtdConfig(this.cfg).monitor || [];
     if (!list.length) {
       body.appendChild(this._paneEmpty("mon_time", "No monitors yet",
-        "Add one in the script with genie.fdtd.add_monitor —"
-        + " a toolbar button is pending (M4 rewiring)"));
+        "Add from the FDTD toolbar: Monitors ▸ Time / Freq / Index"));
       return;
     }
     for (const [m, i] of this._items(list)) {
