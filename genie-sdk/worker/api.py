@@ -495,6 +495,11 @@ class Surface:
                 f"unknown field {k!r} on solver {t.addr()!r} — fields: "
                 f"{', '.join(sorted(_SOLVER_FIELDS))} (or a dotted path)")
 
+    #: 写这些字段 = source 要自己的时域值 → 退出全局继承（GUI 同语义：
+    #: Use global on 时 Spectrum/Temporal 表不渲染，能编就是独立态）
+    _TEMPORAL_FIELDS = {"freq", "bandwidth", "delay", "phase",
+                        "amplitude", "freq_center", "freq_bw"}
+
     def _set_source(self, t, fields):
         draft = t.obj
         mapping = dict(_TEMPORAL)
@@ -505,6 +510,11 @@ class Surface:
                 setattr(draft, mapping[k], v)
             else:
                 setattr(draft, k, v)
+        if set(fields) & self._TEMPORAL_FIELDS:
+            gs = self._model._global_source
+            ids = gs.get("sources") or []
+            if draft.id in ids:
+                gs["sources"] = [x for x in ids if x != draft.id]
 
     def _set_monitor(self, t, fields):
         draft = t.obj
@@ -1154,7 +1164,15 @@ class _SolverChildren:
         if type not in _SRC_TYPES:
             raise ValueError(f"source type {type!r} is invalid (expected: "
                              f"{', '.join(sorted(_SRC_TYPES))})")
-        self._env().sources._add(type, name)
+        env = self._env()
+        env.sources._add(type, name)
+        # 新 source 默认继承全局（2026-11-28 站长拍）：Use global 初始 on，
+        # GUI/脚本同路（快照回来 use_global=True）。想独立就显式关：
+        # GUI 开关或 set_named('global_source', sources=[...]) 去掉 id。
+        sid = env._source[-1].id
+        gs = self._s._model._global_source
+        if sid not in gs.setdefault("sources", []):
+            gs["sources"].append(sid)
         return f"{self._name}.{name}"
 
     def add_monitor(self, name, type):  # noqa: A002
