@@ -59,7 +59,7 @@ package-dir = { genie = "genie-sdk", genie_protocol = "protocol/genie_protocol" 
 [tool.setuptools.package-data]
 genie = ["resources/materials/*.yml",
          "static/*.js", "static/*.html", "static/*.css",
-         "static/modules/*.js", "static/views/*.js",
+         "static/modules/*.js", "static/core/*.js", "static/views/*.js",
          "static/vendor/*.js", "static/vendor/*.md",
          "agent/*.md"]
 
