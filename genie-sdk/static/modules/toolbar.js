@@ -58,27 +58,31 @@ export function buildToolbar() {
     meshBtns.appendChild(b);
   }
 
-  /* FDTD ▸ Sources：soft source（偶极子式点源）。名字自动编号；
-   * 声明只建对象，默认值由 payload/view 的 resolver 给（L-62）。 */
+  /* FDTD ▸ Sources：soft source（偶极子式点源）+ plane wave（平面波）。
+   * 名字自动编号；声明只建对象，默认值由 payload/view 的 resolver 给（L-62）。 */
   const srcBtns = $("tb-src-btns");
   if (srcBtns) {
-    const b = document.createElement("button");
-    b.className = "tb-btn tb-add";
-    b.type = "button";
-    b.title = "加一个软源（genie.<fdtd>.add_source(name, 'soft_source')）";
-    b.appendChild(previewEl("soft_source"));
-    b.appendChild(document.createTextNode("Soft source"));
-    b.addEventListener("click", () => {
-      const sv = ((cfg && cfg.solvers) || []).find((x) => x.kind === "fdtd");
-      const solver = (sv && sv.name) || "fdtd";
-      const taken = new Set((((sv && sv.config) || {}).source || [])
-        .map((x) => x.name));
-      let name = "source", i = 1;
-      while (taken.has(name)) { i += 1; name = "source_" + i; }
-      exec("genie." + solver + ".add_source(" + JSON.stringify(name)
-        + ", 'soft_source')", { echo: true }).catch(() => {});
-    });
-    srcBtns.appendChild(b);
+    const mkSourceBtn = (type, label, prefix) => {
+      const b = document.createElement("button");
+      b.className = "tb-btn tb-add";
+      b.type = "button";
+      b.title = `加一个${label}（genie.<fdtd>.add_source(name, '${type}')）`;
+      b.appendChild(previewEl(type));
+      b.appendChild(document.createTextNode(label));
+      b.addEventListener("click", () => {
+        const sv = ((cfg && cfg.solvers) || []).find((x) => x.kind === "fdtd");
+        const solver = (sv && sv.name) || "fdtd";
+        const taken = new Set((((sv && sv.config) || {}).source || [])
+          .map((x) => x.name));
+        let name = prefix, i = 1;
+        while (taken.has(name)) { i += 1; name = prefix + "_" + i; }
+        exec("genie." + solver + ".add_source(" + JSON.stringify(name)
+          + ", '" + type + "')", { echo: true }).catch(() => {});
+      });
+      return b;
+    };
+    srcBtns.appendChild(mkSourceBtn("soft_source", "Soft source", "source"));
+    srcBtns.appendChild(mkSourceBtn("plane_wave", "Plane wave", "wave"));
   }
 
   /* FDTD ▸ Simulation：Run（主 CTA，两态）+ Build（预演，伴生钮）。 */

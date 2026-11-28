@@ -716,13 +716,14 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
       onTemporal: (field, v) => commit(field, py(v)),
     }));
   }
-  return { sections: [{
-    type: "section", key: "src:general", title: "General settings", open: true,
-    items: [
-      /* 位置第一（2026-11-26 站长拍）：wire 字段仍叫 center */
-      { type: "table", caption: "Position",
-        cols: ["x", "y", "z"].map((a) => ({ label: a, unit: "µm" })),
-        rows: [vec("center")] },
+  const isSoft = s.type === "soft_source";
+  const general = [{
+      /* 位置（soft = 点源位置；plane_wave = 注入参考点）。wire 字段同名 center */
+      type: "table", caption: "Position",
+      cols: ["x", "y", "z"].map((a) => ({ label: a, unit: "µm" })),
+      rows: [vec("center")] }];
+  if (isSoft) {
+    general.push(
       { type: "row", label: "Type", controls: [{
           kind: "select", value: s.kind,
           options: ["electric", "magnetic"], rerender: true,
@@ -747,8 +748,13 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
             m[k] = [c.re, c.im];
             commit("polarization", py(m));
           },
-        })) }] },
-    ],
+        })) }] });
+  }
+  /* plane_wave 特有（direction/theta/phi/psi/size/propagation_axis/
+   * from_face）暂不接——字段写命令待站长拍板后逐个落。 */
+  return { sections: [{
+    type: "section", key: "src:general", title: "General settings", open: true,
+    items: general,
   }, {
     type: "section", key: "src:wave", title: "Waveform & spectrum",
     open: true,
