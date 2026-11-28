@@ -308,6 +308,17 @@ export const KIT = {
   _ctl(spec, c, inTable) {
     if (c.kind === "tag") return { el: this._el("span", "tag", c.text), desc: c };
     if (c.kind === "text") return { el: this._el("span", "note", c.text), desc: c };
+    if (c.kind === "button") {
+      /* 表格里的动作格（参数表行尾 ✕ / 页内 Add）：按钮是动词，值不带字段 */
+      const b = document.createElement("button");
+      b.className = c.cls || "mini";
+      b.type = "button";
+      b.textContent = c.text || "";
+      if (c.title) b.title = c.title;
+      if (c.aria) b.setAttribute("aria-label", c.aria);
+      if (c.onClick) b.addEventListener("click", (e) => { e.stopPropagation(); c.onClick(b); });
+      return { el: b, desc: c };
+    }
     if (c.kind === "area") {
       /* 多行文本（几何顶点表）：一行一点 "x, y"，空行 = 子多边形分隔 */
       const ta = document.createElement("textarea");

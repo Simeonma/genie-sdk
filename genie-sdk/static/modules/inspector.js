@@ -1,4 +1,5 @@
-import { $, fdtdConfig } from "./util.js";
+import { $, fdtdConfig, py } from "./util.js";
+import { exec } from "../core/bus.js";
 import { FormPanel } from "../views/form.js";
 import { previewEl } from "../views/previews.js";
 import { cfg, displayCfg, inspectorSel, scene, setInspectorSel, setTreeSel } from "./state.js";
@@ -96,60 +97,72 @@ export function renderParamsPane() {
   note.textContent = "参数表 · 值里直接写单位（0.5[um] / 0.5um），右列是换算"
     + "后的 SI 值；表达式槽/sweep 轴引用这些名字（与脚本 genie.parameters 同源）";
   body.appendChild(note);
-  if (!(cfg.parameters && typeof cfg.parameters === "object")) cfg.parameters = {};
-  const params = cfg.parameters;
-  const keys = Object.keys(params);
-
-  const resolvedOf = (k) => {
+  const params = (cfg.parameters && typeof cfg.parameters === "object")
+    ? cfg.parameters : {};
+  const names = Object.keys(params);
+  const siOf = (k) => {
+    /* 本地先算（数字 / 带单位 → SI）；表达式没有本地值——v2 环快照只有
+     * 文档形状，不带 resolved（表达式求值结果无 GUI 通道），列里显 "—"。 */
+    const p = _parseParamInput(String(params[k] ?? ""));
+    if (p.si != null) return p.si;
     try {
       if (typeof displayCfg !== "undefined" && displayCfg
           && displayCfg.parameters) return displayCfg.parameters[k];
     } catch (e) { /* 快照未到不显示 */ }
     return undefined;
   };
+  const setValue = (k, val) => exec(
+    "genie.set_named(" + JSON.stringify("parameter." + k) + ", value="
+    + py(val) + ")", { echo: false }).catch(() => {});
+  const removeParam = (k) => exec(
+    "genie.remove(" + JSON.stringify("parameter." + k) + ")",
+    { echo: true }).catch(() => {});
+  const addParam = () => {
+    const taken = new Set(names);
+    let n = 1, name = "param_" + n;
+    while (taken.has(name)) { n += 1; name = "param_" + n; }
+    exec("genie.add_parameter(" + JSON.stringify(name) + ")",
+      { echo: true }).catch(() => {});
+  };
+  FormPanel.renderPage(PARAM_SCHEMA(names, params, siOf, setValue,
+    removeParam, addParam), body);
+}
+
+/* 参数卡（2026-11-29 站长拍）：一张表（Name 只读 / Value 可编 / SI 只读 /
+ * 行尾 ✕），页内 Add。Name 不改名——改名会断所有引用它的表达式与 sweep
+ * 轴（要换名 = 删 + 建）。Value 三类：纯数 / 带单位 / 表达式（表达式原样
+ * 存，SI 列取快照 resolved）。 */
+export function PARAM_SCHEMA(names, params, siOf, setValue, removeParam,
+                             addParam) {
   const fmtSi = (v) => (typeof v === "number" && Number.isFinite(v))
     ? v.toExponential(3) : "—";
-  /* 只读 SI 列：解析当前文本（本地可算就本地算，表达式回落 resolved） */
-  const siCell = (getSi) => {
-    const el = document.createElement("span");
-    el.className = "param-si-col";
-    el.title = "SI 值（单位已换算；表达式取服务端解析值）";
-    el.textContent = fmtSi(getSi());
-    return el;
-  };
-
-  for (const k of keys) {
-    const row = document.createElement("div");
-    row.className = "frow";
-    const l = document.createElement("input");
-    l.className = "flabel param-name";
-    l.value = k;
-    l.readOnly = true;
-    l.title = "参数名（改名 = 删除后重建）";
-    row.appendChild(l);
-
-    const v = document.createElement("input");
-    v.className = "param-value";
-    v.value = String(params[k]);
-    v.readOnly = true;                  /* L-35：参数编辑腿随 M5 重接 */
-    v.title = "值：数字、带单位（0.5[um] / 0.5um / 0.5 um）或表达式（d/4）";
-    const parsedSi = () => {
-      const p = _parseParamInput(v.value);
-      if (p.si != null) return p.si;
-      const res = resolvedOf(k);
-      return typeof res === "number" ? res : null;
-    };
-    const si = siCell(parsedSi);
-    row.appendChild(v);
-    row.appendChild(si);
-    body.appendChild(row);
-  }
-  if (!keys.length) {
-    const empty = document.createElement("div");
-    empty.className = "pane-empty";
-    empty.textContent = "尚无参数——在脚本里 genie.add_parameter 添加。";
-    body.appendChild(empty);
-  }
+  const rows = names.map((k) => ({ cells: [
+    { kind: "str", path: "param." + k + ".name", value: k },
+    { kind: "str", path: "param." + k + ".value",
+      value: params[k] == null ? "" : String(params[k]),
+      hint: "数字 / 带单位（0.5um、0.5[um]）/ 表达式（d/4）",
+      validate: (t) => _parseParamInput(t).err || null,
+      onSet: (t) => {
+        const p = _parseParamInput(t);
+        if (!p.err) setValue(k, p.val);
+      } },
+    { kind: "text", text: fmtSi(siOf(k)) },
+    { kind: "button", text: "✕",
+      title: "删除参数 " + k + "（引用它的表达式需要另行处理）",
+      aria: "删除参数 " + k,
+      onClick: () => removeParam(k) },
+  ] }));
+  const items = names.length
+    ? [{ type: "table", caption: "Parameters",
+        cols: [{ label: "name" }, { label: "value" }, { label: "SI" },
+               { label: "" }],
+        rows }]
+    : [{ type: "note", text: "尚无参数——点下面的 Add parameter 加一个。" }];
+  items.push({ type: "row", label: "",
+    controls: [{ kind: "button", text: "Add parameter", cls: "mini",
+      onClick: () => addParam() }] });
+  return { sections: [{ type: "section", key: "params",
+    title: "Parameters", open: true, items }] };
 }
 
 /* 后处理配方面板（Q11）：代码正本在档，编辑即写档（set_named script），
