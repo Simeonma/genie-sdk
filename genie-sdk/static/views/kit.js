@@ -254,10 +254,19 @@ export const KIT = {
     const hasLab = (spec.rows || []).some((r) => r.label);
     const scroll = this._el("div", "mtx-scroll");
     const grid = this._el("div", "mtx" + (hasLab ? "" : " mtx-nolab"));
-    grid.style.setProperty("--n", String((spec.cols || []).length));
+    const cols = spec.cols || [];
+    grid.style.setProperty("--n", String(cols.length));
     if (spec.min) grid.style.setProperty("--min", spec.min + "px");
+    /* 列宽定制（2026-11-29）：col.w = 固定 px（如动作列 44px），其余 1fr。
+     * 有任一定宽时才内联覆盖，其余表继续吃 CSS 的 --n/--min 规则。 */
+    if (cols.some((c) => c.w)) {
+      grid.style.gridTemplateColumns =
+        (hasLab ? "minmax(44px, auto) " : "")
+        + cols.map((c) => (c.w ? c.w + "px"
+          : "minmax(var(--min, 44px), 1fr)")).join(" ");
+    }
     if (hasLab) grid.appendChild(this._el("span", "mtx-corner"));
-    for (const c of spec.cols || []) {
+    for (const c of cols) {
       grid.appendChild(this._el("span", "mtx-h",
         c.unit ? `${c.label} (${c.unit})` : String(c.label)));
     }

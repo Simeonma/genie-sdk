@@ -139,12 +139,13 @@ export function PARAM_SCHEMA(names, params, setValue, removeParam,
       onClick: () => removeParam(k) },
   ] }));
   const items = names.length
-    ? [{ type: "table", caption: "Parameters",
-        cols: [{ label: "name" }, { label: "value" }, { label: "" }],
+    ? [{ type: "table", caption: "Values",
+        cols: [{ label: "name" }, { label: "value" },
+               { label: "", w: 44 }],
         rows }]
     : [{ type: "note", text: "尚无参数——点下面的 Add parameter 加一个。" }];
   items.push({ type: "row", label: "",
-    controls: [{ kind: "button", text: "Add parameter", cls: "mini",
+    controls: [{ kind: "button", text: "＋ Add parameter", cls: "mini",
       onClick: () => addParam() }] });
   return { sections: [{ type: "section", key: "params",
     title: "Parameters", open: true, items }] };
