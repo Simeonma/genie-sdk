@@ -108,15 +108,16 @@ def _domain(d: dict) -> None:
     d["boundary"] = {f: _boundary_face(raw.get(f)) for f in FACES}
 
 
-def _mesh(m: dict, domain: dict) -> None:
+def _mesh(m: dict) -> None:
+    """加密区：范围不补（2026-11-28 站长拍）——wire 层 x/y/z_range
+    必填，缺 = 422（用户的决定，不回落域范围）；factor/growth 是
+    常数默认（不依存任何其他对象）。"""
     for a in "xyz":
-        _set(m, f"{a}_range",
-             domain.get(f"{a}_range") or DEFAULT_RANGE)
         _set(m, f"factor_{a}", 1)
     _set(m, "growth_rate", 1.2)
 
 
-def _source(s: dict, domain: dict | None = None) -> None:
+def _source(s: dict) -> None:
     _set(s, "freq", DEFAULT_SOURCE_FREQ)
     _set(s, "bandwidth", DEFAULT_SOURCE_BW)
     _set(s, "delay", 0.0)
@@ -138,24 +139,8 @@ def _source(s: dict, domain: dict | None = None) -> None:
             # wire 必填（gt=0、无默认）——resolver 给缺省孔径（站长拍
             # 2026-11-28：2 µm）；文档不物化，用户写了就用显式值
             _set(s, "radius", 2.0e-6)
-        # Domain range 默认（2026-11-28 站长拍）：横截面 = 域范围
-        # （mesh 同款先例——窗口跟域走）；注入面放传播轴的域 min 端
-        # （"从这头打进去"；center 是整份 Vec3，无逐轴槽）。未写才补；
-        # 域该轴无 range（spacing 表轴）则该轴留空 = 全跨度。
-        if domain is not None and s.get("center") is None \
-                and s.get("size") is None:
-            axis = s.get("propagation_axis") or "z"
-            center, size = [], []
-            for a in ("x", "y", "z"):
-                r = domain.get(f"{a}_range")
-                if a == axis:
-                    center.append(r[0] if r else 0.0)
-                    size.append(None)
-                else:
-                    center.append((r[0] + r[1]) / 2 if r else 0.0)
-                    size.append(abs(r[1] - r[0]) if r else None)
-            s["center"] = center
-            s["size"] = size
+        # center / size 不补（2026-11-28 站长拍）：放置是用户的决定，
+        # 不回落域范围——缺 center 时 validate_for_ui 422 指路。
     elif t == "mode":
         _set(s, "amplitude", 1.0)
         _set(s, "rotate_angle", 0.0)
@@ -199,10 +184,10 @@ def _fdtd(conf: dict) -> None:
     domain = conf["domain"]
     conf["mesh"] = [dict(m) for m in (conf.get("mesh") or [])]
     for m in conf["mesh"]:
-        _mesh(m, domain)
+        _mesh(m)
     conf["source"] = [dict(s) for s in (conf.get("source") or [])]
     for s in conf["source"]:
-        _source(s, domain)
+        _source(s)
     conf["monitor"] = [dict(m) for m in (conf.get("monitor") or [])]
     for m in conf["monitor"]:
         _monitor(m)
