@@ -1,9 +1,7 @@
-import { apiNotice } from "../modules/api.js";
 import { exec } from "../core/bus.js";
 import { py, parseComplex, formatComplex, fdtdConfig } from "../modules/util.js";
 import { GEO_TYPE_LABEL, previewEl } from "./previews.js";
 import { matColor } from "./scene3d.js";
-import { cfg, scene } from "../modules/state.js";
 import { KIT } from "./kit.js";
 import { C0 } from "../modules/constants.js";
 /* Genie FDTD service — 参数面板（Phase B2 工作台版，2026-08-30）

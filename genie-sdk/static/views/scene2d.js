@@ -1,8 +1,6 @@
-import { updateScene } from "../modules/scene.js";
 import { fdtdConfig } from "../modules/util.js";
-import { Scene3D, matColor } from "./scene3d.js";
+import { matColor } from "./scene3d.js";
 import { SCENE_PALETTE } from "./scene_palette.js";
-import { cfg, scene } from "../modules/state.js";
 /* Genie FDTD service — 3D 预览的 Canvas 2D 等距投影降级（Phase B2，2026-08-30）
  *
  * 当浏览器 WebGL 不可用（硬件加速关闭/显卡黑名单/远程桌面）时，

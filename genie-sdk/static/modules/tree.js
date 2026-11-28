@@ -1,11 +1,10 @@
 import { $ } from "./util.js";
 import { exec } from "../core/bus.js";
-import { FormPanel } from "../views/form.js";
 import { iconEl } from "../icons.js";
 import { selectObj } from "./inspector.js";
 import { GEO_TYPE_LABEL, previewEl } from "../views/previews.js";
 import { matColor } from "../views/scene3d.js";
-import { TREE_META, cfg, toast, treeGroupOpen, treePreviewIcon, treeSel } from "./state.js";
+import { TREE_META, cfg, treeGroupOpen, treePreviewIcon, treeSel } from "./state.js";
 /* modules/tree.js — 左树（普通树：一行一渲染器，2026-11-24 站长拍）
  *
  * 统一规则（替代旧 band/组头/项 三层三套样式）：

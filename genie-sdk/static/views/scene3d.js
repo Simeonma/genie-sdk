@@ -1,8 +1,6 @@
 import { selectObj } from "../modules/inspector.js";
-import { updateScene } from "../modules/scene.js";
 import { fdtdConfig } from "../modules/util.js";
 import { SCENE_PALETTE } from "./scene_palette.js";
-import { cfg, scene } from "../modules/state.js";
 "use strict";
 
 /* 材料调色：优先取材料节点自带的 color（2026-10-21 用户定案：对象按材料

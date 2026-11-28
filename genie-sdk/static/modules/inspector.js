@@ -1,8 +1,7 @@
 import { $ } from "./util.js";
 import { FormPanel } from "../views/form.js";
 import { previewEl } from "../views/previews.js";
-import { initScene } from "./scene.js";
-import { cfg, displayCfg, inspectorSel, scene, setInspectorSel, setTreeSel, toast } from "./state.js";
+import { cfg, displayCfg, inspectorSel, scene, setInspectorSel, setTreeSel } from "./state.js";
 import { renderSweepPane } from "./sweep.js";
 import { renderTree } from "./tree.js";
 /* modules/inspector.js — 检查器（FormPanel 只读驱动 + 参数面板 + 选中路由）

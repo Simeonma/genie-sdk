@@ -1,8 +1,7 @@
 import { $, fdtdConfig } from "./util.js";
-import { FormPanel } from "../views/form.js";
 import { Scene2D } from "../views/scene2d.js";
 import { Scene3D } from "../views/scene3d.js";
-import { cfg, displayCfg, scene, setScene, toast } from "./state.js";
+import { cfg, displayCfg, scene, setScene } from "./state.js";
 /* modules/scene.js — 3D 场景（WebGL→2D 降级 + 显示工具钮 + 渲染循环）
  * G5 拆分（2026-10-14）：自 app.js 机械切出，零行为变化；
  * 经典 script 按序加载，跨模块引用为运行期全局查找。 */
