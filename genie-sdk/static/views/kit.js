@@ -1,4 +1,4 @@
-/* views/kit.js — 页面层唯一实现（2026-11-25 站长拍：抽公共件）
+﻿/* views/kit.js — 页面层唯一实现（2026-11-25 站长拍：抽公共件）
  * 行 / 二维表 / 节 / 分页渲染器：页面内容只写 schema（数据），不写 DOM。
  * 用法：views/form.js 里 `Object.assign(FormPanel, KIT)`；卡片只写
  * `renderPage(SCHEMA(cfg, commit), body)`。基元（_el/_input/_select/
@@ -201,7 +201,8 @@ export const KIT = {
   _vec(label, path, arr, n, hintKind) {
     const parts = [];
     for (let i = 0; i < n; i++) {
-      parts.push(this._input(path + "." + i, arr ? arr[i] : 0, "num", hintKind));
+      parts.push(this._input(path + "." + i, arr ? arr[i] : undefined,
+        "num", hintKind));
     }
     return this._row(label, ...parts);
   },
@@ -302,8 +303,8 @@ export const KIT = {
    * el = 进 _row/_matrix 的节点，input = 收 change 的原件。
    * inTable = 表格格：走 _mtxInput（无框紧贴格），不套 .inwrap。
    *
-   * 默认值契约（2026-11-25 站长拍）：卡片的 `def` **只作占位灰字**，值永远
-   * 来自快照；清空是否写 None 由卡片的 `onClear` 决定，kit 不替它发明值。 */
+   * 无值 = 占位 `—`；值只来自快照（GUI 零默认，L-62）；清空是否写 None
+   * 由卡片的 `onClear` 决定，kit 不替它发明值。 */
   _ctl(spec, c, inTable) {
     if (c.kind === "tag") return { el: this._el("span", "tag", c.text), desc: c };
     if (c.kind === "text") return { el: this._el("span", "note", c.text), desc: c };
@@ -372,9 +373,8 @@ export const KIT = {
       if (c.hint) inp.title = c.hint;
       if (c.disabled) {
         inp.disabled = true;
-        inp.placeholder = c.def != null ? String(c.def) : "—";
+        inp.placeholder = "—";
       } else if (c.onSet) {
-        if (c.def != null) inp.placeholder = String(c.def);
         this._edit(inp);
         this._bindNum(c, inp);
       }
@@ -386,9 +386,8 @@ export const KIT = {
     if (c.hint) inp.title = c.hint;
     if (c.disabled) {
       inp.disabled = true;
-      inp.placeholder = c.def != null ? String(c.def) : "—";
+      inp.placeholder = "—";
     } else if (c.onSet) {
-      if (c.def != null) inp.placeholder = String(c.def);
       this._edit(inp);
       this._bindNum(c, inp);
     }

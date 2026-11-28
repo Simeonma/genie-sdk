@@ -138,6 +138,9 @@ def _source(s: dict) -> None:
 
 def _monitor(m: dict) -> None:
     _set(m, "center", [0.0, 0.0, 0.0])
+    ds = m.get("down_sample")
+    if isinstance(ds, dict):
+        _set(ds, "stride", 1)
     t = m.get("type")
     if t == "time":
         _set(m, "size", [0.0, 0.0, 0.0])

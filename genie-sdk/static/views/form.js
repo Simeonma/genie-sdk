@@ -305,8 +305,8 @@ export function MODE_SCHEMA(cfg, commit, solverName) {
   const name = solverName || sv.name || "mode";
   const mc = sv.config || {};
   const d = mc.domain || {};
-  const axis = ["x", "y", "z"].includes(d.axis) ? d.axis : "z";
-  const edges = MODE_FACES[axis] || MODE_FACES.z;
+  const axis = d.axis;
+  const edges = MODE_FACES[axis] || [];
   const [t1, t2] = [edges[0][0], edges[2][0]];
   const bo = mc.boundary || {};
   const kindOf = (f) => (bo[f] || {}).kind || "";
@@ -657,11 +657,11 @@ function spectrumTiming({ band, temporal, path, onBand, onTemporal }) {
  * Polarization）→ Waveform & spectrum（Use global 节首 + 公共件
  * spectrumTiming；勾上全局时两张表不渲染）。 */
 export function SOURCE_SCHEMA(cfg, commit, s, addr) {
-  const vec = (key, fallback) => {
-    const v = Array.isArray(s[key]) ? s[key] : fallback;
+  const vec = (key) => {
+    const v = Array.isArray(s[key]) ? s[key] : [];
     return {
       cells: ["x", "y", "z"].map((_, k) => ({
-        kind: "num", value: v[k] ?? 0, unit: "len",
+        kind: "num", value: v[k], unit: "len",
         path: `source.${key}.${k}`,
         onSet: (val) => {
           const a = [v[0] ?? 0, v[1] ?? 0, v[2] ?? 0];
@@ -672,7 +672,7 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
     };
   };
   const pol = (Array.isArray(s.polarization) && Array.isArray(s.polarization[0]))
-    ? s.polarization : [[1, 0], [0, 0], [0, 0]];
+    ? s.polarization : [];
   /* Use global（2026-11-28 站长拍）：节首一个二元开关。勾上 = 这个 source
    * 的 id 进文档级 `global_source.sources`（resolver 在 view/载荷里展开），
    * 频谱/时域两张表不渲染。关掉 = 从集合移除；source 自己的字段原样保留，
@@ -704,8 +704,8 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
   } else {
     wave.push(...spectrumTiming({
       band, path: "source",
-      temporal: { delay: s.delay ?? 0, phase: s.phase ?? 0,
-                  amplitude: s.amplitude ?? 1 },
+      temporal: { delay: s.delay, phase: s.phase,
+                  amplitude: s.amplitude },
       onBand: (v) => {
         exec("genie.set_named(" + JSON.stringify(addr) + ", freq="
           + py((v[0] + v[1]) / 2) + ", bandwidth=" + py(v[1] - v[0]) + ")",
@@ -720,9 +720,9 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
       /* 位置第一（2026-11-26 站长拍）：wire 字段仍叫 center */
       { type: "table", caption: "Position",
         cols: ["x", "y", "z"].map((a) => ({ label: a, unit: "µm" })),
-        rows: [vec("center", [0, 0, 0])] },
+        rows: [vec("center")] },
       { type: "row", label: "Type", controls: [{
-          kind: "select", value: s.kind || "electric",
+          kind: "select", value: s.kind,
           options: ["electric", "magnetic"], rerender: true,
           onPick: (v) => commit("kind", py(v)) }] },
       /* 复数直接输入（2026-11-26 站长拍）：xyz 三列，一格一个复数
@@ -731,7 +731,7 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
         cols: ["x", "y", "z"].map((a) => ({ label: a })),
         rows: [{ cells: [0, 1, 2].map((k) => ({
           kind: "str", path: `source.polarization.${k}`,
-          value: formatComplex(pol[k] ? pol[k][0] : 0, pol[k] ? pol[k][1] : 0),
+          value: pol[k] ? formatComplex(pol[k][0], pol[k][1]) : "",
           hint: "复数：1 / 2j / 1-0.5j",
           validate: (v) => (parseComplex(v) ? null
             : "复数形如 1、2j、1-0.5j"),
@@ -1008,16 +1008,17 @@ export const FormPanel = {
       mode === "diag" ? "diagonal" : "isotropic")));
     if (mode === "iso") {
       frag.appendChild(this._row(name,
-        this._input(path + "." + base, mt[base] ?? 1, "num")));
+        this._input(path + "." + base, mt[base], "num")));
     } else {
-      const bv = mt[base] ?? 1;
+      const bv = mt[base];
       const wraps = AX.map((a) => {
         const key = base + "_" + a;
         const inpWrap = this._input(path + "." + key, mt[key], "num");
         const inp = inpWrap.querySelector("input");
-        inp.placeholder = String(bv);   /* 空槽 = 回落基值 */
+        inp.placeholder = bv != null ? String(bv) : "";  /* 空槽 = 回落基值 */
         inp.dataset.emptyDeletes = "1"; /* 清空 = 删命名键 */
-        inp.title = "empty = base value " + bv;
+        inp.title = bv != null ? "empty = base value " + bv
+                               : "empty = base value";
         inp.setAttribute("aria-label", name + " " + a);
         return inpWrap;
       });
@@ -1225,7 +1226,7 @@ export const FormPanel = {
             row.appendChild(this._row("ω_0",
               this._input(P + ".omega_0", pl.omega_0, pk, "ang")));
             row.appendChild(this._row("Δε",
-              this._input(P + ".delta_eps", pl.delta_eps ?? 1, pk)));
+              this._input(P + ".delta_eps", pl.delta_eps, pk)));
           }
           row.appendChild(this._row("γ",
             this._input(P + ".gamma", pl.gamma, pk, "ang")));
@@ -1382,13 +1383,13 @@ export const FormPanel = {
         sGeo2.body.appendChild(this._rangeRow("z_range (µm)", `geometry.${i}.z_range`, g.z_range, "len"));
         if (g.type === "polygon_swept") {
           sGeo2.body.appendChild(this._vec("tilt (dx/dz, dy/dz)",
-            `geometry.${i}.tilt`, g.tilt ?? [0, 0], 2, ""));
+            `geometry.${i}.tilt`, g.tilt, 2, ""));
         }
       } else {
         sGeo2.body.appendChild(this._vec("center (µm)", `geometry.${i}.center`, g.center, 3, "len"));
         if (g.type === "ngon_z") {
           sGeo2.body.appendChild(this._row("n_sides",
-            this._input(`geometry.${i}.n_sides`, g.n_sides ?? 6, "num")));
+            this._input(`geometry.${i}.n_sides`, g.n_sides, "num")));
           sGeo2.body.appendChild(this._row("circumradius (µm)",
             this._input(`geometry.${i}.circumradius`, g.circumradius, "num", "len")));
         } else if (g.type === "sphere" || g.type === "cylinder") {
@@ -1404,7 +1405,7 @@ export const FormPanel = {
             this._input(`geometry.${i}.ry`, g.ry, "num", "len")));
         } else if (g.type === "ring_z") {
           sGeo2.body.appendChild(this._row("inner_radius (µm)",
-            this._input(`geometry.${i}.inner_radius`, g.inner_radius ?? 0, "num", "len")));
+            this._input(`geometry.${i}.inner_radius`, g.inner_radius, "num", "len")));
           sGeo2.body.appendChild(this._row("outer_radius (µm)",
             this._input(`geometry.${i}.outer_radius`, g.outer_radius, "num", "len")));
         }
@@ -1418,7 +1419,7 @@ export const FormPanel = {
       const sGeo3 = this._sec("Priority · mesh", true, 1);
       inner.appendChild(sGeo3.head); inner.appendChild(sGeo3.body);
       sGeo3.body.appendChild(this._row("priority",
-        this._input(`geometry.${i}.priority`, g.priority ?? 0, "num")));
+        this._input(`geometry.${i}.priority`, g.priority, "num")));
       /* 卡片头（统一语言 2026）：类型下拉彻底移除——类型只在 topbar
        * 「＋几何」添加时定死，改类型 = 删除重建。
        * 2026-10-21 用户定案「信息够用就好」：去掉类型 chip——左侧渲染缩略图
@@ -1514,7 +1515,7 @@ export const FormPanel = {
         sMon1.body.appendChild(this._vec("sample window (fs)",
           `monitor.${i}.down_sample.time_window`, ds.time_window, 2, "time"));
         sMon1.body.appendChild(this._row("stride",
-          this._input(`monitor.${i}.down_sample.stride`, ds.stride ?? 1, "num")));
+          this._input(`monitor.${i}.down_sample.stride`, ds.stride, "num")));
       }
       /* 卡头（统一语言 2026）：类型固定于添加时（同 geometry/source 模式），
        * 改类型 = 删除重建；移除原「类型下拉」就地切换（旧行为会静默重建
@@ -1537,7 +1538,7 @@ export const FormPanel = {
     // 只剩超时；卡数由系统定（G78），步数是 build 后派生量。
     const r = this.cfg.run || {};
     body.appendChild(this._row("timeout (s)",
-      this._input("run.timeout_s", r.timeout_s ?? 3600, "num")));
+      this._input("run.timeout_s", r.timeout_s, "num")));
     // 提交面板挂载点（app.js 常驻 DOM 移进来; 2026-08-31au 方案A：
     // 执行动作归 run 节，与生成代码的 genie.run(...) 同构）
     // 2026-09-10：顶栏 Simulate 框已有常驻 #run-mount（index.html），
