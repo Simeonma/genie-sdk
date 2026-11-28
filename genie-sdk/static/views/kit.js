@@ -464,18 +464,16 @@ export const KIT = {
           return inp;
         });
         const center = cells[ORDER.indexOf("center")];
-        if (r.onCenter) {              /* 无 onCenter = 只读行（from_face 面） */
-          this._edit(center);
-          center.addEventListener("change", () => {
-            const v = this._numFromInput(center, u);
-            if (v == null) {
-              this._reject(center, "not a number — try 0.5um or 500nm");
-              return;
-            }
-            this._clearFieldError(center);
-            r.onCenter(v);
-          });
-        }
+        this._edit(center);
+        center.addEventListener("change", () => {
+          const v = this._numFromInput(center, u);
+          if (v == null) {
+            this._reject(center, "not a number — try 0.5um or 500nm");
+            return;
+          }
+          this._clearFieldError(center);
+          r.onCenter(v);
+        });
         if (lead) cells.unshift(this._ctl(it, lead, true).el);
         return { label: r.label, cells };
       }
