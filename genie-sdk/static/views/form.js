@@ -1748,10 +1748,12 @@ export function MONITOR_SCHEMA(cfg, commit, m, addr) {
       { echo: false }).catch(() => {});
   };
 
-  /* field 多选（L-66）：str（"all"/单分量）或六分量子集 list。归一只在
-   * GUI 写腿——全六开写 "all" 省表示（wire 层不归一）。空集不可写
-   * （wire 422）：关到空就地弹回，不发明值。index 型不参与：仍是
-   * eps/mu/both 下拉。 */
+  /* Components 多选（L-66）：str（"all"/单分量）或六分量子集 list。归一
+   * 只在 GUI 写腿——全六开写 "all" 省表示（wire 层不归一）。空集不可写
+   * （wire 422）：关到空就地弹回，不发明值。all 列在最前：all=on 时
+   * 六分量锁定（要挑子集先关 all——关 all 只解锁不写值，选中态仍是
+   * 当前快照的展开）；六分量重新全开 = 写回 "all" 并锁回。index 型
+   * 不参与：仍是 eps/mu/both 下拉。 */
   const COMPONENTS = ["Ex", "Ey", "Ez", "Hx", "Hy", "Hz"];
   let fieldItems;
   if (m.type === "index") {
@@ -1763,31 +1765,53 @@ export function MONITOR_SCHEMA(cfg, commit, m, addr) {
     const cur = m.field === "all" ? new Set(COMPONENTS)
       : new Set(Array.isArray(m.field) ? m.field
         : (m.field ? [m.field] : []));
+    const allOn = cur.size === 6;
     const write = (next) => {
       if (next.size === 6) commit("field", py("all"));
       else commit("field", py(COMPONENTS.filter((c) => next.has(c))));
     };
+    /* 表内联动：all ↔ 六分量的锁与显示（同一行 7 个 select 的 DOM 联动，
+     * rerender 兜底最终一致） */
+    const rowSelects = (sel) =>
+      Array.from((sel.closest("table") || document)
+        .querySelectorAll("select"));
+    const lockComps = (locked, self) => {
+      for (const s of rowSelects(self)) {
+        if ((s.getAttribute("aria-label") || "") !== "all") s.disabled = locked;
+      }
+    };
+    const syncAll = (on, self) => {
+      for (const s of rowSelects(self)) {
+        if ((s.getAttribute("aria-label") || "") === "all") s.value = on ? "on" : "off";
+      }
+    };
     const cell = (comp) => ({
       kind: "select", path: "mon.field." + comp,
       value: cur.has(comp) ? "on" : "off", options: ["off", "on"],
-      aria: comp, rerender: true,
+      aria: comp, disabled: allOn, rerender: true,
       onSet: (v, sel) => {
         const next = new Set(cur);
         if (v === "on") next.add(comp); else next.delete(comp);
         if (!next.size) { sel.value = "on"; return; }   /* 关到空 = 弹回 */
         write(next);
+        if (next.size === 6) { syncAll(true, sel); lockComps(true, sel); }
       } });
     const allCell = {
       kind: "select", path: "mon.field.all",
-      value: cur.size === 6 ? "on" : "off", options: ["off", "on"],
+      value: allOn ? "on" : "off", options: ["off", "on"],
       aria: "all", rerender: true,
       onSet: (v, sel) => {
-        if (v === "on") { commit("field", py("all")); return; }
-        sel.value = cur.size === 6 ? "on" : "off";      /* 全关 = 弹回 */
+        if (v === "on") {
+          commit("field", py("all"));
+          lockComps(true, sel);
+          return;
+        }
+        /* 关 all = 解锁子集编辑，不写值（选中态 = 当前快照展开） */
+        lockComps(false, sel);
       } };
-    fieldItems = [{ type: "table", caption: "field",
-      cols: COMPONENTS.map((c) => ({ label: c })).concat([{ label: "all" }]),
-      rows: [{ cells: COMPONENTS.map(cell).concat([allCell]) }] }];
+    fieldItems = [{ type: "table", caption: "Components",
+      cols: [{ label: "all" }].concat(COMPONENTS.map((c) => ({ label: c }))),
+      rows: [{ cells: [allCell].concat(COMPONENTS.map(cell)) }] }];
   }
 
   const sections = [{
@@ -1875,8 +1899,9 @@ export function MONITOR_SCHEMA(cfg, commit, m, addr) {
             onSet: (v) => setAp({ width: v }) },
         ] }] });
     }
-    sections.push({ type: "section", key: "mon:observe",
-      title: "Observe", open: true, items: observe });
+    /* Observe 节撤（站长 2026-11-28）：内容直接并进 General——
+     * monitor 卡只剩一节，少一层折叠。 */
+    sections[0].items.push(...observe);
   }
 
   if (m.type === "time") {
