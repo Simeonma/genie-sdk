@@ -126,8 +126,10 @@ def _draftify_inner(ann: Any) -> Any:
         return Union[ann, str]
     origin = get_origin(ann)
     if origin is Union:
-        args = tuple(a for a in get_args(ann) if a is not type(None))
-        args = tuple(_draftify_inner(a) for a in args)
+        # wire 的**元素级** Optional（如 PlaneWaveSpec.size 的 null 槽）必须
+        # 保留 None：draft 是残缺态，任何位置的空槽都合法；字段级 Optional
+        # 的 None 透传进来也无害（外层 _draftify 再包一层，Union 幂等）。
+        args = tuple(_draftify_inner(a) for a in get_args(ann))
         return Union[args] if len(args) > 1 else args[0]
     if origin is list:
         args = get_args(ann)

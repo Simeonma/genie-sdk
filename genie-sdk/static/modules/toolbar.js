@@ -82,7 +82,7 @@ export function buildToolbar() {
       return b;
     };
     srcBtns.appendChild(mkSourceBtn("soft_source", "Soft source", "source"));
-    srcBtns.appendChild(mkSourceBtn("plane_wave", "Plane wave", "wave"));
+    srcBtns.appendChild(mkSourceBtn("plane_wave", "Plane wave", "source"));
   }
 
   /* FDTD ▸ Simulation：Run（主 CTA，两态）+ Build（预演，伴生钮）。 */

@@ -717,13 +717,13 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
     }));
   }
   const isSoft = s.type === "soft_source";
-  const general = [{
-      /* 位置（soft = 点源位置；plane_wave = 注入参考点）。wire 字段同名 center */
-      type: "table", caption: "Position",
-      cols: ["x", "y", "z"].map((a) => ({ label: a, unit: "µm" })),
-      rows: [vec("center")] }];
+  let general;
   if (isSoft) {
-    general.push(
+    general = [
+      /* 位置第一（2026-11-26 站长拍）：wire 字段仍叫 center */
+      { type: "table", caption: "Position",
+        cols: ["x", "y", "z"].map((a) => ({ label: a, unit: "µm" })),
+        rows: [vec("center")] },
       { type: "row", label: "Type", controls: [{
           kind: "select", value: s.kind,
           options: ["electric", "magnetic"], rerender: true,
@@ -748,10 +748,80 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
             m[k] = [c.re, c.im];
             commit("polarization", py(m));
           },
-        })) }] });
+        })) }] },
+    ];
+  } else {
+    /* plane_wave（2026-11-28 站长拍）：位置/窗口 = Domain range 四列表
+     * （mode 同款；传播轴行 centerOnly，横轴行 range → 整份写 center+size，
+     * 未设分量补 0、未设槽写 None——wire 的 center 是整份 Vec3，无逐轴字段，
+     * 表格换算必须物化整份，同 Spectrum center/span 的换算先例）。
+     * 传播 = axis 下拉 + direction 下拉；θ/φ = Incidence 表（Rotation 同形）；
+     * ψ = 单输入（偏振角，替代 soft source 的复数 polarization）。 */
+    const IDX = { x: 0, y: 1, z: 2 };
+    const axis = s.propagation_axis || null;
+    const center = Array.isArray(s.center) ? s.center : null;
+    const size = Array.isArray(s.size) ? s.size : null;
+    const hasSize = size && size.some((x) => x != null);
+    const rangeOf = (a) => {
+      const k = IDX[a], c = center && center[k], w = size && size[k];
+      return (typeof c === "number" && typeof w === "number")
+        ? [c - w / 2, c + w / 2] : null;
+    };
+    const setPlacement = (mut) => {
+      const c = [0, 1, 2].map((k) =>
+        (center && typeof center[k] === "number") ? center[k] : 0.0);
+      const z = [0, 1, 2].map((k) =>
+        (size && size[k] != null) ? size[k] : null);
+      if (axis) z[IDX[axis]] = null;     /* 传播槽恒 null（wire 契约） */
+      mut(c, z);
+      exec("genie.set_named(" + JSON.stringify(addr)
+        + ", center=" + py(c) + ", size=" + py(z) + ")",
+        { echo: false }).catch(() => {});
+    };
+    general = [
+      { type: "row", label: "Propagation", controls: [
+          { kind: "select", path: "source.propagation_axis",
+            value: axis, options: ["x", "y", "z"], rerender: true,
+            onPick: (v) => {
+              const z = [0, 1, 2].map((k) =>
+                (size && size[k] != null) ? size[k] : null);
+              z[IDX[v]] = null;          /* 新传播槽让位（横槽保留） */
+              exec("genie.set_named(" + JSON.stringify(addr)
+                + ", propagation_axis=" + py(v)
+                + (hasSize ? ", size=" + py(z) : "") + ")",
+                { echo: false }).catch(() => {});
+            } },
+          { kind: "select", path: "source.direction",
+            value: s.direction, options: ["+", "-"],
+            onSet: (v) => commit("direction", py(v)) },
+        ] },
+      { type: "range", caption: "Domain range", unit: "len",
+        order: ["center", "size", "min", "max"],
+        rows: ["x", "y", "z"].map((a) => (a === axis
+          ? { label: a, centerOnly: true,
+              position: center && center[IDX[a]],
+              onCenter: (v) => setPlacement((c) => { c[IDX[a]] = v; }) }
+          : { label: a, value: rangeOf(a),
+              onSet: (v) => setPlacement((c, z) => {
+                c[IDX[a]] = (v[0] + v[1]) / 2;
+                z[IDX[a]] = v[1] - v[0];
+              }) })) },
+      { type: "table", caption: "Incidence",
+        cols: [{ label: "θ" }, { label: "φ" }],
+        rows: [{ cells: [
+          { kind: "num", path: "source.theta", value: s.theta,
+            hint: "degrees, polar angle off the propagation axis; 0 = on-axis",
+            onSet: (v) => commit("theta", py(v)) },
+          { kind: "num", path: "source.phi", value: s.phi,
+            hint: "degrees, azimuth in the transverse plane; 0 = reference",
+            onSet: (v) => commit("phi", py(v)) },
+        ] }] },
+      { type: "row", label: "Polarization (ψ)",
+        controls: [{ kind: "num", path: "source.psi", value: s.psi,
+          hint: "degrees, polarization angle; 0 = reference",
+          onSet: (v) => commit("psi", py(v)) }] },
+    ];
   }
-  /* plane_wave 特有（direction/theta/phi/psi/size/propagation_axis/
-   * from_face）暂不接——字段写命令待站长拍板后逐个落。 */
   return { sections: [{
     type: "section", key: "src:general", title: "General settings", open: true,
     items: general,

@@ -1,4 +1,4 @@
-import { $ } from "./util.js";
+import { $, fdtdConfig } from "./util.js";
 import { exec } from "../core/bus.js";
 import { iconEl } from "../icons.js";
 import { selectObj } from "./inspector.js";
@@ -149,8 +149,9 @@ export function renderTree() {
     if (sp.kind === "analysis")
       return { addr: "analysis." + at(cfg.analysis, sp.i), name: at(cfg.analysis, sp.i) };
     if (sp.kind === "source" || sp.kind === "monitor" || sp.kind === "mesh") {
+      /* 快照 v2（2026-11-28）：fdtd 子对象住 solvers[].config，不顶层 */
       const fd = solverNamed("fdtd");
-      const name = at(cfg[sp.kind], sp.i);
+      const name = at(fdtdConfig(cfg)[sp.kind], sp.i);
       return fd && name ? { addr: fd + "." + name, name } : null;
     }
     return null;
