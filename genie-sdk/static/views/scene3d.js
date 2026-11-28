@@ -2030,9 +2030,8 @@ export class Scene3D {
   }
 
   /* 注入面几何（plane_wave / gaussian_beam 共用; 语义对齐手册 05-src 页）：
-   * 传播轴 = propagation_axis > from_face > size 恰一非正槽（歧义 z）;
-   * 位置 = center（from_face 覆盖为贴该面内侧、横轴中心=域心）;
-   * k = theta/phi 实际方向（默认 ±轴）。横向跨度 t[i] = 正槽值或全域。 */
+   * 传播轴 = propagation_axis > size 恰一非正槽（歧义 z）;
+   * 位置 = center；无显式 center 时贴传播方向对应域面（默认"从某面射入"）。 */
   _injectionPlane(src, d) {
     const spans = [d.xmax - d.xmin, d.ymax - d.ymin, d.zmax - d.zmin];
     const mid = [(d.xmin + d.xmax) / 2, (d.ymin + d.ymax) / 2, (d.zmin + d.zmax) / 2];
@@ -2040,16 +2039,6 @@ export class Scene3D {
     let axis = { x: 0, y: 1, z: 2 }[src.propagation_axis] ?? null;
     let sign = src.direction === "-" ? -1 : 1;
     const pos = (src.center || mid).slice(0, 3);
-    if (src.from_face) {
-      const key = src.from_face[0];                 // "x_min" → "x"
-      axis = "xyz".indexOf(key);
-      sign = src.from_face.endsWith("_max") ? -1 : 1;
-      const off = spans[axis] * 0.03;               // 贴面内侧（显示近似）
-      pos[axis] = src.from_face.endsWith("_max")
-        ? d[key + "max"] - off : d[key + "min"] + off;
-      pos[(axis + 1) % 3] = mid[(axis + 1) % 3];
-      pos[(axis + 2) % 3] = mid[(axis + 2) % 3];
-    }
     if (axis == null) {
       const nonPos = [0, 1, 2].filter((i) => !(size[i] > 0));
       axis = nonPos.length === 1 ? nonPos[0] : 2;
@@ -2063,10 +2052,10 @@ export class Scene3D {
     }
     const t = [0, 1, 2].map((i) =>
       i === axis ? 0 : (size[i] > 0 ? size[i] : spans[i]));
-    /* Round C 语义修正：无显式注入面又无显式中心时，把注入面贴到传播
-     * 方向对应的域面（默认平面波读作"从某面射入"，而非湮没域心）。
-     * 面由 k 符号定：k>0 贴轴 min 面、k<0 贴轴 max 面；横轴居中=域心。 */
-    if (!src.from_face && !src.center) {
+    /* Round C 语义修正：无显式中心时，把注入面贴到传播方向对应的域面
+     * （默认平面波读作"从某面射入"，而非湮没域心）。面由 k 符号定：
+     * k>0 贴轴 min 面、k<0 贴轴 max 面；横轴居中=域心。 */
+    if (!src.center) {
       const key = "xyz"[axis];
       const off = spans[axis] * 0.03;
       pos[axis] = (k[axis] < 0) ? d[key + "max"] - off : d[key + "min"] + off;

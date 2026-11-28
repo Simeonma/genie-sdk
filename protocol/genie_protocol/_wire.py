@@ -1067,8 +1067,9 @@ class PlaneWaveSpec(_TemporalMixin):
     # soft-source/monitor "0 = point" semantics do NOT apply here).
     size: Optional[tuple[Optional[float], Optional[float], Optional[float]]] = None
     propagation_axis: Optional[Literal["x", "y", "z"]] = None
-    from_face: Optional[Literal["x_min", "x_max", "y_min", "y_max",
-                                "z_min", "z_max"]] = None
+    # from_face was removed in 2.0.5a1 (2026-11-28 站长拍): a sugar that
+    # overrode center — the placement vocabulary is center + axis (+ the
+    # resolver's default injection face at the domain min edge) alone.
 
     @field_validator("size", mode="after")
     @classmethod
@@ -1155,8 +1156,8 @@ class ModeSourceSpec(_TemporalMixin):
     the kernel infers the axis from ``size`` and applies the same guard.
 
     v1 boundaries: injection runs along +propagation_axis (no
-    ``direction``); the source plane is placed by ``center`` (no
-    ``from_face``). Injection power = amplitude² (the delivered field is
+    ``direction``); the source plane is placed by ``center``. Injection
+    power = amplitude² (the delivered field is
     normalised to unit power on the source plane).
     """
 

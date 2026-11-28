@@ -786,8 +786,8 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
     };
     general = [
       /* Propagation 表（2026-11-28 站长拍）：axis / direction 两列。
-       * wire 的 from_face（贴面注入快捷）不接 GUI——GUI 已有 center
-       * 编辑 + resolver 默认注入面在 z_min；字段留给脚本面。 */
+       * from_face 已从 wire 删除（2.0.5a1）——定位词汇就是
+       * center + axis（resolver 默认注入面在传播轴域 min 端）。 */
       { type: "table", caption: "Propagation",
         cols: [{ label: "axis" }, { label: "direction" }],
         rows: [{ cells: [
