@@ -106,7 +106,7 @@ def _mesh(m: dict, domain: dict) -> None:
     _set(m, "growth_rate", 1.2)
 
 
-def _source(s: dict) -> None:
+def _source(s: dict, domain: dict | None = None) -> None:
     _set(s, "freq", DEFAULT_SOURCE_FREQ)
     _set(s, "bandwidth", DEFAULT_SOURCE_BW)
     _set(s, "delay", 0.0)
@@ -120,14 +120,28 @@ def _source(s: dict) -> None:
     elif t in ("plane_wave", "gaussian_beam"):
         _set(s, "amplitude", 1.0)
         _set(s, "direction", "+")
-        # propagation_axis 默认 z（2026-11-28 站长拍）：正入射平面波的
-        # 惯例方向；center / size / from_face 不补——None is meaningful
-        # （size 全 null = 横截面全跨度，wire 现成语义）
         _set(s, "propagation_axis", "z")
         _set(s, "theta", 0.0)
         _set(s, "phi", 0.0)
         _set(s, "psi", 0.0)
-        # center/size/propagation_axis/from_face: None is meaningful
+        # Domain range 默认（2026-11-28 站长拍）：横截面 = 域范围
+        # （mesh 同款先例——窗口跟域走）；注入面放传播轴的域 min 端
+        # （"从这头打进去"；center 是整份 Vec3，无逐轴槽）。未写才补；
+        # 域该轴无 range（spacing 表轴）则该轴留空 = 全跨度。
+        if domain is not None and s.get("center") is None \
+                and s.get("size") is None:
+            axis = s.get("propagation_axis") or "z"
+            center, size = [], []
+            for a in ("x", "y", "z"):
+                r = domain.get(f"{a}_range")
+                if a == axis:
+                    center.append(r[0] if r else 0.0)
+                    size.append(None)
+                else:
+                    center.append((r[0] + r[1]) / 2 if r else 0.0)
+                    size.append(abs(r[1] - r[0]) if r else None)
+            s["center"] = center
+            s["size"] = size
     elif t == "mode":
         _set(s, "amplitude", 1.0)
         _set(s, "rotate_angle", 0.0)
@@ -174,7 +188,7 @@ def _fdtd(conf: dict) -> None:
         _mesh(m, domain)
     conf["source"] = [dict(s) for s in (conf.get("source") or [])]
     for s in conf["source"]:
-        _source(s)
+        _source(s, domain)
     conf["monitor"] = [dict(m) for m in (conf.get("monitor") or [])]
     for m in conf["monitor"]:
         _monitor(m)

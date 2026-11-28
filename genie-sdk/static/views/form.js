@@ -111,7 +111,7 @@ const MODE_FACES = { x: ["y_min", "y_max", "z_min", "z_max"],
                      y: ["x_min", "x_max", "z_min", "z_max"],
                      z: ["x_min", "x_max", "y_min", "y_max"] };
 
-export function DOMAIN_SCHEMA(cfg, commit) {
+export function DOMAIN_SCHEMA(cfg, commit, gs, setGs) {
   const d = (cfg && cfg.domain) || {};
   const range = (a) => {
     const r = d[`${a}_range`];
@@ -292,6 +292,12 @@ export function DOMAIN_SCHEMA(cfg, commit) {
 
   sections.push({ type: "section", key: "domain:boundary", title: "Boundary",
     open: true, items: bItems });
+
+  /* 全局 source 节（2026-11-28 站长拍）：不再单独树节点/卡片，
+   * 内容（spectrumTiming）直接住 fdtd 卡末尾；写腿 = global_source 单例。 */
+  if (typeof setGs === "function") {
+    sections.push(GLOBAL_SCHEMA(cfg, setGs, gs).sections[0]);
+  }
 
   return { sections };
 }
@@ -900,7 +906,7 @@ export const FormPanel = {
     const panel = {
       domain: "domain", mesh: "mesh", materials: "materials",
       geometry: "geometry", source: "source", monitor: "monitor", run: "run",
-      mode: "mode", global_source: "global_source",
+      mode: "mode",
     }[this.current];
     if (!panel) return;
 
@@ -916,8 +922,7 @@ export const FormPanel = {
        * mode = mode 求解器卡片（与 fdtd 对称，2D）。2026-11-25：身份行
        * 只留名字（图标多余，删）。 */
       const ID = { domain: "Settings", mode: "Settings",
-                   mesh: "Mesh", run: "Settings",
-                   global_source: "Settings" }[this.current];
+                   mesh: "Mesh", run: "Settings" }[this.current];
       if (ID) body.appendChild(this._paneId(ID));
     }
 
@@ -930,7 +935,6 @@ export const FormPanel = {
       case "source": this._source(body); break;
       case "monitor": this._monitor(body); break;
       case "run": this._run(body); break;
-      case "global_source": this._global_source(body); break;
     }
 
     /* 标签全文兜底（2026-10-21）：窄栏里长字段名（apodize_window /
@@ -1141,8 +1145,13 @@ export const FormPanel = {
   },
 
   /* fdtd 域卡：内容 = DOMAIN_SCHEMA（模块级数据），这里只剩接线。 */
-  _global_source(body) {
-    /* 全局 source 设置 = 文档级单例；写它不碰任何 source。 */
+  _domain(body) {
+    const commit = (field, literal) => {
+      exec("genie.set_named('fdtd', " + field + "=" + literal + ")",
+        { echo: false }).catch(() => {});
+    };
+    /* 全局 source 单例写腿（住进 fdtd 卡，2026-11-28）：地址不同
+     * （'global_source'，不是 fdtd solver），一条命令一个字段。 */
     const setGs = (fields) => {
       const lines = [];
       for (const [k, v] of Object.entries(fields || {})) {
@@ -1151,15 +1160,8 @@ export const FormPanel = {
       if (lines.length) exec(lines.join("\n"), { echo: false }).catch(() => {});
     };
     const gs = (this.cfg && this.cfg.global_source) || {};
-    this.renderPage(GLOBAL_SCHEMA(this.cfg || {}, setGs, gs), body);
-  },
-
-  _domain(body) {
-    const commit = (field, literal) => {
-      exec("genie.set_named('fdtd', " + field + "=" + literal + ")",
-        { echo: false }).catch(() => {});
-    };
-    this.renderPage(DOMAIN_SCHEMA(fdtdConfig(this.cfg), commit), body);
+    this.renderPage(DOMAIN_SCHEMA(fdtdConfig(this.cfg), commit, gs, setGs),
+      body);
   },
 
   /* 输入框 → SI 数（裸数按字段单位换算；带后缀 0.5um 后缀优先）；

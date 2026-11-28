@@ -76,8 +76,8 @@ export function renderTree() {
   const solvers = (cfg && cfg.solvers) || [];
   folder("Physics", "solvers", 0, "structure", solvers.length || null);
   if (open("solvers")) {
-    /* 全局仿真设置（文档级，2026-11-26）：与 solver 卡同级，站 Physics 下 */
-    leaf("global_source", null, "Global setting", 1, null, "params");
+    /* 全局 source 设置（2026-11-28 站长拍）：不再单独树节点——
+     * 内容住 fdtd 卡（Global source 节）；树只列求解器。 */
     for (const sv of solvers) {
       if (sv.kind !== "fdtd") {
         /* mode：与 fdtd 对称——行点击进 mode 卡片（数据走快照
