@@ -1736,10 +1736,14 @@ export function GEOMETRY_SCHEMA(cfg, commit, g, matNames) {
         unit: f === "n_sides" ? null : "len",
         onSet: (v) => setField(f, py(v)) })) }] };
   }
-  const rotTable = { type: "table", caption: "Rotation (°)",
-    cols: AX.map((a) => ({ label: a })),
+  /* Rotation 列名 = 欧拉角 α/β/γ（wire 唯一真相：绕全局固定轴 x→y→z
+   * 依次外旋，R = Rz(γ)·Ry(β)·Rx(α)；写 x/y/z 会被读成"旋转轴分量"）。 */
+  const rotTable = { type: "table", caption: "Rotation (Rz·Ry·Rx)",
+    cols: [{ label: "α (°)" }, { label: "β (°)" }, { label: "γ (°)" }],
     rows: [{ cells: AX.map((a, i) => ({
       kind: "num", path: addr + ".rotation." + i,
+      hint: ["绕全局 x 轴外旋（先）", "绕全局 y 轴外旋（次）",
+             "绕全局 z 轴外旋（末）"][i],
       value: Array.isArray(g.rotation) ? g.rotation[i] : undefined,
       onSet: (v) => setVecSlot("rotation", i, v) })) }] };
 
