@@ -31,11 +31,20 @@
 
   async function exec(code, opts) {
     opts = opts || {};
-    return post("/exec", {
-      code: String(code == null ? "" : code),
-      fresh: !!opts.fresh,
-      echo: opts.echo !== false,
-    });
+    try {
+      return await post("/exec", {
+        code: String(code == null ? "" : code),
+        fresh: !!opts.fresh,
+        echo: opts.echo !== false,
+      });
+    } finally {
+      /* 写完成（成功/被拒都算）= "该读一拍"的事实（2026-11-28，站长拍）：
+       * GUI 只有一条读通道（环快照），写腿自己不会把结果带回前端——不
+       * 通知读一拍，回显只能等 2s 空闲节拍（体感延迟）。这里发信号，
+       * 由持有 pollOnce 的 ring.js 接（bus 不依赖 ring，用事件解耦）；
+       * 任何卡/按钮/脚本写腿自动获得回显，延迟 = 一次往返。 */
+      window.dispatchEvent(new CustomEvent("genie-exec-settled"));
+    }
   }
 
   export { exec, get, post };

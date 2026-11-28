@@ -124,6 +124,13 @@ function csCommit(commit, cur, key, i, val) {
   commit(key, `[${arr.map((x) => x == null ? "None" : py(x)).join(", ")}]`);
 }
 
+/* range 行写回 = 一条 exec 写 center+size（一次往返；source 的
+ * setPlacement 先例）。分两条 commit 会发两次 /exec、重画两次。 */
+function csWrite(addr, center, size) {
+  exec("genie.set_named(" + JSON.stringify(addr) + ", center=" + py(center)
+    + ", size=" + py(size) + ")", { echo: false }).catch(() => {});
+}
+
 const MODE_FACES = { x: ["y_min", "y_max", "z_min", "z_max"],
                      y: ["x_min", "x_max", "z_min", "z_max"],
                      z: ["x_min", "x_max", "y_min", "y_max"] };
@@ -151,8 +158,13 @@ export function DOMAIN_SCHEMA(cfg, commit, gs, setGs, gmon, setGm) {
     label: a,
     value: range(a),
     onSet: (v) => {
-      csCommit(commit, d.center, "center", i, (v[0] + v[1]) / 2);
-      csCommit(commit, d.size, "size", i, v[1] - v[0]);
+      const c = [0, 1, 2].map((k) =>
+        (Array.isArray(d.center) ? Number(d.center[k]) : 0) || 0);
+      const z = [0, 1, 2].map((k) =>
+        (Array.isArray(d.size) && d.size[k] != null) ? d.size[k] : null);
+      c[i] = (v[0] + v[1]) / 2;
+      z[i] = v[1] - v[0];
+      csWrite("fdtd", c, z);        /* 一条 exec 写对（同 source 先例） */
     },
   }));
 
@@ -1827,7 +1839,7 @@ export function MONITOR_SCHEMA(cfg, commit, m, addr) {
     const cell = (comp) => ({
       kind: "select", path: "mon.field." + comp,
       value: cur.has(comp) ? "on" : "off", options: ["off", "on"],
-      aria: comp, disabled: allOn, flatLocked: allOn, rerender: true,
+      aria: comp, disabled: allOn, flatLocked: allOn,
       onSet: (v, sel) => {
         const next = new Set(cur);
         if (v === "on") next.add(comp); else next.delete(comp);
@@ -1885,22 +1897,19 @@ export function MONITOR_SCHEMA(cfg, commit, m, addr) {
           (size && size[i] != null) ? size[i] : null);
         c[k] = (v[0] + v[1]) / 2;
         z[k] = v[1] - v[0];
-        commit("center", py(c));
-        commit("size", py(z));
+        csWrite(addr, c, z);        /* 一条 exec 写对（同 source 先例） */
       },
     };
   });
   const dimItems = [{ type: "row", label: "Dimensionality",
     controls: [{ kind: "select", path: "mon.dim",
       value: `${ds.dim}D`, options: ["0D", "1D", "2D", "3D"],
-      rerender: true,
       onSet: (v) => setDims(parseInt(v, 10), null) }] }];
   if (ds.dim === 1 || ds.dim === 2) {
     dimItems.push({ type: "row", label: "Axes",
       controls: [{ kind: "select", path: "mon.dir",
         value: dirLabel(ds.dir),
         options: ds.dim === 1 ? ["x", "y", "z"] : ["xy", "yz", "zx"],
-        rerender: true,
         onSet: (v) => setDims(ds.dim, v) }] });
   }
 

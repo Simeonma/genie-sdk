@@ -85,3 +85,13 @@ export function pollOnce() {
   _inFlight = _pollOnce().finally(() => { _inFlight = null; });
   return _inFlight;
 }
+
+/* 写完成 → 立即读一拍（2026-11-28，站长拍）：表单写腿（bus.exec）只把
+ * 命令交给 worker，结果在环里；这一拍把"写的结果"当场投影回来，回显
+ * 延迟从 2s 空闲节拍降到一次往返。_inFlight 去重，连写只拍一次。
+ * 2s 节拍保留——它只负责传播"不是我改的"改动（终端/另一窗口/agent）。 */
+if (typeof window !== "undefined") {
+  window.addEventListener("genie-exec-settled", () => {
+    pollOnce().catch(() => {});
+  });
+}
