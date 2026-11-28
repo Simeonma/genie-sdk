@@ -50,12 +50,14 @@ SOFT_POLARIZATION = [[1.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
 
 #: Global monitor defaults (B 案，2026-11-28 站长拍)：测量频谱独立于激励
 #: （global_source）——频段/点数/apodize 是测量侧参数；apodize 不预设
-#: （无窗 = 矩形窗），显式给才生效。
+#: （无窗 = 矩形窗），显式给才生效。``spectrum_from_source``（同日拍 A）
+#: = 显式联动源频段（默认 False = 独立）。
 GLOBAL_MONITOR_DEFAULTS = {
     "freq": C0 / 1.55e-6,
     "bandwidth": 20.0e12,
     "n": 200,
     "monitors": [],
+    "spectrum_from_source": False,
 }
 
 #: Global source defaults (document-level singleton + the source ids that
@@ -275,23 +277,37 @@ def _apply_global(conf: dict, global_source: dict | None,
 
 
 def _apply_global_monitor(conf: dict, global_monitor: dict | None,
-                          strip: bool) -> None:
+                          global_source: dict | None, strip: bool) -> None:
     """Expand the global-monitor membership into each freq monitor (B 案):
     freq dict (center/bw/n) + apodize follow ``global_monitor`` — the
     measurement spectrum is independent of the excitation (global_source).
-    Explicit writes mean leaving the list (same semantics as sources)."""
+    Explicit writes mean leaving the list (same semantics as sources).
+
+    ``spectrum_from_source`` (2026-11-28 站长拍 A 案)：显式联动——成员的
+    频段 center/bw 借 ``global_source``（真相仍只有一份，住源侧；缺值
+    落 GLOBAL_SOURCE_DEFAULTS）；n/apodize 仍是测量自己的事。默认
+    False = 独立（旧文档零扰动）。"""
     if not isinstance(global_monitor, dict):
         global_monitor = {}
+    if not isinstance(global_source, dict):
+        global_source = {}
+    follow = bool(global_monitor.get("spectrum_from_source"))
     ids = set(global_monitor.get("monitors") or [])
     for m in conf.get("monitor") or []:
         use = m.get("id") in ids and m.get("type") == "freq"
         if use:
             freq = m.get("freq")
             freq = dict(freq) if isinstance(freq, dict) else {}
-            freq["center"] = global_monitor.get(
-                "freq", GLOBAL_MONITOR_DEFAULTS["freq"])
-            freq["bw"] = global_monitor.get(
-                "bandwidth", GLOBAL_MONITOR_DEFAULTS["bandwidth"])
+            if follow:
+                freq["center"] = global_source.get(
+                    "freq", GLOBAL_SOURCE_DEFAULTS["freq"])
+                freq["bw"] = global_source.get(
+                    "bandwidth", GLOBAL_SOURCE_DEFAULTS["bandwidth"])
+            else:
+                freq["center"] = global_monitor.get(
+                    "freq", GLOBAL_MONITOR_DEFAULTS["freq"])
+                freq["bw"] = global_monitor.get(
+                    "bandwidth", GLOBAL_MONITOR_DEFAULTS["bandwidth"])
             freq["n"] = global_monitor.get(
                 "n", GLOBAL_MONITOR_DEFAULTS["n"])
             m["freq"] = freq
@@ -314,7 +330,8 @@ def effective_config(conf: dict, kind: str,
     else:
         _fdtd(out)
         _apply_global(out, global_source, strip=strip_authoring)
-        _apply_global_monitor(out, global_monitor, strip=strip_authoring)
+        _apply_global_monitor(out, global_monitor, global_source,
+                              strip=strip_authoring)
     return out
 
 

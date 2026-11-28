@@ -419,9 +419,11 @@ class Surface:
 
     def _set_global_monitor(self, t, fields):
         """The document-level global monitor singleton (B 案, 2026-11-28):
-        measurement spectrum + point count + apodize + member monitor ids."""
+        measurement spectrum + point count + apodize + member monitor ids.
+        ``spectrum_from_source``（拍 A，同日）：布尔——成员频段跟
+        global_source 走（默认 False = 测量独立）。"""
         self._only(t, fields, {"freq", "bandwidth", "n", "apodize",
-                               "monitors"})
+                               "monitors", "spectrum_from_source"})
         gm = self._model._global_monitor
         for k, v in fields.items():
             if k == "monitors":
@@ -436,6 +438,13 @@ class Surface:
                     raise ValueError(
                         f"{t.addr()}.monitors: unknown monitor id(s) {bad}")
                 gm["monitors"] = ids
+                continue
+            if k == "spectrum_from_source":
+                if not isinstance(v, bool):
+                    raise ValueError(
+                        f"{t.addr()}.spectrum_from_source: expected a "
+                        f"boolean, got {type(v).__name__}")
+                gm["spectrum_from_source"] = v
                 continue
             if k == "apodize":
                 if v is None:

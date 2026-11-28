@@ -312,9 +312,9 @@ export function DOMAIN_SCHEMA(cfg, commit, gs, setGs, gmon, setGm) {
     sections.push(GLOBAL_SCHEMA(cfg, setGs, gs).sections[0]);
   }
   /* 全局 monitor 节（2026-11-28 B 案）：测量频谱/点数/apodize；
-   * 写腿 = global_monitor 单例。 */
+   * 写腿 = global_monitor 单例。gs = global_source 值（follow 模式显示）。 */
   if (typeof setGm === "function") {
-    sections.push(GLOBAL_MONITOR_SCHEMA(cfg, setGm, gmon).sections[0]);
+    sections.push(GLOBAL_MONITOR_SCHEMA(cfg, setGm, gmon, gs).sections[0]);
   }
 
   return { sections };
@@ -904,14 +904,20 @@ export function GLOBAL_SCHEMA(cfg, setGs, gs) {
 }
 
 /* ══════════════════ 全局 monitor（2026-11-28 B 案）══════════════════
- * 文档级 model.global_monitor：测量频谱独立于激励（global_source）。
+ * 文档级 model.global_monitor：默认测量频谱独立于激励（global_source）。
  * freq 型 monitor 用 id 成员继承：频谱（center/bw）+ 点数 n + apodize；
- * 显式写频谱组或 apodize = 退出名单（resolver 展开、载荷剥 use_global）。 */
-export function GLOBAL_MONITOR_SCHEMA(cfg, setGm, gm) {
+ * 显式写频谱组或 apodize = 退出名单（resolver 展开、载荷剥 use_global）。
+ * spectrum_from_source（拍 A，同日）：显式联动——频段跟 global_source
+ * 走（真相住源侧）；n/apodize 仍归测量。 */
+export function GLOBAL_MONITOR_SCHEMA(cfg, setGm, gm, gs) {
   const g = gm || {};
-  const f = g.freq, bw = g.bandwidth;
-  const band = (typeof f === "number" && typeof bw === "number")
-    ? [f - bw / 2, f + bw / 2] : null;
+  const follow = g.spectrum_from_source === true;
+  const f = follow
+    ? [gs && gs.freq, gs && gs.bandwidth]
+    : [g.freq, g.bandwidth];
+  const num = (v) => typeof v === "number" ? v : null;
+  const band = (num(f[0]) != null && num(f[1]) != null)
+    ? [num(f[0]) - num(f[1]) / 2, num(f[0]) + num(f[1]) / 2] : null;
   const ap = g.apodize || {};
   const setAp = (patch) => {
     if (patch.side === null || patch.side === "") {
@@ -934,12 +940,29 @@ export function GLOBAL_MONITOR_SCHEMA(cfg, setGm, gm) {
     type: "section", key: "sim:monitor", title: "Global monitor",
     open: true,
     items: [
-      ...spectrumTiming({
-        band, path: "global_monitor", temporal: null,
-        onBand: (v) => setGm({ freq: (v[0] + v[1]) / 2,
-                               bandwidth: v[1] - v[0] }),
-        onTemporal: null,
-      }),
+      /* 频段模式（拍 A）：独立（本卡可编）或跟 global_source（只读显示
+       * 源值——真相住源侧）。来回切不丢值：跟源时自己的频段字段原样
+       * 保留在文档里，resolver 只在 follow 时读源。 */
+      { type: "row", label: "Spectrum", controls: [{
+          kind: "select",
+          path: "global_monitor.spectrum_from_source",
+          value: follow ? "follow source" : "independent",
+          options: ["independent", "follow source"],
+          rerender: true,
+          onSet: (v) => setGm({ spectrum_from_source:
+                                v === "follow source" }) }] },
+      ...(follow
+        ? [{ type: "row", label: "Band (from source)", controls: [
+              { kind: "text", text: band
+                ? ((band[0] / 1e12).toPrecision(4) + " … "
+                   + (band[1] / 1e12).toPrecision(4) + " THz")
+                : "unset on global source" }] }]
+        : spectrumTiming({
+            band, path: "global_monitor", temporal: null,
+            onBand: (v) => setGm({ freq: (v[0] + v[1]) / 2,
+                                   bandwidth: v[1] - v[0] }),
+            onTemporal: null,
+          })),
       { type: "row", label: "Frequency points",
         controls: [{ kind: "num", path: "global_monitor.n", value: g.n,
           hint: "DFT sample count across the band; 0 = unset",
