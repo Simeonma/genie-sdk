@@ -1,4 +1,4 @@
-import { $ } from "./util.js";
+import { $, fdtdConfig } from "./util.js";
 import { FormPanel } from "../views/form.js";
 import { previewEl } from "../views/previews.js";
 import { cfg, displayCfg, inspectorSel, scene, setInspectorSel, setTreeSel } from "./state.js";
@@ -14,7 +14,11 @@ export function renderInspector() {
   if (k === "sweep") { renderSweepPane(); return; }
   /* 后处理配方（Q11）：模型级具名对象——编辑代码/调用行 + 跑一条 */
   if (k === "analysis") { renderAnalysisPane(i); return; }
-  if (i != null && !((cfg[k] || [])[i])) i = null;
+  /* 快照 v2（2026-11-28）：fdtd 子对象（source/monitor/mesh）住
+   * solvers[].config，不在顶层——顶层读法会让单实例下标失效退回组视图。 */
+  const _list = (k) => (k === "source" || k === "monitor" || k === "mesh")
+    ? (fdtdConfig(cfg)[k] || []) : (cfg[k] || []);
+  if (i != null && !(_list(k))[i]) i = null;
   setInspectorSel({ kind: k, i });
   if (!cfg) {
     const c = $("config-content");
