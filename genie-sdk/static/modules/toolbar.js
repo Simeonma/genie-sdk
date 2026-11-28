@@ -112,9 +112,9 @@ export function buildToolbar() {
       });
       return b;
     };
-    monBtns.appendChild(mkMonBtn("time", "Time", "mon"));
-    monBtns.appendChild(mkMonBtn("freq", "Freq", "freq_mon"));
-    monBtns.appendChild(mkMonBtn("index", "Index", "index_mon"));
+    monBtns.appendChild(mkMonBtn("time", "Time", "monitor"));
+    monBtns.appendChild(mkMonBtn("freq", "Freq", "monitor"));
+    monBtns.appendChild(mkMonBtn("index", "Index", "monitor"));
   }
 
   /* FDTD ▸ Simulation：Run（主 CTA，两态）+ Build（预演，伴生钮）。 */

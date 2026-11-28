@@ -1729,15 +1729,8 @@ export const FormPanel = {
 Object.assign(FormPanel, KIT);
 
 export function MONITOR_SCHEMA(cfg, commit, m, addr) {
-  const IDX = { x: 0, y: 1, z: 2 };
   const center = Array.isArray(m.center) ? m.center : null;
   const size = Array.isArray(m.size) ? m.size : null;
-  const setVec = (key, base, k, val, nullAble) => {
-    const a = [0, 1, 2].map((i) =>
-      (base && base[i] != null) ? base[i] : (nullAble ? null : 0));
-    a[k] = val;
-    commit(key, py(a));
-  };
   const bound = m.use_global === true;   /* freq 型：名单内 */
   const num = (x) => typeof x === "number" && isFinite(x);
   const f = m.freq || {};
@@ -1761,21 +1754,28 @@ export function MONITOR_SCHEMA(cfg, commit, m, addr) {
   const sections = [{
     type: "section", key: "mon:general", title: "General settings", open: true,
     items: [
-      { type: "table", caption: "Position",
-        cols: ["x", "y", "z"].map((a) => ({ label: a, unit: "µm" })),
-        rows: [{ cells: [0, 1, 2].map((k) => ({
-          kind: "num", path: `mon.center.${k}`,
-          value: center ? center[k] : undefined, unit: "len",
-          onSet: (v) => setVec("center", center, k, v, false),
-        })) }] },
-      { type: "table", caption: "Size",
-        cols: ["x", "y", "z"].map((a) => ({ label: a, unit: "µm" })),
-        rows: [{ cells: [0, 1, 2].map((k) => ({
-          kind: "num", path: `mon.size.${k}`,
-          value: size ? size[k] : undefined, unit: "len",
-          hint: "box extent on this axis; 0 marks a single cell; leave empty for the whole axis",
-          onSet: (v) => setVec("size", size, k, v, true),
-        })) }] },
+      /* 域放置词汇 v2 同款：center+size ↔ min/max 四列互算；size 槽空
+       * = 整轴（min/max 行空 → 写 null 槽）。写整份物化（同 plane wave
+       * setPlacement 先例）。 */
+      { type: "range", caption: "Domain range", unit: "len",
+        order: ["center", "size", "min", "max"],
+        rows: ["x", "y", "z"].map((a, k) => ({
+          label: a,
+          value: (center && typeof center[k] === "number"
+                  && size && typeof size[k] === "number")
+            ? [center[k] - size[k] / 2, center[k] + size[k] / 2]
+            : null,
+          onSet: (v) => {
+            const c = [0, 1, 2].map((i) =>
+              (center && typeof center[i] === "number") ? center[i] : 0.0);
+            const z = [0, 1, 2].map((i) =>
+              (size && size[i] != null) ? size[i] : null);
+            c[k] = (v[0] + v[1]) / 2;
+            z[k] = v[1] - v[0];
+            commit("center", py(c));
+            commit("size", py(z));
+          },
+        })) },
       { type: "row", label: "field", controls: [{
           kind: "select", value: m.field,
           options: fieldOpts,
