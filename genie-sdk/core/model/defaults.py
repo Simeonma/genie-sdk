@@ -50,14 +50,14 @@ SOFT_POLARIZATION = [[1.0, 0.0], [0.0, 0.0], [0.0, 0.0]]
 
 #: Global monitor defaults (B 案，2026-11-28 站长拍)：测量频谱独立于激励
 #: （global_source）——频段/点数/apodize 是测量侧参数；apodize 不预设
-#: （无窗 = 矩形窗），显式给才生效。``spectrum_from_source``（同日拍 A）
-#: = 显式联动源频段（默认 False = 独立）。
+#: （无窗 = 矩形窗），显式给才生效。``spectrum_from_source``（同日终拍：
+#: 默认 on）= 频段跟源走（显式 False = 独立）。
 GLOBAL_MONITOR_DEFAULTS = {
     "freq": C0 / 1.55e-6,
     "bandwidth": 20.0e12,
     "n": 200,
     "monitors": [],
-    "spectrum_from_source": False,
+    "spectrum_from_source": True,
 }
 
 #: Global source defaults (document-level singleton + the source ids that
@@ -283,15 +283,16 @@ def _apply_global_monitor(conf: dict, global_monitor: dict | None,
     measurement spectrum is independent of the excitation (global_source).
     Explicit writes mean leaving the list (same semantics as sources).
 
-    ``spectrum_from_source`` (2026-11-28 站长拍 A 案)：显式联动——成员的
-    频段 center/bw 借 ``global_source``（真相仍只有一份，住源侧；缺值
-    落 GLOBAL_SOURCE_DEFAULTS）；n/apodize 仍是测量自己的事。默认
-    False = 独立（旧文档零扰动）。"""
+    ``spectrum_from_source``（2026-11-28 站长拍 A，同日终拍：**默认 on**）：
+    显式联动——成员的频段 center/bw 借 ``global_source``（真相仍只有
+    一份，住源侧；缺值落 GLOBAL_SOURCE_DEFAULTS）；n/apodize 仍是测量
+    自己的事。显式 ``False`` = 独立（频段住 global_monitor 自己）。"""
     if not isinstance(global_monitor, dict):
         global_monitor = {}
     if not isinstance(global_source, dict):
         global_source = {}
-    follow = bool(global_monitor.get("spectrum_from_source"))
+    v = global_monitor.get("spectrum_from_source")
+    follow = True if v is None else bool(v)
     ids = set(global_monitor.get("monitors") or [])
     for m in conf.get("monitor") or []:
         use = m.get("id") in ids and m.get("type") == "freq"

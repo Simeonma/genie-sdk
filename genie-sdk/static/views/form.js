@@ -940,17 +940,16 @@ export function GLOBAL_MONITOR_SCHEMA(cfg, setGm, gm, gs) {
     type: "section", key: "sim:monitor", title: "Global monitor",
     open: true,
     items: [
-      /* 频段模式（拍 A）：独立（本卡可编）或跟 global_source（只读显示
-       * 源值——真相住源侧）。来回切不丢值：跟源时自己的频段字段原样
-       * 保留在文档里，resolver 只在 follow 时读源。 */
-      { type: "row", label: "Spectrum", controls: [{
+      /* Use global source（拍 A，同日终拍默认 on）：on = 频段跟源走
+       * （只读显示源值——真相住源侧）；off = 独立（本卡可编）。来回切
+       * 不丢值：跟源时自己的频段字段原样保留在文档里。 */
+      { type: "row", label: "Use global source", controls: [{
           kind: "select",
           path: "global_monitor.spectrum_from_source",
-          value: follow ? "follow source" : "independent",
-          options: ["independent", "follow source"],
+          value: follow ? "on" : "off",
+          options: ["on", "off"],
           rerender: true,
-          onSet: (v) => setGm({ spectrum_from_source:
-                                v === "follow source" }) }] },
+          onSet: (v) => setGm({ spectrum_from_source: v === "on" }) }] },
       ...(follow
         ? [{ type: "row", label: "Band (from source)", controls: [
               { kind: "text", text: band
