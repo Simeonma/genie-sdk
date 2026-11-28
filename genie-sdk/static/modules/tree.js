@@ -70,7 +70,9 @@ export function renderTree() {
   if (open("structs")) {
     ((cfg && cfg.geometry) || []).forEach((item, i) => {
       const fallback = GEO_TYPE_LABEL[item.type] || item.type;
-      leaf("geometry", i, item.name || fallback, 1);
+      /* 删除走树 ✕（Q44 补二 C：不加独立按钮、remove 级联） */
+      const sp = leaf("geometry", i, item.name || fallback, 1);
+      if (item.name) sp.del = "geometry." + item.name;
     });
   }
 
@@ -304,8 +306,23 @@ export function renderTree() {
         });
       }
     } else if (sp.kind != null) {
-      /* 复制/删除叉已删（L-35）：写腿（意图/拼码）随 M4/M7 重接 */
       row.addEventListener("click", () => selectObj(sp.kind, sp.i));
+    }
+    /* 删除 ✕（Q44 补二 C）：树上给叉、不加独立按钮；remove 是级联语义
+     * （2026-11-28 接几何；其余族的删除入口随各自模块落）。 */
+    if (sp.del) {
+      const del = document.createElement("button");
+      del.className = "tree-del";
+      del.type = "button";
+      del.textContent = "✕";
+      del.title = "删除 " + sp.label;
+      del.setAttribute("aria-label", "删除 " + sp.label);
+      del.addEventListener("click", (e) => {
+        e.stopPropagation();
+        exec("genie.remove(" + JSON.stringify(sp.del) + ")", { echo: true })
+          .catch(() => {});
+      });
+      row.appendChild(del);
     }
     if (sp.placeholder) row.title = sp.placeholder;
     return row;

@@ -308,6 +308,34 @@ export const KIT = {
   _ctl(spec, c, inTable) {
     if (c.kind === "tag") return { el: this._el("span", "tag", c.text), desc: c };
     if (c.kind === "text") return { el: this._el("span", "note", c.text), desc: c };
+    if (c.kind === "area") {
+      /* 多行文本（几何顶点表）：一行一点 "x, y"，空行 = 子多边形分隔 */
+      const ta = document.createElement("textarea");
+      ta.className = c.cls || "verts-editor";
+      if (c.path) {
+        ta.dataset.path = c.path;
+        this._tagField(ta, c.path);
+      }
+      ta.rows = c.rows || 6;
+      ta.setAttribute("autocomplete", "off");
+      ta.spellcheck = false;
+      ta.value = c.value == null ? "" : String(c.value);
+      if (c.aria) ta.setAttribute("aria-label", c.aria);
+      if (c.onSet) {
+        this._edit(ta);
+        /* textarea 的写腿用 change（失焦/回车外），避免逐键写模型 */
+        ta.addEventListener("change", () => {
+          const msg = c.validate ? c.validate(ta.value) : null;
+          if (msg) { this._reject(ta, msg); return; }
+          this._clearFieldError(ta);
+          c.onSet(ta.value, ta);
+        });
+      } else {
+        ta.readOnly = true;
+        ta.tabIndex = -1;
+      }
+      return { el: ta, input: ta, desc: c };
+    }
     if (c.kind === "str") {
       /* 可编辑文本（多值、枚举字符串）：校验失败就地报错，不惊动 worker */
       if (inTable) {
@@ -501,29 +529,39 @@ export const KIT = {
       const fire = (which) => () => {
         const v = {};
         for (const name of ORDER) v[name] = this._numFromInput(ins[name], u);
-        if (ORDER.some((name) => v[name] == null)) {
-          for (const name of ORDER) {
-            if (String(ins[name].value).trim() && v[name] == null)
-              this._reject(ins[name], "not a number — try 0.5um or 500nm");
-          }
-          return;
+        for (const name of ORDER) {
+          if (String(ins[name].value).trim() && v[name] == null)
+            this._reject(ins[name], "not a number — try 0.5um or 500nm");
         }
-        let lo = v.min, hi = v.max;
-        /* allowZero（monitor 卡，2026-11-28 站长拍）：size 槽 ≥ 0——
-         * 0 长 = 该轴单格（点/线/面监视器）；min == max 也合法。 */
-        const zok = it.allowZero === true;
-        if (which === "center" || which === WIDTH) {    /* 改中心/宽度 → 反算边界 */
+        let lo, hi;
+        if (which === "center" || which === WIDTH) {
+          /* 改中心/宽度：只需这两格有值；min/max 由 apply 回填。
+           * （旧版要求四格全有值——新建对象的空行永远写不进去。） */
+          if (v.center == null || v[WIDTH] == null) {
+            if (v.center == null) this._reject(ins.center, "need center and size (or min and max)");
+            else this._reject(ins[WIDTH], "need center and size (or min and max)");
+            return;
+          }
           const s = v[WIDTH];
+          const zok = it.allowZero === true;
           if (zok ? s < 0 : !(s > 0)) {
             this._reject(ins[WIDTH],
               zok ? "span must be ≥ 0" : "span must be > 0");
             return;
           }
           lo = v.center - s / 2; hi = v.center + s / 2;
-        } else if (zok ? hi < lo : !(hi > lo)) {        /* 改边界 → 必须 lo < hi */
-          this._reject(ins[which],
-            zok ? "min must be ≤ max" : "min must be < max");
-          return;
+        } else {
+          /* 改边界：只需 min/max 两格有值。 */
+          if (v.min == null || v.max == null) {
+            this._reject(ins[which], "need min and max (or center and size)");
+            return;
+          }
+          if (it.allowZero === true ? v.max < v.min : !(v.max > v.min)) {
+            this._reject(ins[which],
+              it.allowZero === true ? "min must be ≤ max" : "min must be < max");
+            return;
+          }
+          lo = v.min; hi = v.max;
         }
         apply(lo, hi);
         r.onSet([lo, hi]);

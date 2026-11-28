@@ -123,6 +123,39 @@ export function buildToolbar() {
   }
 
   /* FDTD ▸ Simulation：Run（主 CTA，两态）+ Build（预演，伴生钮）。 */
+  /* DESIGN ▸ Structures：七型 primitive（genie.<fdtd>.add_<type>(name)）。
+   * 名字自动编号（source/monitor/mesh 同款）；新建对象无 material（wire
+   * 必填）——用户在卡里选，模型未提交前不 422。 */
+  const geoBtns = $("tb-geo-btns");
+  if (geoBtns) {
+    const mkGeoBtn = (type, label) => {
+      const b = document.createElement("button");
+      b.className = "tb-btn tb-add";
+      b.type = "button";
+      b.title = `加一个${label}（genie.<fdtd>.add_${type}(name)）`;
+      b.setAttribute("aria-label", label);
+      /* 七型同组：图标式（不带文字）——带字会撑爆按钮条，Sphere 盖住
+       * Box（2026-11-28 实测）；title/aria 给全名。 */
+      b.appendChild(previewEl(type));
+      b.addEventListener("click", () => {
+        const taken = new Set(((cfg && cfg.geometry) || []).map((x) => x.name));
+        let name = type, i = 1;
+        while (taken.has(name)) { i += 1; name = type + "_" + i; }
+        /* 几何是 model 级集合（不是 solver 子节点）：genie.add_geometry */
+        exec("genie.add_geometry(name=" + JSON.stringify(name)
+          + ", type='" + type + "')", { echo: true }).catch(() => {});
+      });
+      return b;
+    };
+    geoBtns.appendChild(mkGeoBtn("box", "Box"));
+    geoBtns.appendChild(mkGeoBtn("sphere", "Sphere"));
+    geoBtns.appendChild(mkGeoBtn("cylinder", "Cylinder"));
+    geoBtns.appendChild(mkGeoBtn("ngon_z", "N-gon"));
+    geoBtns.appendChild(mkGeoBtn("ellipse_z", "Ellipse"));
+    geoBtns.appendChild(mkGeoBtn("ring_z", "Ring"));
+    geoBtns.appendChild(mkGeoBtn("polygon_z", "Polygon"));
+  }
+
   const fdtdRun = $("tb-fdtd-run-btns");
   if (fdtdRun) {
     const run = document.createElement("button");

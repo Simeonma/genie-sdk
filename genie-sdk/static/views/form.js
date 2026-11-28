@@ -1540,127 +1540,35 @@ export const FormPanel = {
   },
 
   _geometry(body) {
+    /* 几何卡 = GEOMETRY_SCHEMA + kit（2026-11-28）：地址 = geometry.<name>
+     * （几何是 model 级集合，不是 solver 子节点）；卡头保留对象族统一语言
+     * （预览 / 名字 / 材料 chip / 删除）。 */
     const list = this.cfg.geometry || [];
     if (!list.length) {
       body.appendChild(this._paneEmpty("structure", "No geometry yet",
-        "Add them in the script (rewiring pending)"));
+        "Add from the DESIGN ribbon: Structures ▸ Box / Sphere / …"));
       return;
     }
-    this._items(list).forEach(([g, i]) => {
-      const inner = document.createDocumentFragment();
-      /* material 字段改为下拉(已有材料+可选, 08-31cb) */
-      const matSel = document.createElement("select");
-      matSel.dataset.path = `geometry.${i}.material`;
-      this._tagField(matSel, matSel.dataset.path);
-      matSel.dataset.kind = "str";
-      matSel.style.cssText = this._select(null, null, []).style.cssText;
-      const matNames = this._matNames();
-      const curMat = g.material || "";
-      const defOpt = document.createElement("option");
-      defOpt.value = ""; defOpt.textContent = "(choose material)";
-      matSel.appendChild(defOpt);
-      for (const mn of matNames) {
-        const o = document.createElement("option");
-        o.value = mn; o.textContent = mn;
-        if (mn === curMat) o.selected = true;
-        matSel.appendChild(o);
-      }
-      if (curMat && !matNames.includes(curMat)) {
-        const o = document.createElement("option");
-        o.value = curMat; o.textContent = curMat + " (undefined)";
-        o.selected = true;
-        matSel.appendChild(o);
-      }
-      matSel.disabled = true;               /* L-35：写腿随 M4 重接 */
-      /* 材料节（物理因果 RoundE）：几何身份=材料（名在卡头）；空间量入
-       * 「位置与尺寸」，优先级（mesh 覆盖序）独立成节，与其余对象族同构。 */
-      const sGeo1 = this._sec("Material", false);
-      inner.appendChild(sGeo1.head); inner.appendChild(sGeo1.body);
-      sGeo1.body.appendChild(this._row("material", matSel));
-
-      /* 位置与尺寸：折叠默认收起 + 计数 chip（与源/监视器/域同款节律） */
-      const posCount = g.type === "box" ? 3
-        : g.type === "polygon_z" ? 2
-        : g.type === "polygon_swept" ? 3
-        : g.type === "sphere" ? 2
-        : g.type === "cylinder" ? 3
-        : g.type === "ngon_z" ? 4
-        : g.type === "ellipse_z" ? 4
-        : g.type === "ring_z" ? 4
-        : 1;
-      const sGeo2 = this._sec("Position & size", true, posCount);
-      inner.appendChild(sGeo2.head); inner.appendChild(sGeo2.body);
-      if (g.type === "box") {
-        sGeo2.body.appendChild(this._vec("center (µm)", `geometry.${i}.center`, g.center, 3, "len"));
-        sGeo2.body.appendChild(this._vec("size (µm)", `geometry.${i}.size`, g.size, 3, "len"));
-      } else if (g.type === "polygon_z" || g.type === "polygon_swept") {
-        /* 顶点编辑器（L-35 拔线后只读展示）；写腿随 M4 重接 */
-        const ta = document.createElement("textarea");
-        ta.className = "verts-editor";
-        ta.id = `f-geometry-${i}-vertices`;
-        ta.name = ta.id;
-        ta.setAttribute("autocomplete", "off");
-        ta.spellcheck = false;
-        ta.readOnly = true;
-        ta.rows = Math.min(Math.max((g.vertices || []).length + 1, 4), 12);
-        ta.value = (g.vertices || [])
-          .map(p => (p[0] !== p[0] && p[1] !== p[1]) ? "nan, nan"
-            : `${fmtUserNum(p[0] * 1e6)}, ${fmtUserNum(p[1] * 1e6)}`).join("\n");
-        sGeo2.body.appendChild(this._row("vertices (µm)", ta));
-        sGeo2.body.appendChild(this._rangeRow("z_range (µm)", `geometry.${i}.z_range`, g.z_range, "len"));
-        if (g.type === "polygon_swept") {
-          sGeo2.body.appendChild(this._vec("tilt (dx/dz, dy/dz)",
-            `geometry.${i}.tilt`, g.tilt, 2, ""));
-        }
-      } else {
-        sGeo2.body.appendChild(this._vec("center (µm)", `geometry.${i}.center`, g.center, 3, "len"));
-        if (g.type === "ngon_z") {
-          sGeo2.body.appendChild(this._row("n_sides",
-            this._input(`geometry.${i}.n_sides`, g.n_sides, "num")));
-          sGeo2.body.appendChild(this._row("circumradius (µm)",
-            this._input(`geometry.${i}.circumradius`, g.circumradius, "num", "len")));
-        } else if (g.type === "sphere" || g.type === "cylinder") {
-          /* M6 盘点抓到的真缺口：cylinder 的 radius 从来没人渲染过——
-           * 从工具条加一根柱（radius=1e-7）之后，界面上改不了它的半径，
-           * 只能去写脚本。两个类型在线上格式里都叫 radius。 */
-          sGeo2.body.appendChild(this._row("radius (µm)",
-            this._input(`geometry.${i}.radius`, g.radius, "num", "len")));
-        } else if (g.type === "ellipse_z") {
-          sGeo2.body.appendChild(this._row("rx (µm)",
-            this._input(`geometry.${i}.rx`, g.rx, "num", "len")));
-          sGeo2.body.appendChild(this._row("ry (µm)",
-            this._input(`geometry.${i}.ry`, g.ry, "num", "len")));
-        } else if (g.type === "ring_z") {
-          sGeo2.body.appendChild(this._row("inner_radius (µm)",
-            this._input(`geometry.${i}.inner_radius`, g.inner_radius, "num", "len")));
-          sGeo2.body.appendChild(this._row("outer_radius (µm)",
-            this._input(`geometry.${i}.outer_radius`, g.outer_radius, "num", "len")));
-        }
-        if (g.type === "cylinder" || g.type === "ngon_z"
-            || g.type === "ellipse_z" || g.type === "ring_z") {
-          sGeo2.body.appendChild(this._row("height (µm)",
-            this._input(`geometry.${i}.height`, g.height, "num", "len")));
-        }
-      }
-      /* 优先级 · 网格（物理因果 RoundE）：mesh 覆盖序属求解参数，非空间量 */
-      const sGeo3 = this._sec("Priority · mesh", true, 1);
-      inner.appendChild(sGeo3.head); inner.appendChild(sGeo3.body);
-      sGeo3.body.appendChild(this._row("priority",
-        this._input(`geometry.${i}.priority`, g.priority, "num")));
-      /* 卡片头（统一语言 2026）：类型下拉彻底移除——类型只在 topbar
-       * 「＋几何」添加时定死，改类型 = 删除重建。
-       * 2026-10-21 用户定案「信息够用就好」：去掉类型 chip——左侧渲染缩略图
-       * 已经说明形状、名字占位符也带类型（"N-gon #1"），chip 是第三遍重复。
-       * 头 = 缩略图 + 可编辑名 + 材料 chip（无材料时不渲染）+ 删除钮。 */
-      const gHead = [];
-      /* 渲染风缩略图（previews.js）：卡头左侧 44×44 预览（R1；R2 走 _preview 统一） */
-      gHead.push(this._preview(g.type));
-      gHead.push(this._headName(`geometry.${i}.name`, g.name,
-        `${GEO_TYPE_LABEL[g.type] || g.type} #${i + 1}`, (g.name || `${GEO_TYPE_LABEL[g.type] || g.type} #${i + 1}`) + " name"));
+    const matNames = this._matNames();
+    for (const [g, i] of this._items(list)) {
+      const addr = "geometry." + g.name;
+      const commit = (field, literal) => {
+        exec("genie.set_named(" + JSON.stringify(addr) + ", " + field + "="
+          + literal + ")", { echo: false }).catch(() => {});
+      };
+      const inner = this._el("div", "pane-body");
+      this.renderPage(GEOMETRY_SCHEMA(this.cfg || {}, commit, g, matNames),
+        inner);
+      const gHead = [
+        this._preview(g.type),
+        this._headName(`geometry.${i}.name`, g.name,
+          `${GEO_TYPE_LABEL[g.type] || g.type} #${i + 1}`,
+          (g.name || `${GEO_TYPE_LABEL[g.type] || g.type} #${i + 1}`) + " name"),
+      ];
       if (g.material) gHead.push(this._el("span", "tag", g.material));
       gHead.push(this._delBtn("geometry", i));
       body.appendChild(this._card(gHead, inner));
-    });
+    }
   },
 
   _source(body) {
@@ -1736,7 +1644,145 @@ export const FormPanel = {
   },
 };
 
-/* 页面层（行/表/节/渲染器）住 views/kit.js：这里是卡片与数据投影。 */
+/* ═══ 几何对象卡（2026-11-28 站长拍：几何功能弄好）════════════════════
+ * 与 source/monitor 同构：GEOMETRY_SCHEMA = 数据描述符，DOM 由 kit 生成；
+ * 写腿 = commit（genie.set_named('geometry.<name>', …)）。字段面按
+ * wire GeometrySpec 七型分派（box / sphere / cylinder / ngon_z /
+ * polygon_z / ellipse_z / ring_z）；rotation / priority 各省一行。 */
+function parseVertices(text) {
+  /* 顶点表（µm，SI 写出）：一行 "x, y"；空行 = 子多边形分隔（[null,null]
+   * 哨兵，与 wire PolygonZSpec 同一语义）。< 3 点 = 非法（wire min_length）。 */
+  const out = [];
+  for (const row of String(text || "").split(/\r?\n/)) {
+    const t = row.trim();
+    if (!t) {
+      if (out.length) out.push([null, null]);
+      continue;
+    }
+    const m = t.split(",").map((x) => Number(x.trim()));
+    if (m.length !== 2 || !m.every((x) => isFinite(x))) return null;
+    out.push([m[0] * 1e-6, m[1] * 1e-6]);
+  }
+  while (out.length && out[out.length - 1][0] == null) out.pop();
+  return out.length >= 3 ? out : null;
+}
+
+export function GEOMETRY_SCHEMA(cfg, commit, g, matNames) {
+  const AX = ["x", "y", "z"];
+  const num = (x) => typeof x === "number" && isFinite(x);
+  const center = Array.isArray(g.center) ? g.center : null;
+  const size = Array.isArray(g.size) ? g.size : null;
+  const centerOf = (i) => ((center && num(center[i])) ? center[i] : undefined);
+  const centerArr = () => AX.map((a, i) =>
+    (center && num(center[i])) ? center[i] : 0.0);
+  const addr = "geometry." + g.name;
+
+  /* 行内写腿：单个字段一条 exec */
+  const setField = (field, literal) => commit(field, literal);
+  const setCenterSlot = (i, v) => {
+    const c = centerArr();
+    c[i] = v;
+    setField("center", py(c));
+  };
+  const setVecSlot = (field, i, v) => {
+    const cur = Array.isArray(g[field]) ? g[field] : null;
+    const a = [0, 1, 2].map((k) => (cur && num(cur[k])) ? cur[k] : 0.0);
+    a[i] = v;
+    setField(field, py(a));
+  };
+
+  const items = [{
+    type: "row", label: "material", controls: [{
+      kind: "select", path: addr + ".material",
+      value: g.material || "", options: ["", ...(matNames || [])],
+      unsetLabel: "(choose material)",
+      onSet: (v) => { if (v) setField("material", py(v)); } }] }];
+
+  const posItems = [];
+  if (g.type === "box") {
+    /* box 不是"单轴 range"：三轴 size 各自独立、wire 要求三轴正长——
+     * 逐格写会把其余轴写成 null（422）。所以 center 单格写、size 整行
+     * 写（三格全填才发；不发明默认值）。 */
+    posItems.push({
+      type: "table", caption: "Center", cols: AX.map((a) => ({ label: a, unit: "µm" })),
+      rows: [{ cells: AX.map((a, i) => ({
+        kind: "num", path: addr + ".center." + i, unit: "len",
+        value: centerOf(i),
+        onSet: (v) => setCenterSlot(i, v) })) }] });
+    posItems.push({
+      type: "table", caption: "Size", cols: AX.map((a) => ({ label: a, unit: "µm" })),
+      rows: [{ unit: "len",
+        cells: AX.map((a, i) => ({
+          kind: "num", path: addr + ".size." + i, unit: "len",
+          value: (size && num(size[i])) ? size[i] : undefined })),
+        /* 三格全填才写（缺格 → 提示，不补默认） */
+        validate: (vals) => (vals.every((v) => v > 0)
+          ? null : { index: 0, msg: "size 三轴都必须 > 0" }),
+        onRow: (vals) => setField("size", py(vals)) }] });
+  } else if (g.type === "polygon_z") {
+    const verts = (g.vertices || []).map((p) =>
+      (!Array.isArray(p) || p[0] == null || p[1] == null)
+        ? "" : `${fmtUserNum(p[0] * 1e6)}, ${fmtUserNum(p[1] * 1e6)}`);
+    posItems.push({
+      type: "row", label: "vertices (µm)", controls: [{
+        kind: "area", path: addr + ".vertices", value: verts.join("\n"),
+        rows: 6,
+        validate: (t) => (parseVertices(t) == null
+          ? "每行 x, y（µm）；空行 = 子多边形分隔；至少 3 点" : null),
+        onSet: (t) => {
+          const v = parseVertices(t);
+          if (v) setField("vertices", py(v));
+        } }] });
+    posItems.push({
+      type: "range", caption: "Extrusion", unit: "len",
+      order: ["center", "size", "min", "max"],
+      rows: [{ label: "z",
+        value: Array.isArray(g.z_range) ? g.z_range : null,
+        onSet: (v) => setField("z_range", py([v[0], v[1]])) }] });
+  } else {
+    posItems.push({
+      type: "range", caption: "Position", unit: "len",
+      order: ["center", "size", "min", "max"],
+      rows: AX.map((a, i) => ({
+        label: a, centerOnly: true, position: centerOf(i),
+        onCenter: (v) => setCenterSlot(i, v) })) });
+    const dims = {
+      sphere: ["radius"], cylinder: ["radius", "height"],
+      ngon_z: ["n_sides", "circumradius", "height"],
+      ellipse_z: ["rx", "ry", "height"],
+      ring_z: ["inner_radius", "outer_radius", "height"],
+    }[g.type] || [];
+    for (const f of dims) {
+      posItems.push({ type: "row", label: f, controls: [{
+        kind: "num", path: addr + "." + f, value: g[f],
+        unit: f === "n_sides" ? null : "len",
+        onSet: (v) => setField(f, py(v)) }] });
+    }
+  }
+
+  const metaItems = [
+    { type: "row", label: "priority", controls: [{
+      kind: "num", path: addr + ".priority", value: g.priority,
+      onSet: (v) => setField("priority", py(v)) }] },
+    { type: "table", caption: "Rotation (°)",
+      cols: AX.map((a) => ({ label: a })),
+      rows: [{ cells: AX.map((a, i) => ({
+        kind: "num", path: addr + ".rotation." + i,
+        value: Array.isArray(g.rotation) ? g.rotation[i] : undefined,
+        onSet: (v) => setVecSlot("rotation", i, v) })) }] },
+  ];
+
+  return { sections: [
+    { type: "section", key: "geo:general", title: "General settings",
+      open: true, items },
+    { type: "section", key: "geo:pos", title: "Position & size",
+      open: true, items: posItems },
+    { type: "section", key: "geo:meta", title: "Priority · rotation",
+      open: false, items: metaItems },
+  ] };
+}
+
+
 Object.assign(FormPanel, KIT);
 
 export function MONITOR_SCHEMA(cfg, commit, m, addr) {
