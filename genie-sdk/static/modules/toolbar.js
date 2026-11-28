@@ -107,8 +107,13 @@ export function buildToolbar() {
           .map((x) => x.name));
         let name = prefix, i = 1;
         while (taken.has(name)) { i += 1; name = prefix + "_" + i; }
+        /* 新建即写默认域（2026-11-28 站长拍）：center 原点 + size 三轴
+         * 2 µm（3D 体监视器起点；维度/方向切换后非活动轴归 0）。 */
         exec("genie." + solver + ".add_monitor(" + JSON.stringify(name)
-          + ", '" + type + "')", { echo: true }).catch(() => {});
+          + ", '" + type + "')\n"
+          + "genie.set_named(" + JSON.stringify(name)
+          + ", center=[0.0, 0.0, 0.0], size=[2e-6, 2e-6, 2e-6])",
+          { echo: true }).catch(() => {});
       });
       return b;
     };

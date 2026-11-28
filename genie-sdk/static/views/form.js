@@ -1246,7 +1246,6 @@ export const FormPanel = {
   _fldSeq: 0,
   _msecOpen: {},      // 折叠组 open 状态（key 持久，rerender 不复位）
   _poleOpen: {},      // 单 pole 折叠状态（两级折叠）
-  _monDim: new Map(), // monitor 维度/方向 UI 态（key = id/name；2.0.8a1）
 
   /* 卡头身份名（2026 统一语言）：四个对象族（geometry/source/monitor/materials）
    * 共用同一可编辑 name 输入，写回 cfg.<list>.<i>.name；复用 `_input` 的
@@ -1697,27 +1696,7 @@ export const FormPanel = {
           + literal + ")", { echo: false }).catch(() => {});
       };
       const wrap = this._el("div", "pane-body");
-      /* 维度/方向 UI 态（2.0.8a1）：按 monitor id 存活，只覆盖"活动轴
-       * 还没填长度"的中间态；快照维度变化（打开别的文档 / 他处改 size）
-       * 时按快照重推。 */
-      const key = m.id != null ? "id:" + m.id : "name:" + m.name;
-      const derived = {
-        dim: ["x", "y", "z"].filter((a, i) => {
-          const v = Array.isArray(m.size) ? m.size[i] : undefined;
-          return v === null || (typeof v === "number" && v > 0);
-        }).length,
-        dir: ["x", "y", "z"].filter((a, i) => {
-          const v = Array.isArray(m.size) ? m.size[i] : undefined;
-          return v === null || (typeof v === "number" && v > 0);
-        }).join(""),
-      };
-      let sel = this._monDim.get(key);
-      if (!sel || (!sel.pending && sel.dim !== derived.dim)) {
-        sel = derived;
-        this._monDim.set(key, sel);
-      }
-      this.renderPage(MONITOR_SCHEMA(this.cfg || {}, commit, m, addr, sel,
-        (s) => { this._monDim.set(key, s); }), wrap);
+      this.renderPage(MONITOR_SCHEMA(this.cfg || {}, commit, m, addr), wrap);
       /* 卡头学 source 卡（2026-11-28 站长拍）：只有 "Settings" 行——
        * 不放图标 / 类型字样 / 名称编辑（删除走左树，改名走属性面板）。 */
       body.appendChild(this._card(
@@ -1748,15 +1727,17 @@ export const FormPanel = {
 /* 页面层（行/表/节/渲染器）住 views/kit.js：这里是卡片与数据投影。 */
 Object.assign(FormPanel, KIT);
 
-export function MONITOR_SCHEMA(cfg, commit, m, addr, dimSel, setDimSel) {
+export function MONITOR_SCHEMA(cfg, commit, m, addr) {
   const center = Array.isArray(m.center) ? m.center : null;
   const size = Array.isArray(m.size) ? m.size : null;
+  const num = (x) => typeof x === "number" && isFinite(x);
   const AX = ["x", "y", "z"];
   /* 监视器维度（2026-11-28 站长拍）：size 槽有值（null = 整轴全跨，
-   * > 0 = 长度，0 = 单格）即该轴占维。0D = 点监视器（三轴 0），
-   * 1D = 线，2D = 面，3D = 体。不落 wire：切维度/方向只写 size
-   * （非活动轴 0），重开按 size 反推；会话内 UI 态（dimSel）只覆盖
-   * "活动轴还没填长度"的中间态。 */
+   * > 0 = 长度）即该轴占维。0D = 点，1D = 线，2D = 面，3D = 体。
+   * 维度不落 wire：切维度/方向只写 size（非活动轴 0 = 单格；新活动轴
+   * 默认 2 µm、center 默认 0），重开按 size 反推——活动轴恒有值，派生
+   * 无歧义（无会话态、无 pending）。 */
+  const DEFAULT_MON_SIZE = 2e-6;
   const rawSize = (a) => {
     const v = Array.isArray(m.size) ? m.size[AX.indexOf(a)] : undefined;
     return v === null || num(v) ? v : undefined;
@@ -1765,8 +1746,8 @@ export function MONITOR_SCHEMA(cfg, commit, m, addr, dimSel, setDimSel) {
     const v = rawSize(a);
     return v === null || (num(v) && v > 0);
   };
-  const ds = dimSel || {
-    dim: AX.filter(hasDim).length, dir: AX.filter(hasDim).join("") };
+  const ds = { dim: AX.filter(hasDim).length,
+               dir: AX.filter(hasDim).join("") };
   const dirLabel = (act) => (act === "xz" ? "zx" : act);
   const setDims = (n, dirStr) => {
     let act;
@@ -1775,24 +1756,20 @@ export function MONITOR_SCHEMA(cfg, commit, m, addr, dimSel, setDimSel) {
     else if (n === 1) act = [dirStr || (ds.dir.length === 1 ? ds.dir : "x")];
     else act = (dirStr || (ds.dir.length === 2 ? dirLabel(ds.dir) : "xy"))
       .split("");
-    /* 活动轴长度按顺序搬（改方向不丢已填的长度）；新轴无来源 = 0
-     * （用户填，中间态由 dimSel.pending 撑住视图）。null 槽 = 整轴
-     * 全跨，作为长度照搬。 */
+    /* 活动轴长度按顺序搬（改方向不丢已填长度）；新活动轴没有来源 =
+     * 默认 2 µm（站长 2026-11-28：默认 center=0 / size=2 µm，只有
+     * 维度/方向固定的轴才为 0）。 */
     const oldLens = (ds.dir || "").split("").map((a) => rawSize(a));
     const sizeArr = AX.map((a) => {
       const k = act.indexOf(a);
       if (k < 0) return 0;
       if (k < oldLens.length) return oldLens[k];
       const v = rawSize(a);
-      return (v === null || (num(v) && v > 0)) ? v : 0;
+      return (v === null || (num(v) && v > 0)) ? v : DEFAULT_MON_SIZE;
     });
     commit("size", py(sizeArr));
-    if (setDimSel) setDimSel({ dim: n, dir: act.join(""),
-      pending: sizeArr.some((v, i) =>
-        act.includes(AX[i]) && (v === null || v === 0)) });
   };
   const bound = m.use_global === true;   /* freq 型：名单内 */
-  const num = (x) => typeof x === "number" && isFinite(x);
   const f = m.freq || {};
   const band = (num(f.center) && num(f.bw))
     ? [f.center - f.bw / 2, f.center + f.bw / 2] : null;
@@ -1878,53 +1855,50 @@ export function MONITOR_SCHEMA(cfg, commit, m, addr, dimSel, setDimSel) {
       rows: [{ cells: [allCell].concat(COMPONENTS.map(cell)) }] }];
   }
 
-  /* 维度/方向行（2026-11-28 站长拍）+ 范围表按维度变：
-   * 0D 三轴 only-center（点监视器）；1D 一行；2D 两行；3D 三行。 */
-  const act = AX.filter((a) => ds.dir.includes(a));
-  let rangeRows;
-  if (ds.dim === 0) {
-    rangeRows = AX.map((a, i) => ({
-      label: a, centerOnly: true,
-      position: (center && typeof center[i] === "number")
-        ? center[i] : undefined,
-      onCenter: (v) => {
-        const c = [0, 1, 2].map((j) =>
-          (center && typeof center[j] === "number") ? center[j] : 0.0);
-        c[i] = v;
-        commit("center", py(c));
-      },
-    }));
-  } else {
-    rangeRows = act.map((a) => {
-      const k = AX.indexOf(a);
+  /* 维度/方向行（2026-11-28 站长拍）+ 范围表 **恒定三行**：
+   * 活动轴的 center/size/min/max 可编；非活动轴只有 center 可编
+   * （size/min/max 显 —）；0D = 三行都只有 center。 */
+  const centerOf = (i) => (center && typeof center[i] === "number")
+    ? center[i] : undefined;
+  const rangeRows = AX.map((a, k) => {
+    if (!ds.dir.includes(a)) {
       return {
-        label: a,
-        value: (center && typeof center[k] === "number"
-                && size && typeof size[k] === "number")
-          ? [center[k] - size[k] / 2, center[k] + size[k] / 2]
-          : null,
-        onSet: (v) => {
-          const c = [0, 1, 2].map((i) =>
-            (center && typeof center[i] === "number") ? center[i] : 0.0);
-          const z = [0, 1, 2].map((i) =>
-            (size && size[i] != null) ? size[i] : null);
-          c[k] = (v[0] + v[1]) / 2;
-          z[k] = v[1] - v[0];
+        label: a, centerOnly: true,
+        position: centerOf(k),
+        onCenter: (v) => {
+          const c = [0, 1, 2].map((j) =>
+            (center && typeof center[j] === "number") ? center[j] : 0.0);
+          c[k] = v;
           commit("center", py(c));
-          commit("size", py(z));
         },
       };
-    });
-  }
+    }
+    return {
+      label: a,
+      value: (centerOf(k) != null && size && typeof size[k] === "number")
+        ? [center[k] - size[k] / 2, center[k] + size[k] / 2]
+        : null,
+      onSet: (v) => {
+        const c = [0, 1, 2].map((i) =>
+          (center && typeof center[i] === "number") ? center[i] : 0.0);
+        const z = [0, 1, 2].map((i) =>
+          (size && size[i] != null) ? size[i] : null);
+        c[k] = (v[0] + v[1]) / 2;
+        z[k] = v[1] - v[0];
+        commit("center", py(c));
+        commit("size", py(z));
+      },
+    };
+  });
   const dimItems = [{ type: "row", label: "Dimensionality",
     controls: [{ kind: "select", path: "mon.dim",
       value: `${ds.dim}D`, options: ["0D", "1D", "2D", "3D"],
       rerender: true,
       onSet: (v) => setDims(parseInt(v, 10), null) }] }];
   if (ds.dim === 1 || ds.dim === 2) {
-    dimItems.push({ type: "row", label: "Extent",
+    dimItems.push({ type: "row", label: "Axes",
       controls: [{ kind: "select", path: "mon.dir",
-        value: dirLabel(act.join("")),
+        value: dirLabel(ds.dir),
         options: ds.dim === 1 ? ["x", "y", "z"] : ["xy", "yz", "zx"],
         rerender: true,
         onSet: (v) => setDims(ds.dim, v) }] });
