@@ -312,9 +312,9 @@ export function DOMAIN_SCHEMA(cfg, commit, gs, setGs, gmon, setGm) {
     sections.push(GLOBAL_SCHEMA(cfg, setGs, gs).sections[0]);
   }
   /* 全局 monitor 节（2026-11-28 B 案）：测量频谱/点数/apodize；
-   * 写腿 = global_monitor 单例。gs = global_source 值（follow 模式显示）。 */
+   * 写腿 = global_monitor 单例。on（跟源）时不渲染频段表（真相住源侧）。 */
   if (typeof setGm === "function") {
-    sections.push(GLOBAL_MONITOR_SCHEMA(cfg, setGm, gmon, gs).sections[0]);
+    sections.push(GLOBAL_MONITOR_SCHEMA(cfg, setGm, gmon).sections[0]);
   }
 
   return { sections };
@@ -909,15 +909,14 @@ export function GLOBAL_SCHEMA(cfg, setGs, gs) {
  * 显式写频谱组或 apodize = 退出名单（resolver 展开、载荷剥 use_global）。
  * spectrum_from_source（拍 A，同日）：显式联动——频段跟 global_source
  * 走（真相住源侧）；n/apodize 仍归测量。 */
-export function GLOBAL_MONITOR_SCHEMA(cfg, setGm, gm, gs) {
+export function GLOBAL_MONITOR_SCHEMA(cfg, setGm, gm) {
   const g = gm || {};
   const follow = g.spectrum_from_source === true;
-  const f = follow
-    ? [gs && gs.freq, gs && gs.bandwidth]
-    : [g.freq, g.bandwidth];
   const num = (v) => typeof v === "number" ? v : null;
-  const band = (num(f[0]) != null && num(f[1]) != null)
-    ? [num(f[0]) - num(f[1]) / 2, num(f[0]) + num(f[1]) / 2] : null;
+  /* off 时才读自己的频段画表；on 时频段跟源（源侧显示归 global_source 卡） */
+  const band = (!follow && num(g.freq) != null && num(g.bandwidth) != null)
+    ? [num(g.freq) - num(g.bandwidth) / 2,
+       num(g.freq) + num(g.bandwidth) / 2] : null;
   const ap = g.apodize || {};
   const setAp = (patch) => {
     if (patch.side === null || patch.side === "") {
@@ -950,13 +949,9 @@ export function GLOBAL_MONITOR_SCHEMA(cfg, setGm, gm, gs) {
           options: ["on", "off"],
           rerender: true,
           onSet: (v) => setGm({ spectrum_from_source: v === "on" }) }] },
-      ...(follow
-        ? [{ type: "row", label: "Band (from source)", controls: [
-              { kind: "text", text: band
-                ? ((band[0] / 1e12).toPrecision(4) + " … "
-                   + (band[1] / 1e12).toPrecision(4) + " THz")
-                : "unset on global source" }] }]
-        : spectrumTiming({
+      /* on = 频段跟源（真相住源侧，本卡不再显示频段）；off = 独立
+       * （本卡可编）。来回切不丢值：跟源时自己的频段字段原样保留。 */
+      ...(follow ? [] : spectrumTiming({
             band, path: "global_monitor", temporal: null,
             onBand: (v) => setGm({ freq: (v[0] + v[1]) / 2,
                                    bandwidth: v[1] - v[0] }),
