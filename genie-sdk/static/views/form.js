@@ -1698,32 +1698,52 @@ export function GEOMETRY_SCHEMA(cfg, commit, g, matNames) {
       unsetLabel: "(choose material)",
       onSet: (v) => { if (v) setField("material", py(v)); } }] }];
 
-  const posItems = [];
+  /* General settings 三行（2026-11-28 站长拍，polygon_z 除外）：
+   * Position 一行三列 / Shape 一行多列（每型不同）/ Rotation 一行三列。
+   * box 的 Shape 三格联动（wire 要求三轴正长：三格全填才发，不补默认）。 */
+  const posRow = { type: "row", label: "Position (µm)",
+    controls: AX.map((a, i) => ({
+      kind: "num", path: addr + ".center." + i, unit: "len",
+      value: centerOf(i),
+      onSet: (v) => setCenterSlot(i, v) })) };
+  const shapeFields = {
+    sphere: ["radius"],
+    cylinder: ["height", "radius"],
+    ngon_z: ["n_sides", "circumradius", "height"],
+    ellipse_z: ["rx", "ry", "height"],
+    ring_z: ["inner_radius", "outer_radius", "height"],
+  }[g.type] || [];
+  let shapeRow;
   if (g.type === "box") {
-    /* box 不是"单轴 range"：三轴 size 各自独立、wire 要求三轴正长——
-     * 逐格写会把其余轴写成 null（422）。所以 center 单格写、size 整行
-     * 写（三格全填才发；不发明默认值）。 */
-    posItems.push({
-      type: "table", caption: "Center", cols: AX.map((a) => ({ label: a, unit: "µm" })),
-      rows: [{ cells: AX.map((a, i) => ({
-        kind: "num", path: addr + ".center." + i, unit: "len",
-        value: centerOf(i),
-        onSet: (v) => setCenterSlot(i, v) })) }] });
-    posItems.push({
-      type: "table", caption: "Size", cols: AX.map((a) => ({ label: a, unit: "µm" })),
-      rows: [{ unit: "len",
-        cells: AX.map((a, i) => ({
-          kind: "num", path: addr + ".size." + i, unit: "len",
-          value: (size && num(size[i])) ? size[i] : undefined })),
-        /* 三格全填才写（缺格 → 提示，不补默认） */
-        validate: (vals) => (vals.every((v) => v > 0)
-          ? null : { index: 0, msg: "size 三轴都必须 > 0" }),
-        onRow: (vals) => setField("size", py(vals)) }] });
-  } else if (g.type === "polygon_z") {
+    const sizeVals = AX.map((a, i) => ((size && num(size[i])) ? size[i] : null));
+    shapeRow = { type: "row", label: "Shape (µm)",
+      controls: AX.map((a, i) => ({
+        kind: "num", path: addr + ".size." + i, unit: "len",
+        value: sizeVals[i],
+        onSet: (v) => {
+          sizeVals[i] = v;
+          if (sizeVals.every((x) => x != null)) setField("size", py(sizeVals));
+        } })) };
+  } else {
+    shapeRow = { type: "row", label: "Shape (µm)",
+      controls: shapeFields.map((f) => ({
+        kind: "num", path: addr + "." + f, value: g[f],
+        unit: f === "n_sides" ? null : "len",
+        onSet: (v) => setField(f, py(v)) })) };
+  }
+  const rotRow = { type: "row", label: "Rotation (°)",
+    controls: AX.map((a, i) => ({
+      kind: "num", path: addr + ".rotation." + i,
+      value: Array.isArray(g.rotation) ? g.rotation[i] : undefined,
+      onSet: (v) => setVecSlot("rotation", i, v) })) };
+
+  /* polygon_z（形状由顶点定义，无 center）：vertices + Extrusion + Rotation */
+  const polygonItems = [];
+  if (g.type === "polygon_z") {
     const verts = (g.vertices || []).map((p) =>
       (!Array.isArray(p) || p[0] == null || p[1] == null)
         ? "" : `${fmtUserNum(p[0] * 1e6)}, ${fmtUserNum(p[1] * 1e6)}`);
-    posItems.push({
+    polygonItems.push({
       type: "row", label: "vertices (µm)", controls: [{
         kind: "area", path: addr + ".vertices", value: verts.join("\n"),
         rows: 6,
@@ -1733,49 +1753,24 @@ export function GEOMETRY_SCHEMA(cfg, commit, g, matNames) {
           const v = parseVertices(t);
           if (v) setField("vertices", py(v));
         } }] });
-    posItems.push({
+    polygonItems.push({
       type: "range", caption: "Extrusion", unit: "len",
       order: ["center", "size", "min", "max"],
       rows: [{ label: "z",
         value: Array.isArray(g.z_range) ? g.z_range : null,
         onSet: (v) => setField("z_range", py([v[0], v[1]])) }] });
-  } else {
-    posItems.push({
-      type: "range", caption: "Position", unit: "len",
-      order: ["center", "size", "min", "max"],
-      rows: AX.map((a, i) => ({
-        label: a, centerOnly: true, position: centerOf(i),
-        onCenter: (v) => setCenterSlot(i, v) })) });
-    const dims = {
-      sphere: ["radius"], cylinder: ["radius", "height"],
-      ngon_z: ["n_sides", "circumradius", "height"],
-      ellipse_z: ["rx", "ry", "height"],
-      ring_z: ["inner_radius", "outer_radius", "height"],
-    }[g.type] || [];
-    for (const f of dims) {
-      posItems.push({ type: "row", label: f, controls: [{
-        kind: "num", path: addr + "." + f, value: g[f],
-        unit: f === "n_sides" ? null : "len",
-        onSet: (v) => setField(f, py(v)) }] });
-    }
   }
 
   const materialRow = items[0];
-  const rotationTable = { type: "table", caption: "Rotation (°)",
-    cols: AX.map((a) => ({ label: a })),
-    rows: [{ cells: AX.map((a, i) => ({
-      kind: "num", path: addr + ".rotation." + i,
-      value: Array.isArray(g.rotation) ? g.rotation[i] : undefined,
-      onSet: (v) => setVecSlot("rotation", i, v) })) }] };
   const priorityRow = { type: "row", label: "priority", controls: [{
     kind: "num", path: addr + ".priority", value: g.priority,
     onSet: (v) => setField("priority", py(v)) }] };
 
-  /* 两节（2026-11-28 站长拍）：General settings = 位置 + 几何参数 +
-   * rotation；Material settings = material + priority。 */
   return { sections: [
     { type: "section", key: "geo:general", title: "General settings",
-      open: true, items: [...posItems, rotationTable] },
+      open: true,
+      items: g.type === "polygon_z"
+        ? [...polygonItems, rotRow] : [posRow, shapeRow, rotRow] },
     { type: "section", key: "geo:material", title: "Material settings",
       open: true, items: [materialRow, priorityRow] },
   ] };
