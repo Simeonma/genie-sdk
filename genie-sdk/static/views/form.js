@@ -768,6 +768,9 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
     const center = Array.isArray(s.center) ? s.center : null;
     const size = Array.isArray(s.size) ? s.size : null;
     const hasSize = size && size.some((x) => x != null);
+    const ffRaw = s.from_face || null;
+    const ffEnd = (ffRaw && axis && ffRaw.startsWith(axis + "_"))
+      ? ffRaw.slice(-3) : null;      /* "min" / "max"（匹配当前轴时） */
     const rangeOf = (a) => {
       const k = IDX[a], c = center && center[k], w = size && size[k];
       return (typeof c === "number" && typeof w === "number")
@@ -785,28 +788,70 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
         { echo: false }).catch(() => {});
     };
     general = [
-      { type: "row", label: "Propagation", controls: [
-          { kind: "select", path: "source.propagation_axis",
-            value: axis, options: ["x", "y", "z"], rerender: true,
-            onPick: (v) => {
-              const z = [0, 1, 2].map((k) =>
-                (size && size[k] != null) ? size[k] : null);
-              z[IDX[v]] = null;          /* 新传播槽让位（横槽保留） */
-              exec("genie.set_named(" + JSON.stringify(addr)
-                + ", propagation_axis=" + py(v)
-                + (hasSize ? ", size=" + py(z) : "") + ")",
-                { echo: false }).catch(() => {});
-            } },
-          { kind: "select", path: "source.direction",
-            value: s.direction, options: ["+", "-"],
-            onSet: (v) => commit("direction", py(v)) },
-        ] },
+      /* Propagation 表（2026-11-28 站长拍）：axis / direction / from face
+       * 一行三列。from face 是 center 的**覆盖**（kernel：注入面 = 域面
+       * 内缩 2.5 格、横轴重置为域中点），选了 face → 一条命令写三字段
+       * （axis + direction 由面端推导：min 面 = 顺打 +），切回 none =
+       * center 模式（center/size 原值保留，来回切不丢）。 */
+      (() => {
+        const ffSel = ffEnd || ffRaw || "";
+        const send = (parts) => {
+          exec("genie.set_named(" + JSON.stringify(addr) + ", "
+            + parts.join(", ") + ")", { echo: false }).catch(() => {});
+        };
+        const faceOf = (a, end) => a + "_" + end;
+        return { type: "table", caption: "Propagation",
+          cols: [{ label: "axis" }, { label: "direction" },
+                 { label: "from face" }],
+          rows: [{ cells: [
+            { kind: "select", path: "source.propagation_axis", value: axis,
+              options: ["x", "y", "z"], rerender: true,
+              onPick: (v) => {
+                const z = [0, 1, 2].map((k) =>
+                  (size && size[k] != null) ? size[k] : null);
+                z[IDX[v]] = null;        /* 新传播槽让位（横槽保留） */
+                const parts = ["propagation_axis=" + py(v)];
+                if (hasSize) parts.push("size=" + py(z));
+                if (ffEnd) parts.push("from_face=" + py(faceOf(v, ffEnd)));
+                send(parts);
+              } },
+            { kind: "select", path: "source.direction",
+              value: s.direction, options: ["+", "-"],
+              onSet: (v) => {
+                if (ffEnd) {             /* face 模式：换向 = 换端 */
+                  send(["direction=" + py(v),
+                    "from_face=" + py(faceOf(axis, v === "+" ? "min" : "max"))]);
+                } else {
+                  commit("direction", py(v));
+                }
+              } },
+            { kind: "select", path: "source.from_face", value: ffSel,
+              options: ["", "min", "max"], unsetLabel: "none",
+              rerender: true,
+              onSet: (v) => {
+                if (!v) send(["from_face=None"]);   /* 回 center 模式 */
+                else send(["direction=" + (v === "min" ? '"+"' : '"-"'),
+                  "from_face=" + py(faceOf(axis, v))]);
+              } },
+          ] }] };
+      })(),
       { type: "range", caption: "Domain range", unit: "len",
         order: ["center", "size", "min", "max"],
         rows: ["x", "y", "z"].map((a) => (a === axis
-          ? { label: a, centerOnly: true,
-              position: center && center[IDX[a]],
-              onCenter: (v) => setPlacement((c) => { c[IDX[a]] = v; }) }
+          ? (ffEnd
+            /* from_face：传播轴行显示注入面端（域面值，只读——真实位置
+             * 由 kernel 内缩 2.5 格；横轴编辑照常，但生效值被 face 覆盖
+             * 为域中点，切回 none 即恢复 center 语义） */
+            ? { label: a, centerOnly: true,
+                position: (() => {
+                  const r = (cfg.domain || {})[`${a}_range`];
+                  return Array.isArray(r)
+                    ? (ffEnd === "min" ? Number(r[0]) : Number(r[1]))
+                    : undefined;
+                })() }
+            : { label: a, centerOnly: true,
+                position: center && center[IDX[a]],
+                onCenter: (v) => setPlacement((c) => { c[IDX[a]] = v; }) })
           : { label: a, value: rangeOf(a),
               onSet: (v) => setPlacement((c, z) => {
                 c[IDX[a]] = (v[0] + v[1]) / 2;

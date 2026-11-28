@@ -1,4 +1,4 @@
-﻿/* views/kit.js — 页面层唯一实现（2026-11-25 站长拍：抽公共件）
+/* views/kit.js — 页面层唯一实现（2026-11-25 站长拍：抽公共件）
  * 行 / 二维表 / 节 / 分页渲染器：页面内容只写 schema（数据），不写 DOM。
  * 用法：views/form.js 里 `Object.assign(FormPanel, KIT)`；卡片只写
  * `renderPage(SCHEMA(cfg, commit), body)`。基元（_el/_input/_select/
@@ -464,16 +464,18 @@ export const KIT = {
           return inp;
         });
         const center = cells[ORDER.indexOf("center")];
-        this._edit(center);
-        center.addEventListener("change", () => {
-          const v = this._numFromInput(center, u);
-          if (v == null) {
-            this._reject(center, "not a number — try 0.5um or 500nm");
-            return;
-          }
-          this._clearFieldError(center);
-          r.onCenter(v);
-        });
+        if (r.onCenter) {              /* 无 onCenter = 只读行（from_face 面） */
+          this._edit(center);
+          center.addEventListener("change", () => {
+            const v = this._numFromInput(center, u);
+            if (v == null) {
+              this._reject(center, "not a number — try 0.5um or 500nm");
+              return;
+            }
+            this._clearFieldError(center);
+            r.onCenter(v);
+          });
+        }
         if (lead) cells.unshift(this._ctl(it, lead, true).el);
         return { label: r.label, cells };
       }
