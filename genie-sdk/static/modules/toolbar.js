@@ -83,6 +83,7 @@ export function buildToolbar() {
     };
     srcBtns.appendChild(mkSourceBtn("soft_source", "Soft source", "source"));
     srcBtns.appendChild(mkSourceBtn("plane_wave", "Plane wave", "source"));
+    srcBtns.appendChild(mkSourceBtn("gaussian_beam", "Gaussian beam", "source"));
   }
 
   /* FDTD ▸ Simulation：Run（主 CTA，两态）+ Build（预演，伴生钮）。 */

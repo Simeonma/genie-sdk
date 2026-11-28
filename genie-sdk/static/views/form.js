@@ -829,6 +829,16 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
             onSet: (v) => commit("psi", py(v)) },
         ] }] },
     ];
+    /* gaussian_beam = plane_wave 全套 + radius（wire 继承 PlaneWaveSpec）；
+     * radius 是 wire 必填（gt=0、无默认）——GUI 显示空、hint 指路，
+     * 不发明值（Domain range 与 Angles 之间）。 */
+    if (s.type === "gaussian_beam") {
+      general.splice(2, 0, { type: "row", label: "Radius",
+        controls: [{ kind: "num", path: "source.radius", value: s.radius,
+          unit: "len",
+          hint: "required; transverse 1/e² aperture, w ≈ 0.47·radius",
+          onSet: (v) => commit("radius", py(v)) }] });
+    }
   }
   return { sections: [{
     type: "section", key: "src:general", title: "General settings", open: true,
