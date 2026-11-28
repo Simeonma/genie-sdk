@@ -351,7 +351,10 @@ export const KIT = {
       if (c.unsetLabel && sel.options[0]) sel.options[0].textContent = c.unsetLabel;
       if (c.aria) sel.setAttribute("aria-label", c.aria);
       if (c.disabled) sel.disabled = true;
-      /* 监听照挂（disabled 元素不触发 change）：monitor Components 表的
+      /* flatLocked（Polarization 表 all=on 的锁定格）：去 chevron 的纯文本
+       * 长相；解锁走 DOM（monitor 卡 lockComps）。 */
+      if (c.flatLocked) sel.classList.add("flat-locked");
+      /* 监听照挂（disabled 元素不触发 change）：monitor Polarization 表的
        * all 开关会在 DOM 层解锁同行的分量 select，解锁后要能写。 */
       if (c.onSet || c.onPick) {
         sel.disabled = false;

@@ -1695,13 +1695,10 @@ export const FormPanel = {
       };
       const wrap = this._el("div", "pane-body");
       this.renderPage(MONITOR_SCHEMA(this.cfg || {}, commit, m, addr), wrap);
-      body.appendChild(this._card([
-        this._preview("mon_" + m.type),
-        this._headName(`monitor.${i}.name`, m.name,
-          (m.name || `monitor ${i + 1}`) + " name"),
-        this._el("span", "tag type", m.type),
-        this._delBtn("monitor", i),
-      ], wrap));
+      /* 卡头学 source 卡（2026-11-28 站长拍）：只有 "Settings" 行——
+       * 不放图标 / 类型字样 / 名称编辑（删除走左树，改名走属性面板）。 */
+      body.appendChild(this._card(
+        [this._el("span", "pane-id-name", "Settings")], wrap));
     }
   },
 
@@ -1748,12 +1745,12 @@ export function MONITOR_SCHEMA(cfg, commit, m, addr) {
       { echo: false }).catch(() => {});
   };
 
-  /* Components 多选（L-66）：str（"all"/单分量）或六分量子集 list。归一
+  /* Polarization 多选（L-66）：str（"all"/单分量）或六分量子集 list。归一
    * 只在 GUI 写腿——全六开写 "all" 省表示（wire 层不归一）。空集不可写
    * （wire 422）：关到空就地弹回，不发明值。all 列在最前：all=on 时
-   * 六分量锁定（要挑子集先关 all——关 all 只解锁不写值，选中态仍是
-   * 当前快照的展开）；六分量重新全开 = 写回 "all" 并锁回。index 型
-   * 不参与：仍是 eps/mu/both 下拉。 */
+   * 六分量锁死（flat-locked：无下拉、只读文本色；要挑子集先关 all——
+   * 关 all 只解锁不写值，选中态仍是当前快照的展开）；六分量重新全开
+   * = 写回 "all" 并锁回。index 型不参与：仍是 eps/mu/both 下拉。 */
   const COMPONENTS = ["Ex", "Ey", "Ez", "Hx", "Hy", "Hz"];
   let fieldItems;
   if (m.type === "index") {
@@ -1777,7 +1774,9 @@ export function MONITOR_SCHEMA(cfg, commit, m, addr) {
         .querySelectorAll("select"));
     const lockComps = (locked, self) => {
       for (const s of rowSelects(self)) {
-        if ((s.getAttribute("aria-label") || "") !== "all") s.disabled = locked;
+        if ((s.getAttribute("aria-label") || "") === "all") continue;
+        s.disabled = locked;
+        s.classList.toggle("flat-locked", locked);
       }
     };
     const syncAll = (on, self) => {
@@ -1788,7 +1787,7 @@ export function MONITOR_SCHEMA(cfg, commit, m, addr) {
     const cell = (comp) => ({
       kind: "select", path: "mon.field." + comp,
       value: cur.has(comp) ? "on" : "off", options: ["off", "on"],
-      aria: comp, disabled: allOn, rerender: true,
+      aria: comp, disabled: allOn, flatLocked: allOn, rerender: true,
       onSet: (v, sel) => {
         const next = new Set(cur);
         if (v === "on") next.add(comp); else next.delete(comp);
@@ -1809,7 +1808,7 @@ export function MONITOR_SCHEMA(cfg, commit, m, addr) {
         /* 关 all = 解锁子集编辑，不写值（选中态 = 当前快照展开） */
         lockComps(false, sel);
       } };
-    fieldItems = [{ type: "table", caption: "Components",
+    fieldItems = [{ type: "table", caption: "Polarization",
       cols: [{ label: "all" }].concat(COMPONENTS.map((c) => ({ label: c }))),
       rows: [{ cells: [allCell].concat(COMPONENTS.map(cell)) }] }];
   }
@@ -1845,7 +1844,7 @@ export function MONITOR_SCHEMA(cfg, commit, m, addr) {
 
   if (m.type === "freq") {
     const observe = [{
-      type: "row", label: "Use global", controls: [{
+      type: "row", label: "Use global monitor setting", controls: [{
         kind: "select", path: "mon.use_global",
         value: bound ? "on" : "off", options: ["off", "on"],
         onSet: (v) => toggleGlobal(v === "on") }] }];

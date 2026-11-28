@@ -667,6 +667,11 @@ input::placeholder,textarea::placeholder {
   background: var(--bg-secondary); color: var(--text-muted); cursor: default;
   opacity: 1;   /* 全局 :disabled 的 .45 会把白底压成灰块 */
 }
+/* Polarization 锁定格（all=on，2026-11-28 站长拍）：去 chevron、无下拉，
+ * 只剩 "on" 的只读文本色（色随 :disabled 规则）。 */
+.mtx-sel.flat-locked {
+  padding: 0 4px; background-image: none; cursor: default;
+}
 
 /* ═══ 卡片(实例 · 平底无框) ═══ */
 .card {
