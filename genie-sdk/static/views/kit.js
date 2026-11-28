@@ -355,9 +355,11 @@ export const KIT = {
        * 长相；解锁走 DOM（monitor 卡 lockComps）。 */
       if (c.flatLocked) sel.classList.add("flat-locked");
       /* 监听照挂（disabled 元素不触发 change）：monitor Polarization 表的
-       * all 开关会在 DOM 层解锁同行的分量 select，解锁后要能写。 */
+       * all 开关会在 DOM 层解锁同行的分量 select，解锁后要能写。
+       * _select 出生即 disabled（L-35 拔线态）——有写腿的按 spec 打开：
+       * c.disabled 只锁本行；无写腿的保持出生态。 */
       if (c.onSet || c.onPick) {
-        sel.disabled = false;
+        sel.disabled = !!c.disabled;
         sel.addEventListener("change", () => {
           if (c.confirm && !window.confirm(c.confirm)) {
             sel.value = c.value;                 /* 取消 → 显示回当前值 */

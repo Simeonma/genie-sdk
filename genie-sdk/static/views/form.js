@@ -1798,7 +1798,9 @@ export function MONITOR_SCHEMA(cfg, commit, m, addr) {
     const allCell = {
       kind: "select", path: "mon.field.all",
       value: allOn ? "on" : "off", options: ["off", "on"],
-      aria: "all", rerender: true,
+      aria: "all",
+      /* 不 rerender：关 all 是纯 UI 态（不写值），快照仍是 "all"，
+       * 重建会把解锁立刻冲掉（2026-11-28 实测）。 */
       onSet: (v, sel) => {
         if (v === "on") {
           commit("field", py("all"));
