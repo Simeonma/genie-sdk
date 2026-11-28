@@ -1771,16 +1771,13 @@ export function GEOMETRY_SCHEMA(cfg, commit, g, matNames) {
     kind: "num", path: addr + ".priority", value: g.priority,
     onSet: (v) => setField("priority", py(v)) }] };
 
-  /* 节序（2026-11-28 站长拍）：先 Position & size（几何体本身），
-   * 再 General settings（material + rotation），最后 priority。 */
+  /* 两节（2026-11-28 站长拍）：General settings = 位置 + 几何参数 +
+   * rotation；Material settings = material + priority。 */
   return { sections: [
-    { type: "section", key: "geo:pos", open: true,
-      title: g.type === "polygon_z" ? "Geometry" : "Position & size",
-      items: posItems },
     { type: "section", key: "geo:general", title: "General settings",
-      open: true, items: [materialRow, rotationTable] },
-    { type: "section", key: "geo:priority", title: "Priority",
-      open: false, items: [priorityRow] },
+      open: true, items: [...posItems, rotationTable] },
+    { type: "section", key: "geo:material", title: "Material settings",
+      open: true, items: [materialRow, priorityRow] },
   ] };
 }
 
