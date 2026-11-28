@@ -2,16 +2,15 @@ import { runScript } from "./script.js";
 import { login, logout, status } from "./app.js";
 import { SessionSync } from "./term.js";
 import { onBatch, pollOnce } from "../core/ring.js";
-import { jobProgress, refreshResultChip, resultStatus, setLastJobId,
-         setResultStatus } from "./result.js";
+import { jobProgress, refreshResultChip, resultStatus,
+         setLastJobId } from "./result.js";
 
 import { $ } from "./util.js";
-import { post } from "../core/bus.js";
 import { genieForgetUser } from "./api.js";
 import { Dock } from "./dock.js";
 import { FormPanel } from "../views/form.js";
 import { iconEl } from "../icons.js";
-import { renderInspector, selectObj } from "./inspector.js";
+import { renderInspector } from "./inspector.js";
 import { previewEl } from "../views/previews.js";
 import { animate, initScene } from "./scene.js";
 import { renderPythonHighlight } from "./script.js";
