@@ -1516,24 +1516,17 @@ export const FormPanel = {
 
   _source(body) {
     /* source 卡 = SOURCE_SCHEMA + kit（2026-11-26）：地址 = <当前 fdtd 名>.<源名>。
-     * 目前重建了 soft_source；其它类型等各自的 schema（先给明说，不留旧手搓）。 */
+     * 类型分派在 SOURCE_SCHEMA 里（soft_source / plane_wave），这里不再拦。 */
     const sv = ((this.cfg && this.cfg.solvers) || [])
       .find((x) => (x.kind || "fdtd") === "fdtd");
     const solver = (sv && sv.name) || "fdtd";
     const list = fdtdConfig(this.cfg).source || [];
     if (!list.length) {
       body.appendChild(this._paneEmpty("soft_source", "No sources yet",
-        "Add from the FDTD ribbon: Sources ▸ Soft source"));
+        "Add from the FDTD ribbon: Sources ▸ Soft source / Plane wave"));
       return;
     }
     for (const [src, i] of this._items(list)) {
-      if (src.type !== "soft_source") {
-        body.appendChild(this._card(
-          [this._el("span", "pane-id-name", "Settings")],
-          this._el("div", "note",
-            `${src.type}: card not rebuilt yet (source migration in progress)`)));
-        continue;
-      }
       const addr = solver + "." + src.name;
       const commit = (field, literal) => {
         exec("genie.set_named(" + JSON.stringify(addr) + ", " + field + "="
