@@ -1720,14 +1720,13 @@ export function GEOMETRY_SCHEMA(cfg, commit, g, matNames) {
     const sizeVals = AX.map((a, i) => ((size && num(size[i])) ? size[i] : null));
     shapeTable = { type: "table", caption: "Shape",
       cols: AX.map((a) => ({ label: a, unit: "µm" })),
-      rows: [{ unit: "len",
-        cells: AX.map((a, i) => ({
-          kind: "num", path: addr + ".size." + i,
-          value: sizeVals[i],
-          onSet: (v) => {
-            sizeVals[i] = v;
-            if (sizeVals.every((x) => x != null)) setField("size", py(sizeVals));
-          } })) }] };
+      rows: [{ cells: AX.map((a, i) => ({
+        kind: "num", path: addr + ".size." + i, unit: "len",
+        value: sizeVals[i],
+        onSet: (v) => {
+          sizeVals[i] = v;
+          if (sizeVals.every((x) => x != null)) setField("size", py(sizeVals));
+        } })) }] };
   } else {
     shapeTable = { type: "table", caption: "Shape",
       cols: shapeFields.map((f) => ({
