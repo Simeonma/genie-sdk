@@ -2,7 +2,7 @@ import { $, fdtdConfig, py } from "./util.js";
 import { exec } from "../core/bus.js";
 import { FormPanel } from "../views/form.js";
 import { previewEl } from "../views/previews.js";
-import { cfg, displayCfg, inspectorSel, scene, setInspectorSel, setTreeSel } from "./state.js";
+import { cfg, inspectorSel, scene, setInspectorSel, setTreeSel } from "./state.js";
 import { renderSweepPane } from "./sweep.js";
 import { renderTree } from "./tree.js";
 /* modules/inspector.js — 检查器（FormPanel 只读驱动 + 参数面板 + 选中路由）
@@ -94,23 +94,12 @@ export function renderParamsPane() {
   c.appendChild(body);
   const note = document.createElement("div");
   note.className = "pane-note";
-  note.textContent = "参数表 · 值里直接写单位（0.5[um] / 0.5um），右列是换算"
-    + "后的 SI 值；表达式槽/sweep 轴引用这些名字（与脚本 genie.parameters 同源）";
+  note.textContent = "参数表 · 值里直接写单位（0.5[um]），表达式槽/sweep 轴"
+    + "引用这些名字（与脚本 genie.parameters 同源）";
   body.appendChild(note);
   const params = (cfg.parameters && typeof cfg.parameters === "object")
     ? cfg.parameters : {};
   const names = Object.keys(params);
-  const siOf = (k) => {
-    /* 本地先算（数字 / 带单位 → SI）；表达式没有本地值——v2 环快照只有
-     * 文档形状，不带 resolved（表达式求值结果无 GUI 通道），列里显 "—"。 */
-    const p = _parseParamInput(String(params[k] ?? ""));
-    if (p.si != null) return p.si;
-    try {
-      if (typeof displayCfg !== "undefined" && displayCfg
-          && displayCfg.parameters) return displayCfg.parameters[k];
-    } catch (e) { /* 快照未到不显示 */ }
-    return undefined;
-  };
   const setValue = (k, val) => exec(
     "genie.set_named(" + JSON.stringify("parameter." + k) + ", value="
     + py(val) + ")", { echo: false }).catch(() => {});
@@ -124,29 +113,26 @@ export function renderParamsPane() {
     exec("genie.add_parameter(" + JSON.stringify(name) + ")",
       { echo: true }).catch(() => {});
   };
-  FormPanel.renderPage(PARAM_SCHEMA(names, params, siOf, setValue,
+  FormPanel.renderPage(PARAM_SCHEMA(names, params, setValue,
     removeParam, addParam), body);
 }
 
-/* 参数卡（2026-11-29 站长拍）：一张表（Name 只读 / Value 可编 / SI 只读 /
- * 行尾 ✕），页内 Add。Name 不改名——改名会断所有引用它的表达式与 sweep
- * 轴（要换名 = 删 + 建）。Value 三类：纯数 / 带单位 / 表达式（表达式原样
- * 存，SI 列取快照 resolved）。 */
-export function PARAM_SCHEMA(names, params, siOf, setValue, removeParam,
+/* 参数卡（2026-11-29 站长拍）：一张表（Name 只读 / Value 可编 / 行尾 ✕），
+ * 页内 Add。不显示 SI 列——单位直接写在值里（0.5[um]），与脚本同源。
+ * Name 不改名——改名会断所有引用它的表达式与 sweep 轴（要换名 = 删 + 建）。
+ * Value 三类：纯数 / 带单位 / 表达式（表达式原样存，求值归服务端）。 */
+export function PARAM_SCHEMA(names, params, setValue, removeParam,
                              addParam) {
-  const fmtSi = (v) => (typeof v === "number" && Number.isFinite(v))
-    ? v.toExponential(3) : "—";
   const rows = names.map((k) => ({ cells: [
     { kind: "str", path: "param." + k + ".name", value: k },
     { kind: "str", path: "param." + k + ".value",
       value: params[k] == null ? "" : String(params[k]),
-      hint: "数字 / 带单位（0.5um、0.5[um]）/ 表达式（d/4）",
+      hint: "数字 / 带单位（0.5[um]）/ 表达式（d/4）",
       validate: (t) => _parseParamInput(t).err || null,
       onSet: (t) => {
         const p = _parseParamInput(t);
         if (!p.err) setValue(k, p.val);
       } },
-    { kind: "text", text: fmtSi(siOf(k)) },
     { kind: "button", text: "✕",
       title: "删除参数 " + k + "（引用它的表达式需要另行处理）",
       aria: "删除参数 " + k,
@@ -154,8 +140,7 @@ export function PARAM_SCHEMA(names, params, siOf, setValue, removeParam,
   ] }));
   const items = names.length
     ? [{ type: "table", caption: "Parameters",
-        cols: [{ label: "name" }, { label: "value" }, { label: "SI" },
-               { label: "" }],
+        cols: [{ label: "name" }, { label: "value" }, { label: "" }],
         rows }]
     : [{ type: "note", text: "尚无参数——点下面的 Add parameter 加一个。" }];
   items.push({ type: "row", label: "",
