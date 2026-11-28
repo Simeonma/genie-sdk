@@ -984,6 +984,12 @@ export function GLOBAL_MONITOR_SCHEMA(cfg, setGm, gm) {
   }] };
 }
 
+/* ══════════════════ FDTD ▸ monitor 卡（现代化，2026-11-28）════════════
+ * 与 source 卡同构：Position（center+size，size 槽 null=整轴）→ 观测节。
+ * freq 型：Use global 开关（id 进 global_monitor 名单；写频谱/apodize
+ * 即退出——worker 同语义）+ Spectrum/点数/Apodization；down_sample 只
+ * 属 time 型（wire 契约：freq/index 带 down_sample 422）；index 型
+ * field = eps/mu/both。 */
 export const FormPanel = {
   container: null,
   cfg: null,
@@ -1669,67 +1675,35 @@ export const FormPanel = {
   },
 
   _monitor(body) {
+    /* monitor 卡 = MONITOR_SCHEMA + kit（2026-11-28 现代化）：地址 =
+     * <当前 fdtd 名>.<监视器名>；类型分派（freq 的 Use global /
+     * Spectrum、time 的 Sampling、index 的小卡）在 MONITOR_SCHEMA。 */
+    const sv = ((this.cfg && this.cfg.solvers) || [])
+      .find((x) => (x.kind || "fdtd") === "fdtd");
+    const solver = (sv && sv.name) || "fdtd";
     const list = fdtdConfig(this.cfg).monitor || [];
     if (!list.length) {
       body.appendChild(this._paneEmpty("mon_time", "No monitors yet",
-        "Add them in the script (rewiring pending)"));
+        "Add one in the script with genie.fdtd.add_monitor —"
+        + " a toolbar button is pending (M4 rewiring)"));
       return;
     }
-    this._items(list).forEach(([m, i]) => {
-      const inner = document.createDocumentFragment();
-      /* 位置与尺寸（物理因果 RoundE：先定观测面/域，再定观测什么、怎么采样） */
-      const sMon2 = this._sec("Position & size", true, 2);
-      inner.appendChild(sMon2.head); inner.appendChild(sMon2.body);
-      sMon2.body.appendChild(this._vec("center (µm)", `monitor.${i}.center`, m.center, 3, "len"));
-      sMon2.body.appendChild(this._vec("size (µm)", `monitor.${i}.size`, m.size, 3, "len"));
-      sMon2.body.appendChild(this._el("div", "note",
-        "size slots: 0 = single cell · empty = stay null (whole axis) · "
-        + "all three whole-domain = drop size and use the default."));
-      /* 观测节（RoundE 统一）：场分量/频率采样/窗函数收进观测节，与物理因果一致 */
-      const sMon1 = this._sec("Observe", false);
-      inner.appendChild(sMon1.head); inner.appendChild(sMon1.body);
-      const fieldOpts = m.type === "index" ? ["eps", "mu", "both"]
-        : ["Ex", "Ey", "Ez", "Hx", "Hy", "Hz", "all"];
-      sMon1.body.appendChild(this._row("field",
-        this._select(`monitor.${i}.field`, m.field, fieldOpts)));
-      if (m.type === "freq") {
-        const freq = m.freq || {};
-        sMon1.body.appendChild(this._row("freq c/bw (THz) · n",
-          this._input(`monitor.${i}.freq.center`, freq.center, "num", "freq"),
-          this._input(`monitor.${i}.freq.bw`, freq.bw, "num", "freq"),
-          this._input(`monitor.${i}.freq.n`, freq.n, "num")));
-        /* apodize：side + 窗 + 宽（定量谱学的首程窗——陷阱 #5/#7）；
-         * 不预创建空 dict——用户不动就不写进 cfg（避免 apodize:{} 噪音） */
-        const ap = m.apodize || {};
-        sMon1.body.appendChild(this._row("apodize side",
-          this._select(`monitor.${i}.apodize.side`, ap.side || "",
-            ["", "start", "stop", "both"], true)));
-        sMon1.body.appendChild(this._vec("apod window (fs)",
-          `monitor.${i}.apodize.time_window`, ap.time_window, 2, "time"));
-        sMon1.body.appendChild(this._row("apodize width (fs)",
-          this._input(`monitor.${i}.apodize.width`, ap.width, "num", "time")));
-      }
-      if (m.type === "time" || m.type === "freq") {
-        /* down_sample：窗 + 步长（长仿真采样量控制——守卫第二道闸） */
-        const ds = m.down_sample || {};
-        sMon1.body.appendChild(this._vec("sample window (fs)",
-          `monitor.${i}.down_sample.time_window`, ds.time_window, 2, "time"));
-        sMon1.body.appendChild(this._row("stride",
-          this._input(`monitor.${i}.down_sample.stride`, ds.stride, "num")));
-      }
-      /* 卡头（统一语言 2026）：类型固定于添加时（同 geometry/source 模式），
-       * 改类型 = 删除重建；移除原「类型下拉」就地切换（旧行为会静默重建
-       * 对象丢参、二次确认），语义不变——类型仍由 topbar 或底部「+ 监视器」
-       * 行选择。 */
-      body.appendChild(this._card(
-        [this._preview("mon_" + m.type),            /* 渲染风缩略图（R2）：time/freq/index → mon_* 键 */
-         this._headName(`monitor.${i}.name`, m.name, "monitor name",
-           (m.name || `monitor ${i + 1}`) + " name"),
-         this._el("span", "tag type", m.type),
-         this._delBtn("monitor", i)],
-        inner));
-    });
-    /* ＋监视器 假添加行已删（L-35）：同「+ 源」，只写本地不生效。 */
+    for (const [m, i] of this._items(list)) {
+      const addr = solver + "." + m.name;
+      const commit = (field, literal) => {
+        exec("genie.set_named(" + JSON.stringify(addr) + ", " + field + "="
+          + literal + ")", { echo: false }).catch(() => {});
+      };
+      const wrap = this._el("div", "pane-body");
+      this.renderPage(MONITOR_SCHEMA(this.cfg || {}, commit, m, addr), wrap);
+      body.appendChild(this._card([
+        this._preview("mon_" + m.type),
+        this._headName(`monitor.${i}.name`, m.name,
+          (m.name || `monitor ${i + 1}`) + " name"),
+        this._el("span", "tag type", m.type),
+        this._delBtn("monitor", i),
+      ], wrap));
+    }
   },
 
 
@@ -1754,3 +1728,159 @@ export const FormPanel = {
 
 /* 页面层（行/表/节/渲染器）住 views/kit.js：这里是卡片与数据投影。 */
 Object.assign(FormPanel, KIT);
+
+export function MONITOR_SCHEMA(cfg, commit, m, addr) {
+  const IDX = { x: 0, y: 1, z: 2 };
+  const center = Array.isArray(m.center) ? m.center : null;
+  const size = Array.isArray(m.size) ? m.size : null;
+  const setVec = (key, base, k, val, nullAble) => {
+    const a = [0, 1, 2].map((i) =>
+      (base && base[i] != null) ? base[i] : (nullAble ? null : 0));
+    a[k] = val;
+    commit(key, py(a));
+  };
+  const bound = m.use_global === true;   /* freq 型：名单内 */
+  const num = (x) => typeof x === "number" && isFinite(x);
+  const f = m.freq || {};
+  const band = (num(f.center) && num(f.bw))
+    ? [f.center - f.bw / 2, f.center + f.bw / 2] : null;
+  const toggleGlobal = (on) => {
+    if (m.id == null) return;
+    const known = new Set((fdtdConfig(cfg).monitor || [])
+      .filter((x) => x.type === "freq").map((x) => x.id));
+    const cur = new Set((((cfg || {}).global_monitor || {}).monitors) || []);
+    if (on) cur.add(m.id); else cur.delete(m.id);
+    const ids = Array.from(cur).filter((x) => known.has(x))
+      .sort((a, b) => a - b);
+    exec("genie.set_named('global_monitor', monitors=" + py(ids) + ")",
+      { echo: false }).catch(() => {});
+  };
+
+  const fieldOpts = m.type === "index"
+    ? ["eps", "mu", "both"] : ["Ex", "Ey", "Ez", "Hx", "Hy", "Hz", "all"];
+
+  const sections = [{
+    type: "section", key: "mon:general", title: "General settings", open: true,
+    items: [
+      { type: "table", caption: "Position",
+        cols: ["x", "y", "z"].map((a) => ({ label: a, unit: "µm" })),
+        rows: [{ cells: [0, 1, 2].map((k) => ({
+          kind: "num", path: `mon.center.${k}`,
+          value: center ? center[k] : undefined, unit: "len",
+          onSet: (v) => setVec("center", center, k, v, false),
+        })) }] },
+      { type: "table", caption: "Size",
+        cols: ["x", "y", "z"].map((a) => ({ label: a, unit: "µm" })),
+        rows: [{ cells: [0, 1, 2].map((k) => ({
+          kind: "num", path: `mon.size.${k}`,
+          value: size ? size[k] : undefined, unit: "len",
+          hint: "box extent on this axis; 0 marks a single cell; leave empty for the whole axis",
+          onSet: (v) => setVec("size", size, k, v, true),
+        })) }] },
+      { type: "row", label: "field", controls: [{
+          kind: "select", value: m.field,
+          options: fieldOpts,
+          onSet: (v) => commit("field", py(v)) }] },
+    ],
+  }];
+
+  if (m.type === "freq") {
+    const observe = [{
+      type: "row", label: "Use global", controls: [{
+        kind: "select", path: "mon.use_global",
+        value: bound ? "on" : "off", options: ["off", "on"],
+        onSet: (v) => toggleGlobal(v === "on") }] }];
+    if (bound) {
+      observe.push({ type: "note",
+        text: "Spectrum and apodization follow the Global monitor setting." });
+    } else {
+      observe.push(...spectrumTiming({
+        band, path: "mon", temporal: null,
+        onBand: (v) => {
+          exec("genie.set_named(" + JSON.stringify(addr)
+            + ", freq_center=" + py((v[0] + v[1]) / 2)
+            + ", freq_bw=" + py(v[1] - v[0]) + ")",
+            { echo: false }).catch(() => {});
+        },
+        onTemporal: null,
+      }));
+      observe.push({ type: "row", label: "Frequency points",
+        controls: [{ kind: "num", path: "mon.freq.n", value: f.n,
+          hint: "DFT sample count across the band",
+          onSet: (v) => commit("freq_n", py(v)) }] });
+      const ap = m.apodize || {};
+      const setAp = (patch) => {
+        if (patch.side === null || patch.side === "") {
+          commit("apodize", "None");   /* 无窗 = 矩形 */
+          return;
+        }
+        const d = {};
+        if (ap.side) d.side = ap.side;
+        if (Array.isArray(ap.time_window)) d.time_window = ap.time_window;
+        if (ap.width != null) d.width = ap.width;
+        Object.assign(d, patch);
+        commit("apodize", py(d));
+      };
+      observe.push({ type: "table", caption: "Apodization",
+        cols: [{ label: "side" }, { label: "window (fs)" },
+               { label: "width (fs)" }],
+        rows: [{ cells: [
+          { kind: "select", path: "mon.apodize.side",
+            value: ap.side || "", options: ["", "start", "stop", "both"],
+            unsetLabel: "none",
+            onSet: (v) => setAp({ side: v || null }) },
+          { kind: "num", path: "mon.apodize.time_window",
+            value: Array.isArray(ap.time_window) ? ap.time_window[0] : undefined,
+            unit: "time",
+            hint: "window start; second slot follows width",
+            onSet: (v) => setAp({ time_window: [v, (ap.width || 0) + v] }) },
+          { kind: "num", path: "mon.apodize.width",
+            value: ap.width, unit: "time",
+            hint: "cosine taper width; empty = no window",
+            onSet: (v) => setAp({ width: v }) },
+        ] }] });
+    }
+    sections.push({ type: "section", key: "mon:observe",
+      title: "Observe", open: true, items: observe });
+  }
+
+  if (m.type === "time") {
+    const ds = m.down_sample || {};
+    sections.push({ type: "section", key: "mon:sample",
+      title: "Sampling", open: true, items: [
+        { type: "table", caption: "Down sample",
+          cols: [{ label: "window start (fs)" },
+                 { label: "window end (fs)" }, { label: "stride" }],
+          rows: [{ cells: [
+            { kind: "num", path: "mon.down_sample.time_window",
+              value: Array.isArray(ds.time_window) ? ds.time_window[0] : undefined,
+              unit: "time",
+              onSet: (v) => {
+                const end = Array.isArray(ds.time_window)
+                  ? ds.time_window[1] : v;
+                commit("down_sample", py({ time_window: [v, end],
+                  stride: ds.stride != null ? ds.stride : 1 }));
+              } },
+            { kind: "num", path: "mon.down_sample.time_window_1",
+              value: Array.isArray(ds.time_window) ? ds.time_window[1] : undefined,
+              unit: "time",
+              onSet: (v) => {
+                const start = Array.isArray(ds.time_window)
+                  ? ds.time_window[0] : v;
+                commit("down_sample", py({ time_window: [start, v],
+                  stride: ds.stride != null ? ds.stride : 1 }));
+              } },
+            { kind: "num", path: "mon.down_sample.stride",
+              value: ds.stride,
+              hint: "record every Nth step; 1 = every step",
+              onSet: (v) => {
+                const d = { stride: v };
+                if (Array.isArray(ds.time_window)) d.time_window = ds.time_window;
+                commit("down_sample", py(d));
+              } },
+          ] }] },
+      ] });
+  }
+
+  return { sections };
+}
