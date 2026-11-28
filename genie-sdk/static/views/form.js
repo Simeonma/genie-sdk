@@ -156,7 +156,7 @@ export function DOMAIN_SCHEMA(cfg, commit) {
             { kind: "num", path: "domain.cfl", value: d.cfl,
               onSet: (v) => commit("cfl", py(v)) },
             { kind: "num", path: "domain.auto_shutoff", value: d.auto_shutoff,
-              hint: "0 = off (field-energy ratio; recommended 1e-6)",
+              hint: "field-energy shutoff ratio; 0 = off",
               onSet: (v) => commit("auto_shutoff", py(v)),
               onClear: () => commit("auto_shutoff", "0.0") },
           ],
@@ -353,14 +353,14 @@ export function MODE_SCHEMA(cfg, commit, solverName) {
         rows: [{ cells: [
           { kind: "str", path: "mode.wavelength",
             value: wavelengthText(mc.wavelength),
-            hint: "µm; comma-separated for several wavelengths (ascending)",
+            hint: "µm; several: comma-separated, ascending",
             validate: wavelengthError,
             onSet: (s) => commit("wavelength", wavelengthLiteral(s)) },
           { kind: "num", path: "mode.n_modes", value: mc.n_modes,
             onSet: (v) => commit("n_modes", py(v)) },
           /* 空 = 内核取截面最大折射率（n_ref=None），不需要 auto 状态 */
           { kind: "num", path: "mode.n_ref", value: mc.n_ref,
-            hint: "empty = largest index in the cross-section (kernel default)",
+            hint: "refractive index for the mode search; empty = cross-section max",
             onSet: (v) => commit("n_ref", py(v)),
             onClear: () => commit("n_ref", "None") },
         ] }] },
@@ -385,12 +385,12 @@ export function MODE_SCHEMA(cfg, commit, solverName) {
           { kind: "num", path: "mode.rotate_angle",
             value: mc.rotate_axis ? mc.rotate_angle : undefined,
             disabled: !mc.rotate_axis,
-            hint: "degrees (right-hand rule; |angle| < 90)",
+            hint: "degrees, right-hand rule; |angle| < 90",
             onSet: (v) => commit("rotate_angle", py(v)) },
           { kind: "num", path: "mode.rotate_radius",
             value: mc.rotate_axis ? mc.rotate_radius : undefined,
             disabled: !mc.rotate_axis, unit: "len",
-            hint: "rotation axis offset from the plane centre",
+            hint: "offset of the rotation axis from the plane centre; 0 = centre",
             onSet: (v) => commit("rotate_radius", py(v)) },
         ] }] },
     ],
@@ -570,11 +570,11 @@ export function MESH_SCHEMA(cfg, commit, m) {
   const method = useAbs ? "absolute" : "factor";
   const cell = (a) => (useAbs
     ? { kind: "num", path: `mesh.${a}.d`, value: m[`d${a}`], unit: "len",
-        hint: "绝对步长（≤ 该轴基础步长）",
+        hint: "absolute step; must not exceed the base step on that axis",
         onSet: (v) => commit(`d${a}`, py(v)),
         onClear: () => commit(`d${a}`, "None") }
     : { kind: "num", path: `mesh.${a}.factor`, value: m[`factor_${a}`],
-        hint: "factor ≥ 1（相对基础步长；1 = 不变）",
+        hint: "ratio to the base step; 1 = unchanged",
         onSet: (v) => commit(`factor_${a}`, py(v)),
         onClear: () => commit(`factor_${a}`, "None") });
   return { sections: [{
@@ -598,7 +598,7 @@ export function MESH_SCHEMA(cfg, commit, m) {
               /* 绝对步长留空，由用户填；默认值（factor=1）由 resolver 给。 */
             } },
           { kind: "num", path: "mesh.growth_rate", value: m.growth_rate,
-            hint: "过渡带渐变率（1.0 = 硬跳）",
+            hint: "refinement transition gradient; 1 = hard step",
             onSet: (v) => commit("growth_rate", py(v)) },
         ] }] },
       { type: "table", caption: useAbs ? "Refine step" : "Refine factor",
@@ -619,9 +619,10 @@ export function MESH_SCHEMA(cfg, commit, m) {
 function spectrumTiming({ band, temporal, path, onBand, onTemporal }) {
   const wl = SIM_UNIT === "wavelength";
   const pair = band ? (wl ? [C0 / band[1], C0 / band[0]] : band) : null;
-  const cell = (field, value, unit) => {
+  const cell = (field, value, unit, hint) => {
     const c = { kind: "num", path: `${path}.${field}`, value };
     if (unit) c.unit = unit;
+    if (hint) c.hint = hint;
     c.onSet = (v) => onTemporal(field, v);
     return c;
   };
@@ -645,7 +646,8 @@ function spectrumTiming({ band, temporal, path, onBand, onTemporal }) {
     cols: [{ label: "delay", unit: "fs" }, { label: "phase", unit: "rad" },
            { label: "amplitude" }],
     rows: [{ cells: [
-      cell("delay", temporal && temporal.delay, "time"),
+      cell("delay", temporal && temporal.delay, "time",
+        "extra offset after the auto-placed pulse peak; 0 = none"),
       cell("phase", temporal && temporal.phase, null),
       cell("amplitude", temporal && temporal.amplitude, null),
     ] }],
@@ -732,7 +734,7 @@ export function SOURCE_SCHEMA(cfg, commit, s, addr) {
         rows: [{ cells: [0, 1, 2].map((k) => ({
           kind: "str", path: `source.polarization.${k}`,
           value: pol[k] ? formatComplex(pol[k][0], pol[k][1]) : "",
-          hint: "复数：1 / 2j / 1-0.5j",
+          hint: "complex per component: 1 / 2j / 1-0.5j",
           validate: (v) => (parseComplex(v) ? null
             : "复数形如 1、2j、1-0.5j"),
           onSet: (v) => {
