@@ -341,13 +341,15 @@ def effective_model(model: dict, *, with_global_source: bool = False,
     """Return a new model section with the effective global-source /
     global-monitor blocks."""
     out = copy.deepcopy(model or {})
-    # 几何对象的 authoring 默认（2026-11-28）：rotation / priority 是 wire
-    # 声明默认（恒 0）——补 effective 让卡片有值可显示。尺寸（center/size/
-    # radius/vertices…）是用户的决定，不补。
+    # 几何对象的 authoring 默认（2026-11-28）：rotation / priority / center
+    # 是 wire 声明默认（恒 0）——补 effective 让卡片有值可显示。尺寸（size/
+    # radius/vertices…）是用户的决定，不补。polygon_z 无 center 字段。
     for g in out.get("geometry") or []:
         if isinstance(g, dict):
             _set(g, "rotation", [0.0, 0.0, 0.0])
             _set(g, "priority", 0)
+            if g.get("type") != "polygon_z":
+                _set(g, "center", [0.0, 0.0, 0.0])
     if with_global_source:
         gs = out.get("global_source")
         if not isinstance(gs, dict):
